@@ -835,7 +835,8 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 	st := m.st
 	var out []string
 
-	title := st.emphasis.Render(issue.Title) + " " + st.dimText.Render("#"+itoa(issue.Number))
+	// The title is a title: the accent and bold, as on every card and dialog.
+	title := st.dialogTitle.Render(issue.Title) + " " + st.dimText.Render("#"+itoa(issue.Number))
 	out = append(out, wrapLines(title, width)...)
 	opened := "opened this issue"
 	if issue.PullRequest {

@@ -445,7 +445,7 @@ func fileGlyph(st *styles, status string) string {
 func (m *Model) pullFileLines(issue Issue, width int) (lines []string, at []int) {
 	st := m.st
 	pull := issue.Pull
-	head := st.emphasis.Render("Files changed") + " " + st.dimText.Render("#"+itoa(issue.Number)+" · "+plural(pull.ChangedFiles, "file", "files")+" · ") +
+	head := st.dialogTitle.Render("Files changed") + " " + st.dimText.Render("#"+itoa(issue.Number)+" · "+plural(pull.ChangedFiles, "file", "files")+" · ") +
 		plusMinus(st, pull.Additions, pull.Deletions)
 	out := append(wrapLines(head, width), "")
 
