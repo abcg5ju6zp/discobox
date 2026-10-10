@@ -95,11 +95,19 @@ type issuePane struct {
 
 	// conversation is the page every issue has, and changes a pull request's
 	// files changed; files is which of the two is on screen. Each keeps its
-	// own place. fileAt is the line of changes each file starts on.
+	// own place.
 	conversation issuePage
 	changes      issuePage
 	files        bool
-	fileAt       []int
+	// The files changed are a list, and diff is the diff of the one under its
+	// cursor once it is opened (fileOpen). fileRow is the line of changes the
+	// first file is on, and fileTop the row of the tab it was last drawn on,
+	// which is where the pointer finds the files.
+	fileCursor int
+	fileOpen   bool
+	diff       issuePage
+	fileRow    int
+	fileTop    int
 	// md are the markdown renderers by the width they wrap to: a comment in
 	// a review thread is drawn narrower than one in the timeline.
 	md map[int]*glamour.TermRenderer
@@ -131,7 +139,10 @@ type issuePage struct {
 
 // shown is the page on screen.
 func (v *issuePane) shown() *issuePage {
-	if v.files {
+	switch {
+	case v.files && v.fileOpen:
+		return &v.diff
+	case v.files:
 		return &v.changes
 	}
 	return &v.conversation
@@ -337,12 +348,17 @@ func (m *Model) issueLoaded(msg issueLoadedMsg) tea.Cmd {
 	}
 	issue := msg.issue
 	v.issue, v.err = &issue, ""
-	v.conversation.lines, v.changes.lines = nil, nil
+	v.conversation.lines, v.changes.lines, v.diff.lines = nil, nil, nil
 	v.pull = issue.PullRequest
 	v.url, p.title = v.address(), v.label()
 	if issue.Pull == nil {
 		v.files = false
 		return nil
+	}
+	// The files may be fewer than they were: a push took one out.
+	v.fileCursor = min(v.fileCursor, max(len(issue.Pull.Files)-1, 0))
+	if len(issue.Pull.Files) == 0 {
+		v.fileOpen = false
 	}
 	if pullReady(issue) {
 		// On the tab itself, so it is seen from whichever pane has the keys.
@@ -436,6 +452,9 @@ func (m *Model) issueKeyPress(p *pane, msg tea.KeyPressMsg) tea.Cmd {
 	if v.composing {
 		return m.composeKey(p, msg)
 	}
+	if v.files && v.filesKey(keyName(msg)) {
+		return nil
+	}
 	switch keyName(msg) {
 	case "up", "k":
 		v.scroll(-1)
@@ -454,10 +473,6 @@ func (m *Model) issueKeyPress(p *pane, msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		v.files = !v.files
-	case "n":
-		v.toFile(1)
-	case "p":
-		v.toFile(-1)
 	case "c":
 		if v.files {
 			// The files changed are read, not answered: f goes back to
@@ -664,7 +679,13 @@ func issueHints(v *issuePane) []hint {
 	case pull && v.files:
 		// The diff's own keys in place of the conversation's: nothing is
 		// answered from here.
-		hints = append(hints, keyed("n", "n", "next file"), keyed("p", "p", "previous"), keyed("f", "f", "conversation"))
+		if v.fileOpen {
+			hints = append(hints, keyed("n", "n", "next file"), keyed("p", "p", "previous"), keyed("Esc", "esc", "files"))
+		} else {
+			hints[0] = says("↑↓ move")
+			hints = append(hints, keyed("Enter", "enter", "diff"))
+		}
+		hints = append(hints, keyed("f", "f", "conversation"))
 	case pull:
 		if v.issue.State == "open" {
 			hints = append(hints, keyed(pullMergeKey, pullMergeKey, "merge"))
@@ -728,9 +749,12 @@ func (m *Model) issueView(v *issuePane, width, height int) []string {
 	}
 	shown := v.shown()
 	if shown.lines == nil || shown.width != width {
-		if v.files {
-			shown.lines, v.fileAt = m.pullFileLines(*v.issue, width)
-		} else {
+		switch {
+		case v.files && v.fileOpen:
+			shown.lines = m.pullDiffLines(*v.issue, v.fileCursor, width)
+		case v.files:
+			shown.lines, v.fileRow = m.pullFileLines(*v.issue, v.fileCursor, width)
+		default:
 			shown.lines = m.issueLines(v, *v.issue, width, time.Now())
 		}
 		shown.width = width
@@ -739,7 +763,13 @@ func (m *Model) issueView(v *issuePane, width, height int) []string {
 	if v.toEnd {
 		v.conversation.offset, v.toEnd = len(v.conversation.lines), false
 	}
+	if v.files && !v.fileOpen {
+		// The cursor is kept on screen, as a list keeps it.
+		row := v.fileRow + v.fileCursor
+		shown.offset = max(min(shown.offset, row), row-room+1)
+	}
 	v.scroll(0)
+	v.fileTop = len(head) + v.fileRow - shown.offset
 	end := min(shown.offset+room, len(shown.lines))
 	body := append(head, shown.lines[shown.offset:end]...)
 	return append(fitRows(body, height-len(foot)), foot...)
