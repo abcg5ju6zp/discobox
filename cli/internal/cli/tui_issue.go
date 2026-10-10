@@ -10,7 +10,7 @@ import (
 	"github.com/discobox-ai/discobox/cli/internal/tui"
 )
 
-// Issue reads a GitHub issue for the console's issue tab, as this machine's
+// Issue reads a GitHub issue or pull request for the console's issue tab, as this machine's
 // `gh` is logged in (github.LocalToken), and hands it over in the console's
 // own types. Everything in it was written by whoever can comment on the
 // issue, so every string is made safe to draw on the way: a title or a
@@ -44,6 +44,15 @@ func (d *apiDataSource) SetIssueState(ctx context.Context, repository string, nu
 		return err
 	}
 	return githubClient().SetState(ctx, owner, name, number, state, reason)
+}
+
+// MergePullRequest merges the issue tab's pull request.
+func (d *apiDataSource) MergePullRequest(ctx context.Context, repository string, number int, method, sha string) error {
+	owner, name, err := githubRepository(repository)
+	if err != nil {
+		return err
+	}
+	return githubClient().Merge(ctx, owner, name, number, method, sha)
 }
 
 func githubRepository(repository string) (owner, name string, err error) {
@@ -98,6 +107,8 @@ func tuiIssue(in github.Issue) tui.Issue {
 			Body:        safeBlock(e.Body),
 			Reactions:   tui.IssueReactions(e.Reactions),
 			Subject:     safe(e.Subject),
+			Message:     safe(e.Message),
+			Review:      safe(e.Review),
 			From:        safe(e.From),
 			To:          safe(e.To),
 			StateReason: safe(e.StateReason),
@@ -110,7 +121,49 @@ func tuiIssue(in github.Issue) tui.Issue {
 			source := tuiRef(*e.Source)
 			event.Source = &source
 		}
+		for _, thread := range e.Threads {
+			drawn := tui.ReviewThread{Path: safe(thread.Path), Line: thread.Line, Outdated: thread.Outdated, Hunk: safeBlock(thread.Hunk)}
+			for _, comment := range thread.Comments {
+				drawn.Comments = append(drawn.Comments, tui.ReviewComment{
+					Author: safe(comment.Author), At: comment.At, Body: safeBlock(comment.Body),
+					Reactions: tui.IssueReactions(comment.Reactions),
+				})
+			}
+			event.Threads = append(event.Threads, drawn)
+		}
 		out.Timeline = append(out.Timeline, event)
+	}
+	if in.Pull != nil {
+		out.Pull = tuiPull(*in.Pull)
+	}
+	return out
+}
+
+// tuiPull is the rest of a pull request's page, made safe the same way: a
+// branch name, a check's name and a diff are as much a stranger's text as a
+// comment is.
+func tuiPull(in github.Pull) *tui.PullRequest {
+	safe := terminalSafe
+	out := &tui.PullRequest{
+		Draft: in.Draft, Merged: in.Merged, MergedBy: safe(in.MergedBy), MergedAt: in.MergedAt,
+		Head: safe(in.Head), Base: safe(in.Base), HeadSHA: safe(in.HeadSHA),
+		Commits: in.Commits, Additions: in.Additions, Deletions: in.Deletions, ChangedFiles: in.ChangedFiles,
+		Mergeable: safe(in.Mergeable), FilesTruncated: in.FilesTruncated,
+	}
+	for _, method := range in.MergeMethods {
+		out.MergeMethods = append(out.MergeMethods, safe(method))
+	}
+	for _, reviewer := range in.Reviewers {
+		out.Reviewers = append(out.Reviewers, tui.PullReviewer{Name: safe(reviewer.Name), State: safe(reviewer.State)})
+	}
+	for _, check := range in.Checks {
+		out.Checks = append(out.Checks, tui.PullCheck{Name: safe(check.Name), State: safe(check.State), URL: safe(check.URL)})
+	}
+	for _, file := range in.Files {
+		out.Files = append(out.Files, tui.PullFile{
+			Path: safe(file.Path), Previous: safe(file.Previous), Status: safe(file.Status),
+			Additions: file.Additions, Deletions: file.Deletions, Patch: safeBlock(file.Patch),
+		})
 	}
 	return out
 }

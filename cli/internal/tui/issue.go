@@ -28,6 +28,12 @@ import (
 // `issue #N` opens it, Ctrl-click still follows the link to the page, and the
 // leader's i opens it from the keyboard.
 //
+// The pull request it is tagged with (`pr=N`) is the same tab, behind `PR #N`
+// and the leader's p: to GitHub a pull request is an issue, so everything here
+// is its too, and pull.go draws the rest of its page — the branches, the
+// reviewers, the checks, the reviews with their threads on the diff, and the
+// files changed as a second page of the tab.
+//
 // It is a tab on the right, among the shells: a pane like any other in the
 // strip, with its number, its place in ←/→, the column's [+] and [x], and the
 // whole key map behind the leader. Its termpane is never attached to a
@@ -43,6 +49,9 @@ const (
 	// issueKey opens the tab behind the leader, or focuses it when it is open.
 	// I for issue: free in the key map the list and the workspace share.
 	issueKey = "i"
+	// pullKey does the same for the pull request. P for pull request, and
+	// free in the same key map.
+	pullKey = "p"
 	// issuePostKey posts the comment being written. Enter is a newline in a
 	// comment — a comment is paragraphs — so posting is a chord nobody types
 	// by accident: what it does is public.
@@ -56,6 +65,9 @@ const (
 	issueComposerRows = 6
 	// issueLabelWidth is the label column of the facts under the title.
 	issueLabelWidth = 11
+	// issueRenderers is how many markdown renderers a tab keeps: the page's
+	// width and a review thread's, with room for a resize between frames.
+	issueRenderers = 4
 )
 
 // issuePane is what a pane drawing an issue holds instead of a terminal.
@@ -65,6 +77,9 @@ type issuePane struct {
 	repository string
 	number     int
 	url        string
+	// pull is whether it is a pull request: what the tag it was opened from
+	// said, until a read says what the number is.
+	pull bool
 
 	// issue is the last read, nil until the first one lands. err is why the
 	// last read failed; an issue already on screen stays there under it.
@@ -79,18 +94,19 @@ type issuePane struct {
 	// posted is the thing to look at.
 	toEnd bool
 
-	// lines is the issue drawn at linesWidth, kept until a read or a resize
-	// makes it wrong: rendering markdown on every frame is a cost the frame
-	// rate pays. md is the renderer for mdWidth.
-	lines      []string
-	linesWidth int
-	md         *glamour.TermRenderer
-	mdWidth    int
+	// conversation is the page every issue has, and changes a pull request's
+	// files changed; files is which of the two is on screen. Each keeps its
+	// own place. fileAt is the line of changes each file starts on.
+	conversation issuePage
+	changes      issuePage
+	files        bool
+	fileAt       []int
+	// md are the markdown renderers by the width they wrap to: a comment in
+	// a review thread is drawn narrower than one in the timeline.
+	md map[int]*glamour.TermRenderer
 
-	// offset is the first line drawn, and page how many the last draw had
-	// room for.
-	offset int
-	page   int
+	// page is how many lines the last draw had room for.
+	page int
 
 	// composing is whether the keys go to the comment field. Its text stays
 	// while the tab is open, written or not, so stepping out to look at a
@@ -98,12 +114,57 @@ type issuePane struct {
 	composing bool
 	composer  textarea.Model
 	posting   bool
-	// changing is a close or a reopen on its way to GitHub.
+	// changing is a close, a reopen or a merge on its way to GitHub.
 	changing bool
+	// settles counts the reads asked for early because GitHub had yet to say
+	// whether a pull request can merge (pullSettle).
+	settles int
 }
 
-// openIssueMsg is the leader plus issueKey inside a pane.
-type openIssueMsg struct{}
+// issuePage is one page of the tab drawn at a width — kept until a read or a
+// resize makes it wrong, since rendering markdown on every frame is a cost the
+// frame rate pays — and the first line of it on screen.
+type issuePage struct {
+	lines  []string
+	width  int
+	offset int
+}
+
+// shown is the page on screen.
+func (v *issuePane) shown() *issuePage {
+	if v.files {
+		return &v.changes
+	}
+	return &v.conversation
+}
+
+// label is what the tab is called, and what the header calls it.
+func (v *issuePane) label() string {
+	if v.pull {
+		return "PR #" + itoa(v.number)
+	}
+	return "issue #" + itoa(v.number)
+}
+
+// noun is what it is, in a sentence.
+func (v *issuePane) noun() string {
+	if v.pull {
+		return "pull request"
+	}
+	return "issue"
+}
+
+// address is its page on GitHub.
+func (v *issuePane) address() string {
+	if v.pull {
+		return v.repository + "/pull/" + itoa(v.number)
+	}
+	return v.repository + "/issues/" + itoa(v.number)
+}
+
+// openIssueMsg is the leader plus issueKey inside a pane, or plus pullKey for
+// the pull request.
+type openIssueMsg struct{ pull bool }
 
 // The issue's own messages are addressed to the pane by its id, like a pane's
 // own commands: a read still in flight for a tab that was closed finds no pane
@@ -141,14 +202,19 @@ type issueEditedMsg struct {
 	err  error
 }
 
-// issueNumber is the issue the discobox is tagged with — the first, when it is
-// tagged with several — for a discobox whose repository is on GitHub.
-func (s Sandbox) issueNumber() (int, bool) {
+// workNumber is the issue (`issue=`) or the pull request (`pr=`) the discobox
+// is tagged with — the first, when it is tagged with several — for a discobox
+// whose repository is on GitHub.
+func (s Sandbox) workNumber(pull bool) (int, bool) {
+	prefix := "issue="
+	if pull {
+		prefix = "pr="
+	}
 	for _, tag := range s.Tags {
-		if !strings.HasPrefix(tag, "issue=") || s.tagURL(tag) == "" {
+		if !strings.HasPrefix(tag, prefix) || s.tagURL(tag) == "" {
 			continue
 		}
-		n, err := strconv.Atoi(strings.TrimPrefix(tag, "issue="))
+		n, err := strconv.Atoi(strings.TrimPrefix(tag, prefix))
 		if err == nil {
 			return n, true
 		}
@@ -176,13 +242,15 @@ func (m *Model) issueOf(id int) (*pane, *issuePane) {
 	return p, p.issue
 }
 
-// openIssue opens a tab on one issue of the discobox on screen and focuses it.
-// The same issue already open is only focused: reading it again would throw
-// away the place it was read to.
-func (m *Model) openIssue(number int) tea.Cmd {
+// openIssue opens a tab on one issue or pull request of the discobox on screen
+// and focuses it. The same one already open is only focused: reading it again
+// would throw away the place it was read to.
+func (m *Model) openIssue(number int, pull bool) tea.Cmd {
 	box := m.currentBox()
+	v := &issuePane{repository: box.Repository, number: number, pull: pull, composer: m.newIssueComposer()}
+	v.url = v.address()
 	if box.Repository == "" {
-		return status("issue #%d is not on GitHub — this discobox has no GitHub repository", number)
+		return status("%s is not on GitHub — this discobox has no GitHub repository", v.label())
 	}
 	if p := m.issueTab(box.Repository, number); p != nil {
 		m.focusPane(p)
@@ -195,13 +263,8 @@ func (m *Model) openIssue(number int) tea.Cmd {
 	term.SetSize(cols, rows)
 	p := &pane{
 		id: m.nextPaneID, term: term, sandbox: box,
-		title: "issue #" + itoa(number),
-		issue: &issuePane{
-			repository: box.Repository,
-			number:     number,
-			url:        box.Repository + "/issues/" + itoa(number),
-			composer:   m.newIssueComposer(),
-		},
+		title: v.label(),
+		issue: v,
 	}
 	at := m.shells.insert(p, Exec{CreatedAt: time.Now()}, m.onShells)
 	m.onShells, m.shells.active = true, at
@@ -209,14 +272,17 @@ func (m *Model) openIssue(number int) tea.Cmd {
 	return tea.Batch(m.loadIssue(p, true), issueTick(p.id))
 }
 
-// toggleIssue is the leader's i: the tab on the discobox's issue, opened or
-// focused.
-func (m *Model) toggleIssue() tea.Cmd {
-	number, ok := m.currentBox().issueNumber()
-	if !ok {
-		return status("no issue to show — tag this discobox issue=N, on a GitHub repository")
+// toggleIssue is the leader's i, or its p for the pull request: the tab on the
+// discobox's issue, opened or focused.
+func (m *Model) toggleIssue(pull bool) tea.Cmd {
+	number, ok := m.currentBox().workNumber(pull)
+	switch {
+	case ok:
+		return m.openIssue(number, pull)
+	case pull:
+		return status("no pull request to show — tag this discobox pr=N, on a GitHub repository")
 	}
-	return m.openIssue(number)
+	return status("no issue to show — tag this discobox issue=N, on a GitHub repository")
 }
 
 // newIssueComposer is the comment field: the prompt's look without its
@@ -257,9 +323,11 @@ func issueTick(id int) tea.Cmd {
 }
 
 // issueLoaded takes a read. A failure leaves what was read before on screen
-// and says why it is not newer.
+// and says why it is not newer. What was read says what the number is, which
+// the tag it was opened from may have had wrong: `issue=9` on a pull request
+// is a pull request.
 func (m *Model) issueLoaded(msg issueLoadedMsg) tea.Cmd {
-	_, v := m.issueOf(msg.id)
+	p, v := m.issueOf(msg.id)
 	if v == nil || msg.read != v.reads {
 		return nil
 	}
@@ -269,8 +337,19 @@ func (m *Model) issueLoaded(msg issueLoadedMsg) tea.Cmd {
 		return nil
 	}
 	issue := msg.issue
-	v.issue, v.err, v.lines = &issue, "", nil
-	return nil
+	v.issue, v.err = &issue, ""
+	v.conversation.lines, v.changes.lines = nil, nil
+	v.pull = issue.PullRequest
+	v.url, p.title = v.address(), v.label()
+	if issue.Pull == nil {
+		v.files = false
+		return nil
+	}
+	if pullReady(issue) {
+		// On the tab itself, so it is seen from whichever pane has the keys.
+		p.title += " ✓"
+	}
+	return m.pullSettle(p)
 }
 
 // issueTicked reads the issue again on the tab's own clock, unless a read or a
@@ -322,7 +401,7 @@ func (m *Model) issuePosted(msg issuePostedMsg) tea.Cmd {
 	v.composer.Reset()
 	v.composer.Blur()
 	v.composing = false
-	v.toEnd = true
+	v.toEnd, v.files = true, false
 	return tea.Batch(m.loadIssue(p, true), status("commented on #%d", v.number))
 }
 
@@ -368,12 +447,26 @@ func (m *Model) issueKeyPress(p *pane, msg tea.KeyPressMsg) tea.Cmd {
 	case "pgdown", " ":
 		v.scroll(max(v.page-1, 1))
 	case "home", "g":
-		v.offset = 0
+		v.shown().offset = 0
 	case "end", "G":
-		v.scroll(len(v.lines))
+		v.scroll(len(v.shown().lines))
+	case "f":
+		if v.issue == nil || v.issue.Pull == nil {
+			return nil
+		}
+		v.files = !v.files
+	case "n":
+		v.toFile(1)
+	case "p":
+		v.toFile(-1)
 	case "c":
+		if v.files {
+			// The files changed are read, not answered: f goes back to
+			// where the answering is.
+			return nil
+		}
 		if v.issue == nil {
-			return status("the issue has not been read yet")
+			return status("the %s has not been read yet", v.noun())
 		}
 		v.composing = true
 		return v.composer.Focus()
@@ -383,11 +476,19 @@ func (m *Model) issueKeyPress(p *pane, msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return tea.Batch(m.loadIssue(p, true), status("reading #%d again", v.number))
 	case "x":
+		if v.files {
+			return nil
+		}
 		return m.askIssueState(p)
+	case pullMergeKey:
+		if v.files || !v.pull {
+			return nil
+		}
+		return m.askMerge(p)
 	case "o":
-		return m.openLink(v.url)
+		return m.openLink(v.pageURL())
 	case "y":
-		return m.copyText(v.url, "copied "+v.url)
+		return m.copyText(v.pageURL(), "copied "+v.pageURL())
 	case "q":
 		m.closeTab(p)
 	}
@@ -395,19 +496,33 @@ func (m *Model) issueKeyPress(p *pane, msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // askIssueState is x on an issue tab: an open issue is closed — as done, or
-// as not planned, the page's two ways — and a closed one reopened. It is
+// as not planned, the page's two ways — and a closed one reopened. A pull
+// request closes one way, unmerged, and a merged one is past both. It is
 // asked rather than done on the key: it is public, and everyone watching the
 // issue hears about it.
 func (m *Model) askIssueState(p *pane) tea.Cmd {
 	v := p.issue
 	switch {
 	case v.issue == nil:
-		return status("the issue has not been read yet")
+		return status("the %s has not been read yet", v.noun())
 	case v.changing:
 		return nil
+	case v.issue.Pull != nil && v.issue.Pull.Merged:
+		return status("%s is merged — there is nothing to close or reopen", v.label())
 	case v.issue.State == "closed":
+		reason := "reopened"
+		if v.pull {
+			reason = ""
+		}
 		d := confirmDialog("Reopen #"+itoa(v.number)+"?", v.issue.Title, func(string) tea.Cmd {
-			return m.setIssueState(p, "open", "reopened")
+			return m.setIssueState(p, "open", reason)
+		})
+		d.over = p
+		m.dialog = d
+		return nil
+	case v.pull:
+		d := confirmDialog("Close #"+itoa(v.number)+" without merging it?", v.issue.Title, func(string) tea.Cmd {
+			return m.setIssueState(p, "closed", "")
 		})
 		d.over = p
 		m.dialog = d
@@ -448,10 +563,13 @@ func (m *Model) issueStateSet(msg issueStateMsg) tea.Cmd {
 	if msg.err != nil {
 		return m.report(true, "#%d was not %s: %v", v.number, stateVerb(msg.state), msg.err)
 	}
-	v.toEnd = true
+	v.toEnd, v.files = true, false
 	said := "reopened #" + itoa(v.number)
 	if msg.state == "closed" {
-		said = "closed #" + itoa(v.number) + " as " + strings.ReplaceAll(msg.reason, "_", " ")
+		said = "closed #" + itoa(v.number)
+		if msg.reason != "" {
+			said += " as " + strings.ReplaceAll(msg.reason, "_", " ")
+		}
 	}
 	return tea.Batch(m.loadIssue(p, true), status("%s", said))
 }
@@ -509,9 +627,18 @@ func (m *Model) pasteIssue(p *pane, msg tea.PasteMsg) tea.Cmd {
 	return cmd
 }
 
-// scroll moves the view, held between the top and the last page.
+// scroll moves the page on screen, held between its top and its last screen.
 func (v *issuePane) scroll(delta int) {
-	v.offset = min(max(v.offset+delta, 0), max(len(v.lines)-v.page, 0))
+	shown := v.shown()
+	shown.offset = min(max(shown.offset+delta, 0), max(len(shown.lines)-v.page, 0))
+}
+
+// pageURL is what o opens: the page on GitHub that the tab is showing.
+func (v *issuePane) pageURL() string {
+	if v.files {
+		return v.url + "/files"
+	}
+	return v.url
 }
 
 // issueHints are the keys on an issue tab.
@@ -528,18 +655,37 @@ func issueHints(v *issuePane) []hint {
 	if strings.TrimSpace(v.composer.Value()) != "" {
 		verb = "go on writing"
 	}
-	state := "close issue"
-	if v.issue != nil && v.issue.State == "closed" {
-		state = "reopen issue"
+	what := "issue"
+	if v.pull {
+		what = "PR"
 	}
-	return []hint{
-		says("↑↓ scroll"),
-		keyed("c", "c", verb),
-		keyed("x", "x", state),
+	hints := []hint{says("↑↓ scroll")}
+	pull := v.issue != nil && v.issue.Pull != nil
+	switch {
+	case pull && v.files:
+		// The diff's own keys in place of the conversation's: nothing is
+		// answered from here.
+		hints = append(hints, keyed("n", "n", "next file"), keyed("p", "p", "previous"), keyed("f", "f", "conversation"))
+	case pull:
+		if v.issue.State == "open" {
+			hints = append(hints, keyed(pullMergeKey, pullMergeKey, "merge"))
+		}
+		hints = append(hints, keyed("f", "f", "files changed"), keyed("c", "c", verb))
+	default:
+		hints = append(hints, keyed("c", "c", verb))
+	}
+	switch {
+	case v.files || pull && v.issue.Pull.Merged:
+	case v.issue != nil && v.issue.State == "closed":
+		hints = append(hints, keyed("x", "x", "reopen "+what))
+	default:
+		hints = append(hints, keyed("x", "x", "close "+what))
+	}
+	return append(hints,
 		keyed("o", "o", "open on GitHub"),
 		keyed("r", "r", "reload"),
 		keyed("q", "q", "close tab"),
-	}
+	)
 }
 
 // issueView is an issue tab's grid, width by height: the issue scrolled to
@@ -566,7 +712,7 @@ func (m *Model) issueView(v *issuePane, width, height int) []string {
 
 	var head []string
 	if v.err != "" {
-		say := "could not read the issue: "
+		say := "could not read the " + v.noun() + ": "
 		if v.issue != nil {
 			say = "could not read it again: "
 		}
@@ -581,16 +727,22 @@ func (m *Model) issueView(v *issuePane, width, height int) []string {
 		}
 		return append(fitRows(body, height-len(foot)), foot...)
 	}
-	if v.lines == nil || v.linesWidth != width {
-		v.lines, v.linesWidth = m.issueLines(v, *v.issue, width, time.Now()), width
+	shown := v.shown()
+	if shown.lines == nil || shown.width != width {
+		if v.files {
+			shown.lines, v.fileAt = m.pullFileLines(*v.issue, width)
+		} else {
+			shown.lines = m.issueLines(v, *v.issue, width, time.Now())
+		}
+		shown.width = width
 	}
 	v.page = room
 	if v.toEnd {
-		v.offset, v.toEnd = len(v.lines), false
+		v.conversation.offset, v.toEnd = len(v.conversation.lines), false
 	}
 	v.scroll(0)
-	end := min(v.offset+room, len(v.lines))
-	body := append(head, v.lines[v.offset:end]...)
+	end := min(shown.offset+room, len(shown.lines))
+	body := append(head, shown.lines[shown.offset:end]...)
 	return append(fitRows(body, height-len(foot)), foot...)
 }
 
@@ -692,8 +844,14 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 	}
 	byline := issueState(st, issue) + "  " + st.emphasis.Render(issue.Author) + " " +
 		st.dimText.Render(opened+" "+ago(issue.CreatedAt, now)+" · "+plural(issue.Comments, "comment", "comments"))
+	if issue.Pull != nil {
+		byline = pullByline(st, issue, now)
+	}
 	out = append(out, wrapLines(byline, width)...)
 	out = append(out, "")
+	if banner := mergeBanner(st, issue, width); banner != "" {
+		out = append(out, banner, "")
+	}
 
 	factRows := func(label string, rows []string) {
 		lead := st.dimText.Render(pad(label, issueLabelWidth))
@@ -705,6 +863,9 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 		}
 	}
 	fact := func(label, value string) { factRows(label, wrapLines(value, max(width-issueLabelWidth, 1))) }
+	if issue.Pull != nil {
+		factRows("Reviewers", reviewerRows(st, issue.Pull.Reviewers, max(width-issueLabelWidth, 1)))
+	}
 	if len(issue.Assignees) > 0 {
 		fact("Assignees", strings.Join(issue.Assignees, ", "))
 	}
@@ -747,15 +908,40 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 		}
 	}
 
+	if pull := issue.Pull; pull != nil {
+		room := max(width-issueLabelWidth, 1)
+		fact("Changes", pullChanges(st, *pull))
+		factRows("Checks", checkRows(st, pull.Checks, room))
+	}
+
 	out = append(out, m.commentLines(v, issue.Author, "opened", issue.CreatedAt, issue.Body, issue.Reactions, width, now)...)
-	for _, event := range issue.Timeline {
-		if event.Kind == "commented" {
+	for i, event := range issue.Timeline {
+		switch {
+		case event.Kind == "commented":
 			out = append(out, m.commentLines(v, event.Actor, "commented", event.At, event.Body, event.Reactions, width, now)...)
 			continue
+		case event.Kind == "reviewed":
+			out = append(out, m.reviewLines(v, event, width, now)...)
+			continue
+		case event.Kind == "committed":
+			// A push is its commits one under the other, as the page lists
+			// them, rather than an event apiece.
+			if i == 0 || issue.Timeline[i-1].Kind != "committed" {
+				out = append(out, "")
+			}
+			out = append(out, commitLine(st, event, width, now))
+			continue
+		case event.Kind == "closed" && issue.Pull != nil && i > 0 && issue.Timeline[i-1].Kind == "merged":
+			// Merging closes it, and the page says the one thing.
+			continue
 		}
-		line := "• " + st.emphasis.Render(event.Actor) + " " + st.dimText.Render(eventText(st, event, issue.Repository)+" · "+ago(event.At, now))
+		said := eventText(st, event, issue.Repository)
+		if issue.Pull != nil {
+			said = pullEventText(st, event, issue)
+		}
+		line := "• " + st.emphasis.Render(event.Actor) + " " + st.dimText.Render(said+" · "+ago(event.At, now))
 		if event.Actor == "" {
-			line = "• " + st.dimText.Render(eventText(st, event, issue.Repository)+" · "+ago(event.At, now))
+			line = "• " + st.dimText.Render(said+" · "+ago(event.At, now))
 		}
 		out = append(out, "")
 		out = append(out, wrapLines(line, width)...)
@@ -788,7 +974,7 @@ func (m *Model) commentLines(v *issuePane, author, verb string, at time.Time, bo
 // lines the renderer puts round a document are the page's; here the comment's
 // own rule already separates it.
 func (m *Model) markdown(v *issuePane, body string, width int) []string {
-	if v.md == nil || v.mdWidth != width {
+	if v.md[width] == nil {
 		style := glamourstyles.ASCIIStyleConfig
 		if m.st.color {
 			style = glamourstyles.DarkStyleConfig
@@ -800,9 +986,14 @@ func (m *Model) markdown(v *issuePane, body string, width int) []string {
 		if err != nil {
 			return wrapLines(body, width)
 		}
-		v.md, v.mdWidth = renderer, width
+		if v.md == nil || len(v.md) >= issueRenderers {
+			// A resize leaves a renderer behind for every width it passed
+			// through.
+			v.md = map[int]*glamour.TermRenderer{}
+		}
+		v.md[width] = renderer
 	}
-	rendered, err := v.md.Render(strings.ReplaceAll(body, "\r\n", "\n"))
+	rendered, err := v.md[width].Render(strings.ReplaceAll(body, "\r\n", "\n"))
 	if err != nil {
 		return wrapLines(body, width)
 	}
@@ -817,6 +1008,8 @@ func (m *Model) markdown(v *issuePane, body string, width int) []string {
 // done, or closed as something else.
 func issueState(st *styles, issue Issue) string {
 	switch {
+	case issue.Pull != nil:
+		return pullState(st, issue)
 	case issue.State == "open":
 		return st.statusOK.Render("● Open")
 	case issue.StateReason == "not_planned":

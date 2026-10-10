@@ -1154,8 +1154,8 @@ func linkSpan(st *styles, text, url string) headerSpan {
 // this discobox is doing, one press from what is being said about it. Empty
 // when it has neither, or no GitHub repository for them to be numbered in.
 //
-// The issue opens as a workspace tab on a plain click (the issue tab) and
-// on the page on a Ctrl-click; the pull request is the page either way.
+// Each opens as a workspace tab on a plain click (the issue tab) and on the
+// page on a Ctrl-click.
 func workField(st *styles, s Sandbox) paneHeaderField {
 	var field paneHeaderField
 	for _, tag := range s.Tags {
@@ -1172,9 +1172,8 @@ func workField(st *styles, s Sandbox) paneHeaderField {
 			field.spans = append(field.spans, linkSpan(st, " · ", ""))
 		}
 		span := linkSpan(st, label, url)
-		if key == "issue" {
-			span.issue, _ = strconv.Atoi(number)
-		}
+		span.issue, _ = strconv.Atoi(number)
+		span.pull = key == "pr"
 		field.spans = append(field.spans, span)
 	}
 	return field

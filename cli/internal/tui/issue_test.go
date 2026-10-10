@@ -71,8 +71,7 @@ func openIssuePane(t *testing.T, ds *fakeSource) (*driver, *Model) {
 }
 
 // A plain click on the header's issue opens it as a tab on the right rather
-// than in a browser, and the tab says what GitHub's page does. The pull
-// request is still the page.
+// than in a browser, and the tab says what GitHub's page does.
 func TestClickingTheHeaderIssueOpensItAsATab(t *testing.T) {
 	t.Parallel()
 	ds := issueSource()
@@ -121,12 +120,6 @@ func TestClickingTheHeaderIssueOpensItAsATab(t *testing.T) {
 	tap(t, m, x, y)
 	if issueTabs := len(m.shells.all()); issueTabs != 1 || m.focusedPane() != p {
 		t.Errorf("a second click: %d tabs, focused on the issue %v; want the one tab, focused", issueTabs, m.focusedPane() == p)
-	}
-
-	x, y = at(t, m, "PR #9")
-	tap(t, m, x, y)
-	if got := <-opened; got != "https://github.com/acme/foo/pull/9" {
-		t.Errorf("clicking PR #9 opened %q, want the pull request", got)
 	}
 }
 
@@ -359,23 +352,23 @@ func TestTheIssueScrolls(t *testing.T) {
 	ds.issues = map[string]Issue{"https://github.com/acme/foo#4": issue}
 	d, m := openIssuePane(t, ds)
 	v := issueTabOf(m).issue
-	if v.offset != 0 {
-		t.Fatalf("the issue opened scrolled to %d", v.offset)
+	if v.conversation.offset != 0 {
+		t.Fatalf("the issue opened scrolled to %d", v.conversation.offset)
 	}
 	x, y := at(t, m, "The reaper eats")
 	send(t, m, tea.MouseWheelMsg{X: x, Y: y + 2, Button: tea.MouseWheelDown})
-	if v.offset == 0 {
+	if v.conversation.offset == 0 {
 		t.Errorf("the wheel over the issue did not scroll it")
 	}
 	d.key("G")
-	end := v.offset
+	end := v.conversation.offset
 	d.key("j")
-	if v.offset != end {
-		t.Errorf("j past the end moved to %d from %d", v.offset, end)
+	if v.conversation.offset != end {
+		t.Errorf("j past the end moved to %d from %d", v.conversation.offset, end)
 	}
 	d.key("g")
-	if v.offset != 0 {
-		t.Errorf("g left the issue at %d, want the top", v.offset)
+	if v.conversation.offset != 0 {
+		t.Errorf("g left the issue at %d, want the top", v.conversation.offset)
 	}
 }
 

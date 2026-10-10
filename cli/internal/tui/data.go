@@ -1676,10 +1676,10 @@ type SourcePush struct {
 	Err error
 }
 
-// Issue is a GitHub issue as its page shows it, for the issue tab. Every
-// string in it was written by whoever can comment on the issue, so the data
-// source hands it over made safe to draw: no control or format character
-// reaches the screen as itself.
+// Issue is a GitHub issue or pull request as its page shows it, for the issue
+// tab. Every string in it was written by whoever can comment on the issue, so
+// the data source hands it over made safe to draw: no control or format
+// character reaches the screen as itself.
 type Issue struct {
 	// Repository is owner/name.
 	Repository string
@@ -1702,8 +1702,11 @@ type Issue struct {
 	// timeline was read as far as all of them.
 	Comments  int
 	Reactions IssueReactions
-	// PullRequest is set when the number is a pull request's.
+	// PullRequest is set when the number is a pull request's — to GitHub every
+	// pull request is an issue — and Pull is then the rest of what its page
+	// shows.
 	PullRequest bool
+	Pull        *PullRequest
 	// SubIssues are the issues this one is broken into, as far as they were
 	// read; SubIssuesTotal and SubIssuesDone are GitHub's own count of them
 	// and of those closed, which a list cut short does not change.
@@ -1751,16 +1754,100 @@ type IssueEvent struct {
 	Reactions IssueReactions
 	// Label is what a labeled or unlabeled event moved.
 	Label *IssueLabel
-	// Subject is who an assignment was about, the milestone a milestoning
-	// moved, the reason a lock gave, or the commit a reference or a close
-	// came from.
+	// Subject is who an assignment or a review request was about, the
+	// milestone a milestoning moved, the reason a lock gave, or the commit a
+	// reference, a close, a merge or a push came from.
 	Subject string
+	// Message is a pushed commit's subject line.
+	Message string
+	// Review is what a review said — approved, changes_requested, commented,
+	// dismissed — with its summary in Body, and Threads are the conversations
+	// it started on the diff.
+	Review  string
+	Threads []ReviewThread
 	// From and To are a rename's titles.
 	From, To string
 	// StateReason is how a close closed it.
 	StateReason string
 	// Source is the issue or pull request a cross-reference came from.
 	Source *IssueRef
+}
+
+// PullRequest is what a pull request's page shows beyond the issue it also is.
+type PullRequest struct {
+	Draft    bool
+	Merged   bool
+	MergedBy string
+	MergedAt time.Time
+	// Head and Base are the branches as the page names them, and HeadSHA the
+	// commit that was read: the one a merge from here merges.
+	Head, Base   string
+	HeadSHA      string
+	Commits      int
+	Additions    int
+	Deletions    int
+	ChangedFiles int
+	// Mergeable is GitHub's word for whether it can merge: clean, dirty
+	// (conflicts), behind, blocked, unstable, draft, or unknown.
+	Mergeable string
+	// MergeMethods are the ways the repository merges — merge, squash, rebase
+	// — and empty when it would not say.
+	MergeMethods []string
+	Reviewers    []PullReviewer
+	Checks       []PullCheck
+	// Files are the changes as far as they were read; FilesTruncated is set
+	// when ChangedFiles is more.
+	Files          []PullFile
+	FilesTruncated bool
+}
+
+// PullReviewer is one of the page's reviewers. State is "requested" for one
+// yet to answer, and otherwise what their last review said: approved,
+// changes_requested, commented, or dismissed.
+type PullReviewer struct {
+	Name  string
+	State string
+}
+
+// PullCheck is one check on the head commit. State is pending, success,
+// failure, canceled, skipped, or neutral; URL is its own page, when it has
+// one.
+type PullCheck struct {
+	Name  string
+	State string
+	URL   string
+}
+
+// PullFile is one changed file. Status is GitHub's: added, removed, modified,
+// renamed, copied. Patch is its unified diff, empty for a binary file or a
+// change too large for GitHub to send.
+type PullFile struct {
+	Path string
+	// Previous is the path a renamed file had.
+	Previous  string
+	Status    string
+	Additions int
+	Deletions int
+	Patch     string
+}
+
+// ReviewThread is one conversation a review started on a line of the diff.
+type ReviewThread struct {
+	Path string
+	Line int
+	// Outdated is set when the diff has moved on from under it.
+	Outdated bool
+	// Hunk is the diff it was written against, ending at its line.
+	Hunk     string
+	Comments []ReviewComment
+}
+
+// ReviewComment is one comment of a review thread.
+type ReviewComment struct {
+	Author    string
+	At        time.Time
+	Body      string
+	Reactions IssueReactions
 }
 
 type DataSource interface {
@@ -1988,21 +2075,29 @@ type DataSource interface {
 	AuditBody(ctx context.Context, sandboxID, recordID, part string) (string, error)
 
 	// Issue is one GitHub issue as its page shows it — the issue, its
-	// sub-issues, and its whole timeline of comments and events — read as the
-	// person at this machine. repository is the web address Sandbox.Repository
+	// sub-issues, and its whole timeline of comments and events, and for a
+	// pull request its reviewers, checks, review threads and diff (Issue.Pull)
+	// — read as the person at this machine. repository is the web address Sandbox.Repository
 	// carries. Without full, the data source may answer a re-read from what it
 	// read before when GitHub says nothing has changed since; full is a read
 	// someone asked to see now.
 	Issue(ctx context.Context, repository string, number int, full bool) (Issue, error)
 
-	// CommentOnIssue posts a comment on a GitHub issue, as the person at this
-	// machine.
+	// CommentOnIssue posts a comment on a GitHub issue or pull request, as the
+	// person at this machine.
 	CommentOnIssue(ctx context.Context, repository string, number int, body string) error
 
-	// SetIssueState closes a GitHub issue or reopens it, as the person at this
-	// machine: state is "closed" or "open", and reason how it closed —
-	// "completed", "not_planned" — or what reopened it ("reopened").
+	// SetIssueState closes a GitHub issue or pull request, or reopens it, as
+	// the person at this machine: state is "closed" or "open", and reason how
+	// an issue closed — "completed", "not_planned" — or what reopened it
+	// ("reopened"). A pull request has no reason.
 	SetIssueState(ctx context.Context, repository string, number int, state, reason string) error
+
+	// MergePullRequest merges a GitHub pull request, as the person at this
+	// machine: method is "merge", "squash" or "rebase", and sha the head commit
+	// that was read (PullRequest.HeadSHA), so a branch that has moved on since
+	// is refused rather than merged unseen.
+	MergePullRequest(ctx context.Context, repository string, number int, method, sha string) error
 
 	// ServiceLogs is the transcript of a service's current or last run, as the
 	// bytes it wrote. It is read for a service that is not running, whose pane

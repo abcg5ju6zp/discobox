@@ -142,7 +142,7 @@ func (m *Model) leftPress(ev tea.MouseClickMsg) tea.Cmd {
 	// from it here — which is what Ctrl-click did there before links were
 	// pressable at all. The plain click is the gesture that works everywhere,
 	// and a page opened twice is the worse failure of the two.
-	if (where.what.kind == hitURL || where.what.kind == hitIssue) && ev.Mod&tea.ModCtrl != 0 {
+	if (where.what.kind == hitURL || where.what.kind == hitIssue || where.what.kind == hitPull) && ev.Mod&tea.ModCtrl != 0 {
 		m.clearSelections()
 		return nil
 	}
@@ -381,14 +381,14 @@ func (m *Model) press(what hit, clicks int) (tea.Cmd, bool) {
 		}
 		return m.openLink(what.url), true
 
-	case hitIssue:
-		// The header's issue opens as a tab of the workspace rather than in a
-		// browser: it is read while the work goes on. Ctrl-click is still the
-		// page (leftPress). Once, as a link is.
+	case hitIssue, hitPull:
+		// The header's issue and pull request open as tabs of the workspace
+		// rather than in a browser: they are read while the work goes on.
+		// Ctrl-click is still the page (leftPress). Once, as a link is.
 		if clicks > 1 {
 			return nil, true
 		}
-		return m.openIssue(what.idx), true
+		return m.openIssue(what.idx, what.kind == hitPull), true
 
 	case hitChips:
 		// The strip names the run options, so it is the way into them.

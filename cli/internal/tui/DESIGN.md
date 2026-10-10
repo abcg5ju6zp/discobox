@@ -37,7 +37,7 @@ flowchart LR
     L -->|y| Overlay["overlay pane → DataSource.Open"]
     WS -->|leader o| T["tools picker → Tools / NewTool / EndExec / RunHostTool / Addresses"]
     WS -->|leader A| Aud["audit screen → FollowAudit / AuditDetail"]
-    WS -->|leader i, issue #N| Iss["issue tab → Issue / CommentOnIssue / SetIssueState"]
+    WS -->|leader i, issue #N · leader p, PR #N| Iss["issue tab → Issue / CommentOnIssue / SetIssueState / MergePullRequest"]
     A -->|d s| AVerb["DataSource.DoHarness"]
     A -->|v| ACard["config card → HarnessSecrets"]
     A -->|e| ACfg["configuration overlay pane → OpenHarnessConfigure"]
@@ -583,9 +583,8 @@ repository the tag is plain: `issue=4` alone does not say whose issue 4.
   them.
 - **In the workspace**, the header carries them as `issue #4 · PR #9`
   (`workField`) after the id, and gives them up last: they say what the work
-  is for. A plain click on the issue opens it as a tab, below, rather
-  than the browser (`hitIssue`); Ctrl-click still follows the link, and the
-  pull request is the page either way.
+  is for. A plain click on either opens it as a tab, below, rather than the
+  browser (`hitIssue`, `hitPull`); Ctrl-click still follows the link.
 
 ## The issue tab
 
@@ -595,6 +594,44 @@ milestone, sub-issues, the description, and the timeline of comments and
 events — with markdown rendered by glamour, a field to comment from, and `x`
 to close it (as completed or not planned) or reopen it. It is opened by a plain
 click on the header's `issue #N`, or `leader i`.
+
+The pull request a discobox is tagged with is the same tab, behind `PR #N` and
+`leader p` (`pull.go`). To GitHub a pull request is an issue — one timeline,
+one way to comment, one way to close — so it is one read (`Issue.Pull`) and one
+pane, not a second viewer, and everything below holds for it. What it adds:
+
+- **The rest of its page.** The badge (open, draft, merged, closed) and who
+  wants what merged into where; among the facts the reviewers and what each
+  last said, the size of the change, and the checks — how they stand, then each
+  one that has not passed, a link to its own page. In the timeline a push is its commits, a review is its verdict,
+  its summary, and each thread it started on the diff under the lines it is
+  about, replies with it.
+- **Files changed is a second page of the tab** (`f`, and back): the files as
+  a list, then each one's diff, colored by its first column, long lines run on
+  rather than cut. `n` and `p` step a file at a time. Each page keeps its own
+  place (`issuePage`); the keys line offers the diff's keys there and nothing
+  that answers.
+- **Whether it can merge is the first thing under the title** (`mergeBanner`),
+  in GitHub's own terms (`mergeable_state`): a filled bar when it is ready —
+  open, not a draft, and clean, which is no conflicts, checks passed and every
+  required review in — and otherwise the one reason it is not. Ready also marks
+  the tab (`PR #9 ✓`), so it shows from whichever pane has the keys. GitHub
+  works the state out when first asked, so the client's full read asks again
+  before it answers and a read that still came back unknown is asked again in
+  a moment, a few times (`pullSettle`); past that the bar says GitHub has not
+  said, which is what it tells a reader with no token.
+- **`m` merges, asking which way** (`askMerge`): squash, a merge commit, or
+  rebase, with the ways the repository does not allow shown and not takeable;
+  a repository that will not say which it allows is asked by trying. The merge
+  names the head commit that was read, so a branch pushed to since is refused
+  rather than merged unseen. Only what GitHub could not do either is refused
+  here — a draft, a conflict; a pull request a rule blocks is GitHub's to
+  refuse, with its own reason, since someone allowed to bypass the rule may.
+- **Closing is one question.** A pull request closes one way, unmerged, and a
+  merged one is past closing and reopening. Reviewing is not done from here.
+- **The number is what GitHub says it is.** The tag a tab was opened from names
+  it until the first read; `issue=9` on a pull request is then a pull request,
+  title and page.
 
 - **A tab, not a screen.** It is a pane in the shells column (`pane.issue`),
   so it is everything a tab is for free: a number, a place in `leader ←/→`,
@@ -2708,7 +2745,8 @@ the newest one where the busy line goes.
 | `workspace.go` | the workspace screen: open, poll/reconcile, tabs, detach, the port forward |
 | `services.go` | the discobox's declared services: the menu behind the leader, and the three verbs |
 | `tools.go` | the tools: the catalog, the picker, the tool window and its `[-]`/`[x]` |
-| `issue.go` | the issue tab: a GitHub issue as a pane of the shells column, its keys, the comment field, closing and reopening, and how the page is laid out as lines |
+| `issue.go` | the issue tab: a GitHub issue or pull request as a pane of the shells column, its keys, the comment field, closing and reopening, and how the page is laid out as lines |
+| `pull.go` | what a pull request's page adds to the issue tab: the badge and branches, the merge bar and merging, reviewers, checks, pushes and reviews with their threads, and the files changed as a second page |
 | `audit.go` | the audit screen: the followed timeline over the workspace, its search, and a record's card |
 | `fuzzy.go` | the fzf-style matcher the audit search filters and lights with |
 | `narration.go` | what a slow operation is doing, on the busy line |
