@@ -952,13 +952,27 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 	return out
 }
 
-// commentLines is one comment — the description is the first — under a rule
+// groupBar is the head of one thing in a page of them — a comment, a review, a
+// file's diff — drawn the way the list heads a group of discoboxes: a bar on
+// the group field, what it is on the left and the fact about it on the right.
+// A blank row comes with it, above. Without color there is no field, so a rule
+// does the separating.
+func groupBar(st *styles, left, right string, width int) []string {
+	room := max(width-2, 1)
+	left = truncate(left, max(room-lipgloss.Width(right)-1, 1))
+	row := " " + padANSI(spread(left, right, room), room) + " "
+	if !st.color {
+		return []string{"", st.rule.Render(strings.Repeat("─", width)), strings.TrimRight(row, " ")}
+	}
+	return []string{"", highlight(st, row, colInactive)}
+}
+
+// commentLines is one comment — the description is the first — under a bar
 // with who wrote it and when, rendered as GitHub renders its markdown, with
 // the reactions under it.
 func (m *Model) commentLines(v *issuePane, author, verb string, at time.Time, body string, reactions IssueReactions, width int, now time.Time) []string {
 	st := m.st
-	out := []string{"", st.rule.Render(strings.Repeat("─", width))}
-	out = append(out, truncate(st.emphasis.Render(author)+" "+st.dimText.Render(verb+" "+ago(at, now)), width))
+	out := groupBar(st, st.attentionText.Render(author)+" "+st.attentionHint.Render(verb), st.attentionHint.Render(ago(at, now)), width)
 	if strings.TrimSpace(body) == "" {
 		return append(out, st.dimText.Render("No description provided."))
 	}
