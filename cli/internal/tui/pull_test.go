@@ -462,7 +462,7 @@ func TestAPullRequestReadyToMergeSaysSo(t *testing.T) {
 	ds.issues["https://github.com/acme/foo#9"] = readyPull()
 	d, m := openPullPane(t, ds)
 	frame := plainFrame(m)
-	if !strings.Contains(frame, "✓ Ready to merge into main — m merges it") {
+	if !strings.Contains(frame, "● Ready to merge into main") {
 		t.Errorf("the ready pull request does not say so:\n%s", frame)
 	}
 	if got := issueTabOf(m).name(); got != "PR #9 ✓" {
