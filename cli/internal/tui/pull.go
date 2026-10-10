@@ -35,17 +35,19 @@ const (
 	diffTab = "    "
 )
 
-// pullState is the badge beside a pull request's title.
+// pullState is the badge beside a pull request's title: the dot the list draws
+// a discobox's state with, filled while there is something to do about it,
+// and the word.
 func pullState(st *styles, issue Issue) string {
 	switch pull := issue.Pull; {
 	case pull.Merged:
-		return st.info.Render("⇄ Merged")
+		return st.info.Render("● Merged")
 	case issue.State == "closed":
-		return st.statusER.Render("⊘ Closed")
+		return st.stateOff.Render("○ Closed")
 	case pull.Draft:
-		return st.dimText.Render("◌ Draft")
+		return st.stateOff.Render("○ Draft")
 	}
-	return st.statusOK.Render("● Open")
+	return st.stateRun.Render("● Open")
 }
 
 // pullByline is the line under the title, which says what the page says: who
@@ -69,13 +71,13 @@ func reviewerRows(st *styles, reviewers []PullReviewer, width int) []string {
 		glyph, said := st.dimText.Render("○"), "review requested"
 		switch reviewer.State {
 		case "approved":
-			glyph, said = st.statusOK.Render("✓"), "approved"
+			glyph, said = st.stateRun.Render("●"), "approved"
 		case "changes_requested":
-			glyph, said = st.statusER.Render("±"), "requested changes"
+			glyph, said = st.stateErr.Render("●"), "requested changes"
 		case "commented":
-			glyph, said = st.dimText.Render("◦"), "commented"
+			glyph, said = st.stateOff.Render("○"), "commented"
 		case "dismissed":
-			glyph, said = st.dimText.Render("⊘"), "review dismissed"
+			glyph, said = st.stateOff.Render("○"), "review dismissed"
 		}
 		rows = append(rows, truncate(glyph+" "+reviewer.Name+" "+st.dimText.Render(said), width))
 	}
@@ -127,11 +129,11 @@ func checkRows(st *styles, checks []PullCheck, width int) []string {
 		var glyph string
 		switch check.State {
 		case "failure":
-			glyph = st.statusER.Render("✗")
+			glyph = st.stateErr.Render("●")
 		case "canceled":
-			glyph = st.statusER.Render("⊘")
+			glyph = st.stateOff.Render("○")
 		case "pending":
-			glyph = st.statusWA.Render("◌")
+			glyph = st.stateBusy.Render("●")
 		default:
 			continue
 		}
@@ -170,13 +172,13 @@ func mergeBanner(st *styles, issue Issue, width int) string {
 		right := st.key.Render(pullMergeKey) + st.attentionHint.Render(" merges it ")
 		return highlight(st, padANSI(spread(truncate(left, max(width-lipgloss.Width(right)-1, 1)), right, width), width), colInactive)
 	}
-	paint, glyph := st.statusWA, "◌"
+	paint, glyph := st.statusWA, "●"
 	var said string
 	switch {
 	case pull.Draft || pull.Mergeable == "draft":
-		paint, said = st.dimText, "a draft, to be marked ready for review first"
+		paint, glyph, said = st.dimText, "○", "a draft, to be marked ready for review first"
 	case pull.Mergeable == "dirty":
-		paint, glyph, said = st.statusER, "✗", "conflicts with "+pull.Base+" must be resolved"
+		paint, glyph, said = st.statusER, "●", "conflicts with "+pull.Base+" must be resolved"
 	case pull.Mergeable == "behind":
 		said = "out of date with " + pull.Base
 	case pull.Mergeable == "blocked":
@@ -184,7 +186,7 @@ func mergeBanner(st *styles, issue Issue, width int) string {
 	case pull.Mergeable == "unstable":
 		said = "its checks have not passed"
 	default:
-		return st.dimText.Render(truncate("… GitHub has not said yet whether this can merge — r asks again", width))
+		return st.dimText.Render(truncate("○ GitHub has not said yet whether this can merge — r asks again", width))
 	}
 	return paint.Bold(true).Render(truncate(glyph+" Not ready to merge — "+said, width))
 }
@@ -393,7 +395,7 @@ func (m *Model) reviewLines(v *issuePane, e IssueEvent, width int, now time.Time
 				out = append(out, indent+line)
 			}
 			if len(comment.Reactions) > 0 {
-				out = append(out, indent+reactionText(comment.Reactions))
+				out = append(out, indent+reactionText(st, comment.Reactions))
 			}
 		}
 	}

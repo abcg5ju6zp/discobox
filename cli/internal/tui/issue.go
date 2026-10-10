@@ -346,7 +346,7 @@ func (m *Model) issueLoaded(msg issueLoadedMsg) tea.Cmd {
 	}
 	if pullReady(issue) {
 		// On the tab itself, so it is seen from whichever pane has the keys.
-		p.title += " ✓"
+		p.title += " ●"
 	}
 	return m.pullSettle(p)
 }
@@ -978,7 +978,7 @@ func (m *Model) commentLines(v *issuePane, author, verb string, at time.Time, bo
 	}
 	out = append(out, m.markdown(v, body, width)...)
 	if len(reactions) > 0 {
-		out = append(out, "", reactionText(reactions))
+		out = append(out, "", reactionText(st, reactions))
 	}
 	return out
 }
@@ -1018,13 +1018,13 @@ func issueState(st *styles, issue Issue) string {
 	case issue.Pull != nil:
 		return pullState(st, issue)
 	case issue.State == "open":
-		return st.statusOK.Render("● Open")
+		return st.stateRun.Render("● Open")
 	case issue.StateReason == "not_planned":
-		return st.dimText.Render("⊘ Closed as not planned")
+		return st.stateOff.Render("○ Closed as not planned")
 	case issue.StateReason == "duplicate":
-		return st.dimText.Render("⊘ Closed as duplicate")
+		return st.stateOff.Render("○ Closed as duplicate")
 	default:
-		return st.frame.Render("✓ Closed")
+		return st.stateOff.Render("○ Closed")
 	}
 }
 
@@ -1045,31 +1045,30 @@ func labelChip(st *styles, label IssueLabel) string {
 	return dot.Render("●") + " " + label.Name
 }
 
-// reactionGlyphs are the reactions as the page draws them, in its order.
-var reactionGlyphs = []struct{ name, glyph string }{
-	{"+1", "👍"}, {"-1", "👎"}, {"laugh", "😄"}, {"hooray", "🎉"},
-	{"confused", "😕"}, {"heart", "❤"}, {"rocket", "🚀"}, {"eyes", "👀"},
-}
+// reactionOrder is the page's order for the reactions, which are drawn by
+// GitHub's names for them: an emoji is two cells in one terminal and one in
+// the next, and nothing else in the window draws one.
+var reactionOrder = []string{"+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"}
 
-func reactionText(reactions IssueReactions) string {
+func reactionText(st *styles, reactions IssueReactions) string {
 	var parts []string
-	for _, r := range reactionGlyphs {
-		if n := reactions[r.name]; n > 0 {
-			parts = append(parts, r.glyph+" "+itoa(n))
+	for _, name := range reactionOrder {
+		if n := reactions[name]; n > 0 {
+			parts = append(parts, name+" "+itoa(n))
 		}
 	}
-	return strings.Join(parts, "  ")
+	return st.dimText.Render(strings.Join(parts, " · "))
 }
 
 // refText is another issue or pull request as a line names it: its state,
 // its number — with its repository when that is not this one — and its title.
 func refText(st *styles, ref IssueRef, repository string) string {
-	glyph := st.statusOK.Render("○")
+	glyph := st.stateRun.Render("●")
 	switch {
 	case ref.Merged:
-		glyph = st.frame.Render("⇄")
+		glyph = st.info.Render("●")
 	case ref.State == "closed":
-		glyph = st.frame.Render("✓")
+		glyph = st.stateOff.Render("○")
 	}
 	number := "#" + itoa(ref.Number)
 	if ref.Repository != "" && ref.Repository != repository {
