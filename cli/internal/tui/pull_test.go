@@ -103,7 +103,7 @@ func TestClickingTheHeaderPullRequestOpensItAsATab(t *testing.T) {
 		t.Errorf("the tab's page is %q, want the pull request's", got)
 	}
 
-	frame := plainFrame(m)
+	frame := tightFrame(m)
 	for _, want := range []string{
 		"● Open", "alice wants to merge 2 commits into main from", "fix-reaper · 2d ago · 1 comment",
 		"Reviewers", "● bob requested changes", "○ erin review requested",
@@ -111,7 +111,7 @@ func TestClickingTheHeaderPullRequestOpensItAsATab(t *testing.T) {
 		"Checks", "1 failing · 1 pending · 1 passed", "● lint", "● e2e",
 		"● Not ready to merge — a required review or check is",
 		"Fixes #4.",
-		"◦ abc1234 reap only the stopped · Alice A", "◦ def5678 test it",
+		"Alice A abc1234 reap only the stopped", "Alice A def5678 test it",
 		"alice requested a review from bob",
 	} {
 		if !strings.Contains(frame, want) {
@@ -124,10 +124,10 @@ func TestClickingTheHeaderPullRequestOpensItAsATab(t *testing.T) {
 
 	// The review and its thread are further down than the window is tall.
 	d.key("G")
-	frame = plainFrame(m)
+	frame = tightFrame(m)
 	for _, want := range []string{
 		"bob requested changes", "Nearly.",
-		"reaper/reaper.go:3", "+    stopped()", "What about paused ones?", "Left alone.",
+		"reaper/reaper.go:3", "+ stopped()", "What about paused ones?", "Left alone.",
 		"carol commented", "alice force-pushed the fix-reaper branch",
 	} {
 		if !strings.Contains(frame, want) {
@@ -307,7 +307,7 @@ func TestAMergedPullRequestIsNotClosed(t *testing.T) {
 	)
 	ds.issues["https://github.com/acme/foo#9"] = pull
 	d, m := openPullPane(t, ds)
-	frame := plainFrame(m)
+	frame := tightFrame(m)
 	for _, want := range []string{"● Merged", "dave merged 2 commits into main from"} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("the merged pull request does not say %q:\n%s", want, frame)
@@ -324,7 +324,7 @@ func TestAMergedPullRequestIsNotClosed(t *testing.T) {
 		t.Errorf("x on a merged pull request: dialog %v, status %q; want it to say it is merged", m.dialog != nil, m.status)
 	}
 	d.key("G")
-	frame = plainFrame(m)
+	frame = tightFrame(m)
 	if !strings.Contains(frame, "dave merged commit fedcba9 into main") || strings.Contains(frame, "dave closed this") {
 		t.Errorf("the merge is not the one thing said of it:\n%s", frame)
 	}

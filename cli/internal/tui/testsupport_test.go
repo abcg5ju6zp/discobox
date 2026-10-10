@@ -1507,6 +1507,12 @@ func rawFrame(m *Model) string { return m.View().Content }
 // whatever the cursor happens to be on.
 func plainFrame(m *Model) string { return ansi.Strip(rawFrame(m)) }
 
+// tightFrame is plainFrame with every run of spaces made one, for asserting
+// what a row of a table says without restating its column widths.
+func tightFrame(m *Model) string {
+	return strings.Join(strings.Fields(strings.ReplaceAll(plainFrame(m), "\n", " \n ")), " ")
+}
+
 func frameText(m *Model) string { return strings.Join(frame(m), "\n") }
 
 // showAllFolders drops the header's folder filter, which the window opens with

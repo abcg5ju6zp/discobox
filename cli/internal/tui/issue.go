@@ -915,21 +915,37 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 	}
 
 	out = append(out, m.commentLines(v, issue.Author, "opened", issue.CreatedAt, issue.Body, issue.Reactions, width, now)...)
+	// What happened between the comments is a table, as the audit screen's
+	// records are: when, who, and what, each in its own column, a run of
+	// events one row under another.
+	who := 0
+	for _, event := range issue.Timeline {
+		if event.Kind != "commented" && event.Kind != "reviewed" {
+			who = max(who, lipgloss.Width(event.Actor))
+		}
+	}
+	who = min(who, eventWhoWidth)
+	var run []eventRow
+	flush := func() {
+		if len(run) > 0 {
+			out = append(out, "")
+			out = append(out, eventRows(st, run, who, width, now)...)
+			run = nil
+		}
+	}
 	for i, event := range issue.Timeline {
 		switch {
 		case event.Kind == "commented":
+			flush()
 			out = append(out, m.commentLines(v, event.Actor, "commented", event.At, event.Body, event.Reactions, width, now)...)
 			continue
 		case event.Kind == "reviewed":
+			flush()
 			out = append(out, m.reviewLines(v, event, width, now)...)
 			continue
 		case event.Kind == "committed":
-			// A push is its commits one under the other, as the page lists
-			// them, rather than an event apiece.
-			if i == 0 || issue.Timeline[i-1].Kind != "committed" {
-				out = append(out, "")
-			}
-			out = append(out, commitLine(st, event, width, now))
+			// A pushed commit: its short name, dim, and what it says.
+			run = append(run, eventRow{at: event.At, who: event.Actor, what: st.dimText.Render(event.Subject) + " " + event.Message})
 			continue
 		case event.Kind == "closed" && issue.Pull != nil && i > 0 && issue.Timeline[i-1].Kind == "merged":
 			// Merging closes it, and the page says the one thing.
@@ -939,13 +955,9 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 		if issue.Pull != nil {
 			said = pullEventText(st, event, issue)
 		}
-		line := "• " + st.emphasis.Render(event.Actor) + " " + st.dimText.Render(said+" · "+ago(event.At, now))
-		if event.Actor == "" {
-			line = "• " + st.dimText.Render(said+" · "+ago(event.At, now))
-		}
-		out = append(out, "")
-		out = append(out, wrapLines(line, width)...)
+		run = append(run, eventRow{at: event.At, who: event.Actor, what: said})
 	}
+	flush()
 	if issue.Truncated {
 		out = append(out, "", st.statusWA.Render(truncate("the timeline goes on — o opens the rest on GitHub", width)))
 	}
@@ -965,6 +977,47 @@ func groupBar(st *styles, left, right string, width int) []string {
 		return []string{"", st.rule.Render(strings.Repeat("─", width)), strings.TrimRight(row, " ")}
 	}
 	return []string{"", highlight(st, row, colInactive)}
+}
+
+// eventRow is one thing that happened in a timeline: when, who did it, and
+// what, which may carry its own styling.
+type eventRow struct {
+	at   time.Time
+	who  string
+	what string
+}
+
+const (
+	// eventTimeWidth is the timeline's time column: "12mo ago" and a gap.
+	eventTimeWidth = 10
+	// eventWhoWidth is the most the who column takes: a login is 39 at the
+	// longest, and one that long gives way before what it did does.
+	eventWhoWidth = 16
+)
+
+// eventRows lays a run of events out in columns: the time dim and first, as
+// the audit screen has it, then who, who cells wide — one width for the whole
+// page, so a run lines up with the runs above and below it — then what. What does not fit on the row runs on under its own column.
+func eventRows(st *styles, run []eventRow, who, width int, now time.Time) []string {
+	lead := eventTimeWidth + who + 2
+	if who == 0 {
+		lead = eventTimeWidth
+	}
+	room := max(width-lead, 1)
+	var out []string
+	for _, row := range run {
+		head := st.dimText.Render(pad(ago(row.at, now), eventTimeWidth))
+		if who > 0 {
+			head += pad(truncate(row.who, who), who) + "  "
+		}
+		for i, line := range wrapLines(row.what, room) {
+			if i > 0 {
+				head = strings.Repeat(" ", lead)
+			}
+			out = append(out, head+line)
+		}
+	}
+	return out
 }
 
 // commentLines is one comment — the description is the first — under a bar

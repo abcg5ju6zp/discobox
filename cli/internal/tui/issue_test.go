@@ -98,7 +98,7 @@ func TestClickingTheHeaderIssueOpensItAsATab(t *testing.T) {
 		t.Errorf("the issue is not drawn as a column of the split")
 	}
 
-	frame := plainFrame(m)
+	frame := tightFrame(m)
 	for _, want := range []string{
 		"issue #4", "● Open", "alice", "opened this issue 3d ago",
 		"Assignees", "bob", "Labels", "[bug]", "Milestone", "v1",
