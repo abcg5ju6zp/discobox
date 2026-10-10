@@ -13,7 +13,6 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
-	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -975,14 +974,7 @@ func (m *Model) commentLines(v *issuePane, author, verb string, at time.Time, bo
 // own rule already separates it.
 func (m *Model) markdown(v *issuePane, body string, width int) []string {
 	if v.md[width] == nil {
-		style := glamourstyles.ASCIIStyleConfig
-		if m.st.color {
-			style = glamourstyles.DarkStyleConfig
-		}
-		zero := uint(0)
-		style.Document.Margin = &zero
-		style.Document.BlockPrefix, style.Document.BlockSuffix = "", ""
-		renderer, err := glamour.NewTermRenderer(glamour.WithStyles(style), glamour.WithWordWrap(width), glamour.WithEmoji())
+		renderer, err := glamour.NewTermRenderer(glamour.WithStyles(markdownStyle(m.st)), glamour.WithWordWrap(width), glamour.WithEmoji())
 		if err != nil {
 			return wrapLines(body, width)
 		}
