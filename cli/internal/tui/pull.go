@@ -354,17 +354,16 @@ func pullEventText(st *styles, e IssueEvent, issue Issue) string {
 // lines it is about, with its replies.
 func (m *Model) reviewLines(v *issuePane, e IssueEvent, width int, now time.Time) []string {
 	st := m.st
-	said := st.dimText.Render("reviewed")
+	said := st.attentionHint.Render("reviewed")
 	switch e.Review {
 	case "approved":
 		said = st.statusOK.Render("approved these changes")
 	case "changes_requested":
 		said = st.statusER.Render("requested changes")
 	case "dismissed":
-		said = st.dimText.Render("reviewed — since dismissed")
+		said = st.attentionHint.Render("reviewed — since dismissed")
 	}
-	out := []string{"", st.rule.Render(strings.Repeat("─", width))}
-	out = append(out, truncate(st.emphasis.Render(e.Actor)+" "+said+" "+st.dimText.Render(ago(e.At, now)), width))
+	out := groupBar(st, st.attentionText.Render(e.Actor)+" "+said, st.attentionHint.Render(ago(e.At, now)), width)
 	if strings.TrimSpace(e.Body) != "" {
 		out = append(out, m.markdown(v, e.Body, width)...)
 	}
@@ -460,13 +459,17 @@ func (m *Model) pullFileLines(issue Issue, width int) (lines []string, at []int)
 	}
 
 	for _, file := range pull.Files {
-		out = append(out, "", st.rule.Render(strings.Repeat("─", width)))
-		at = append(at, len(out)-1)
 		name := file.Path
 		if file.Previous != "" && file.Previous != file.Path {
 			name = file.Previous + " → " + file.Path
 		}
-		out = append(out, wrapLines(fileGlyph(st, file.Status)+" "+st.emphasis.Render(name)+" "+plusMinus(st, file.Additions, file.Deletions), width)...)
+		counts := plusMinus(st, file.Additions, file.Deletions)
+		name = truncateMiddle(name, max(width-2-2-1-lipgloss.Width(counts), 1))
+		bar := groupBar(st, fileGlyph(st, file.Status)+" "+st.attentionText.Render(name), counts, width)
+		out = append(out, bar...)
+		// The row a step between files lands on is the bar, not the blank
+		// above it.
+		at = append(at, len(out)-1)
 		if file.Patch == "" {
 			out = append(out, st.dimText.Render(truncate("no diff to show — a binary file, a rename, or a change too large", width)))
 			continue
