@@ -88,6 +88,10 @@ const (
 	// issue.go.
 	hitIssue
 
+	// hitPull is the header's `PR #N`, which is the same link onto the same
+	// tab for the pull request.
+	hitPull
+
 	// hitPrompt is the composer's text area, where a press places the caret
 	// and a drag selects rather than meaning anything about the window.
 	hitPrompt
@@ -271,7 +275,7 @@ func (z *zones) at(x, y int) (zone, bool) {
 func (z *zones) beneathLinks(x, y int) (zone, bool) {
 	for i := len(z.marks) - 1; i >= 0; i-- {
 		m := z.marks[i]
-		if m.what.kind != hitURL && m.what.kind != hitIssue && x >= m.x && x < m.x+m.width && y >= m.y && y < m.y+m.height {
+		if m.what.kind != hitURL && m.what.kind != hitIssue && m.what.kind != hitPull && x >= m.x && x < m.x+m.width && y >= m.y && y < m.y+m.height {
 			return m, true
 		}
 	}

@@ -259,16 +259,14 @@ func TestClickingAnIssueTagOnTheListOpensTheIssue(t *testing.T) {
 }
 
 // The workspace says which issue and pull request it is working on at the top,
-// each a link to it. A plain click on the issue opens it beside the workspace
-// instead (issue_test.go); the link is still what Ctrl-click follows.
+// each a link to it. A plain click on either opens it beside the workspace
+// instead (issue_test.go, pull_test.go); the link is still what Ctrl-click
+// follows.
 func TestTheWorkspaceHeaderLinksTheIssueAndPullRequest(t *testing.T) {
 	t.Parallel()
 	ds := newFakeSource(githubTaggedSandboxes()...)
 	d, m, _ := openWorkspace(t, ds, "enter")
 	d.wait("the header", func() bool { return strings.Contains(plainFrame(m), "issue #4 · PR #9") })
-
-	opened := make(chan string, 4)
-	m.openOS = func(url string) error { opened <- url; return nil }
 
 	if _, y := at(t, m, "issue #4"); y != 0 {
 		t.Fatalf("issue #4 is drawn on row %d, want the header", y)
@@ -276,11 +274,11 @@ func TestTheWorkspaceHeaderLinksTheIssueAndPullRequest(t *testing.T) {
 	if frame := rawFrame(m); !strings.Contains(frame, "https://github.com/acme/foo/issues/4") {
 		t.Errorf("issue #4 is not a link:\n%q", frame)
 	}
-	x, y := at(t, m, "PR #9")
-	slowClock(m)
-	tap(t, m, x, y)
-	if got := <-opened; got != "https://github.com/acme/foo/pull/9" {
-		t.Errorf("clicking PR #9 opened %q, want the pull request", got)
+	if _, y := at(t, m, "PR #9"); y != 0 {
+		t.Fatalf("PR #9 is drawn on row %d, want the header", y)
+	}
+	if frame := rawFrame(m); !strings.Contains(frame, "https://github.com/acme/foo/pull/9") {
+		t.Errorf("PR #9 is not a link:\n%q", frame)
 	}
 }
 

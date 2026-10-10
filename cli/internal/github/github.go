@@ -1,7 +1,8 @@
-// Package github reads an issue the way its page on github.com shows it — the
-// issue, its sub-issues, and its timeline of comments and events — posts a
-// comment on one, and closes or reopens it. It is the console's issue tab's
-// whole reach into GitHub.
+// Package github reads an issue or a pull request the way its page on
+// github.com shows it — the issue, its sub-issues, and its timeline of comments
+// and events, and for a pull request its branches, reviewers, review threads,
+// checks and diff as well (pull.go) — posts a comment on one, and closes or
+// reopens it. It is the console's issue tab's whole reach into GitHub.
 //
 // It talks to the REST API as the person at this machine: the token is the
 // one `gh` is logged in with, or GH_TOKEN / GITHUB_TOKEN, the variables `gh`
@@ -55,6 +56,9 @@ type Client struct {
 	// Token finds the token to send, and is asked again after a refusal: a
 	// `gh auth login` in another terminal is how a refusal is answered.
 	Token func(context.Context) string
+	// Settle is how long a read waits before asking GitHub again whether a
+	// pull request can merge, when it had yet to work that out.
+	Settle time.Duration
 
 	mu    sync.Mutex
 	token string
@@ -84,7 +88,7 @@ type cachedIssue struct {
 
 // New is a client for github.com as this machine's `gh` is logged in to it.
 func New() *Client {
-	return &Client{API: DefaultAPI, HTTP: &http.Client{Timeout: 30 * time.Second}, Token: LocalToken, now: time.Now}
+	return &Client{API: DefaultAPI, HTTP: &http.Client{Timeout: 30 * time.Second}, Token: LocalToken, Settle: 1500 * time.Millisecond, now: time.Now}
 }
 
 // LocalToken is the token this machine would send to GitHub: GH_TOKEN, then
@@ -146,8 +150,10 @@ type Issue struct {
 	Comments  int
 	Reactions Reactions
 	// PullRequest is set when the number is a pull request's: every pull
-	// request is an issue to this API, and its page is a different one.
+	// request is an issue to this API. Pull is then the rest of what its page
+	// shows.
 	PullRequest bool
+	Pull        *Pull
 	// SubIssues are the issues this one is broken into, as far as they were
 	// read; SubIssuesTotal and SubIssuesDone are GitHub's own count of them
 	// and of those closed, which a list cut short does not change.
@@ -199,10 +205,17 @@ type Event struct {
 	URL       string
 	// Label is what a labeled or unlabeled event moved.
 	Label *Label
-	// Subject is who an assignment was about, the milestone a milestoning
-	// moved, the reason a lock gave, or the commit a reference or a close came
-	// from.
+	// Subject is who an assignment or a review request was about, the
+	// milestone a milestoning moved, the reason a lock gave, or the commit a
+	// reference, a close, a merge or a push came from.
 	Subject string
+	// Message is a pushed commit's subject line.
+	Message string
+	// Review is what a review said: approved, changes_requested, commented,
+	// or dismissed. Its Body is the review's summary, and Threads the
+	// conversations it started on the diff.
+	Review  string
+	Threads []Thread
 	// From and To are a rename's titles.
 	From, To string
 	// StateReason is how a close closed it.
@@ -228,12 +241,14 @@ func (e *Error) Error() string {
 var ErrNoToken = errors.New("not logged in to GitHub: run gh auth login, or set GH_TOKEN")
 
 // Issue reads one issue and everything its page shows: the issue itself, its
-// sub-issues, and the whole timeline.
+// sub-issues, and the whole timeline — and, when the number is a pull
+// request's, the pull request with its review threads, checks and diff.
 //
 // A re-read is cheap when nothing happened: the issue is read first, and when
 // GitHub says it has not been updated since a full read less than keptFor ago,
-// that read is the answer. With no token an issue read less than
-// AnonymousRefresh ago is not read again at all. full asks for a full read
+// that read is the answer — with an open pull request's checks read again,
+// since a check finishing moves nothing else. With no token an issue read less
+// than AnonymousRefresh ago is not read again at all. full asks for a full read
 // whatever was kept — someone asked to see it now — and a comment or a change
 // of state made here drops what was kept, so the next read is full anyway.
 func (c *Client) Issue(ctx context.Context, owner, name string, number int, full bool) (Issue, error) {
@@ -248,12 +263,23 @@ func (c *Client) Issue(ctx context.Context, owner, name string, number int, full
 	if ok && anonymous && c.clock().Sub(cached.at) < AnonymousRefresh {
 		return cached.issue, nil
 	}
-	base := fmt.Sprintf("/repos/%s/%s/issues/%d", url.PathEscape(owner), url.PathEscape(name), number)
+	base := fmt.Sprintf("%s/issues/%d", repoPath(owner, name), number)
 	var raw rawIssue
 	if _, err := c.get(ctx, base, &raw); err != nil {
 		return Issue{}, err
 	}
 	if ok && raw.UpdatedAt.Equal(cached.updated) {
+		if cached.issue.checksMove() {
+			// A copy: the read handed out before still points at the old one.
+			pull := *cached.issue.Pull
+			pull.Checks = c.checks(ctx, repoPath(owner, name), pull.HeadSHA)
+			// Whether it can merge moves the same way. With no token the
+			// request is spent only while GitHub has yet to say.
+			if !anonymous || pull.Mergeable == "unknown" || pull.Mergeable == "" {
+				c.mergeState(ctx, owner, name, number, &pull)
+			}
+			cached.issue.Pull = &pull
+		}
 		cached.at = c.clock()
 		c.keep(key, cached)
 		return cached.issue, nil
@@ -265,6 +291,11 @@ func (c *Client) Issue(ctx context.Context, owner, name string, number int, full
 	now := c.clock()
 	c.keep(key, cachedIssue{issue: issue, updated: raw.UpdatedAt, at: now, full: now})
 	return issue, nil
+}
+
+// repoPath is a repository's path in the API.
+func repoPath(owner, name string) string {
+	return fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
 }
 
 func (c *Client) clock() time.Time {
@@ -296,7 +327,8 @@ func (c *Client) forget(key issueKey) {
 	delete(c.read, key)
 }
 
-// readIssue is the full read: the sub-issues and every page of the timeline.
+// readIssue is the full read: the sub-issues, every page of the timeline, and
+// for a pull request the rest of its page (readPull).
 func (c *Client) readIssue(ctx context.Context, base, owner, name string, raw rawIssue) (Issue, error) {
 	issue := raw.issue()
 	issue.Repository = owner + "/" + name
@@ -321,6 +353,8 @@ func (c *Client) readIssue(ctx context.Context, base, owner, name string, raw ra
 		issue.SubIssuesDone = raw.SubIssuesSummary.Completed
 	}
 
+	// reviews is where each review is in the timeline, for its threads.
+	reviews := map[int64]int{}
 	next := base + "/timeline?per_page=100"
 	for page := 0; next != ""; page++ {
 		if page == timelinePages {
@@ -334,10 +368,18 @@ func (c *Client) readIssue(ctx context.Context, base, owner, name string, raw ra
 		}
 		for _, item := range items {
 			if event, ok := item.event(issue.Repository); ok {
+				if event.Kind == "reviewed" {
+					reviews[item.ID] = len(issue.Timeline)
+				}
 				issue.Timeline = append(issue.Timeline, event)
 			}
 		}
 		next = nextPage(link)
+	}
+	if issue.PullRequest {
+		if err := c.readPull(ctx, owner, name, &issue, reviews); err != nil {
+			return Issue{}, err
+		}
 	}
 	return issue, nil
 }
@@ -351,7 +393,7 @@ func (c *Client) Comment(ctx context.Context, owner, name string, number int, bo
 	if err != nil {
 		return err
 	}
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments", url.PathEscape(owner), url.PathEscape(name), number)
+	path := fmt.Sprintf("%s/issues/%d/comments", repoPath(owner, name), number)
 	c.forget(issueKey{owner, name, number})
 	_, err = c.do(ctx, http.MethodPost, path, payload, nil)
 	return err
@@ -372,7 +414,7 @@ func (c *Client) SetState(ctx context.Context, owner, name string, number int, s
 	if err != nil {
 		return err
 	}
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d", url.PathEscape(owner), url.PathEscape(name), number)
+	path := fmt.Sprintf("%s/issues/%d", repoPath(owner, name), number)
 	c.forget(issueKey{owner, name, number})
 	_, err = c.do(ctx, http.MethodPatch, path, payload, nil)
 	return err
@@ -598,6 +640,7 @@ func (r rawReactions) counts() Reactions {
 var ReactionOrder = []string{"+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"}
 
 type rawEvent struct {
+	ID          int64        `json:"id"`
 	Event       string       `json:"event"`
 	Actor       *rawUser     `json:"actor"`
 	User        *rawUser     `json:"user"`
@@ -620,6 +663,22 @@ type rawEvent struct {
 	Source *struct {
 		Issue *rawIssue `json:"issue"`
 	} `json:"source"`
+
+	// A pushed commit's: it has no actor and no created_at, only what the
+	// commit says of itself.
+	SHA       string      `json:"sha"`
+	Message   string      `json:"message"`
+	Author    *rawGitUser `json:"author"`
+	Committer *rawGitUser `json:"committer"`
+	// A review's.
+	State       string    `json:"state"`
+	SubmittedAt time.Time `json:"submitted_at"`
+	// A review request's.
+	Requester         *rawUser `json:"review_requester"`
+	RequestedReviewer *rawUser `json:"requested_reviewer"`
+	RequestedTeam     *struct {
+		Name string `json:"name"`
+	} `json:"requested_team"`
 }
 
 // quiet are the events the page does not draw: they are about who gets
@@ -654,8 +713,32 @@ func (r rawEvent) event(repository string) (Event, bool) {
 		}
 	case "locked":
 		event.Subject = r.LockReason
-	case "referenced", "closed":
+	case "referenced", "closed", "merged":
 		event.Subject = shortCommit(r.CommitID)
+	case "committed":
+		event.Subject, event.Message = shortCommit(r.SHA), firstLine(r.Message)
+		if r.Author != nil {
+			event.Actor = r.Author.Name
+		}
+		if r.Committer != nil {
+			event.At = r.Committer.Date
+		}
+	case "reviewed":
+		event.Review = strings.ToLower(r.State)
+		if event.Review == "pending" {
+			// A review still being written, which only its writer is shown.
+			return Event{}, false
+		}
+		event.Actor, event.At = r.User.login(), r.SubmittedAt
+		event.Body, event.URL = r.Body, r.HTMLURL
+	case "review_requested", "review_request_removed":
+		if r.Requester != nil {
+			event.Actor = r.Requester.Login
+		}
+		event.Subject = r.RequestedReviewer.login()
+		if event.Subject == "" && r.RequestedTeam != nil {
+			event.Subject = r.RequestedTeam.Name
+		}
 	case "cross-referenced":
 		if r.Source == nil || r.Source.Issue == nil {
 			return Event{}, false

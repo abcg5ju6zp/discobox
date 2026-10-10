@@ -224,6 +224,10 @@ type fakeSource struct {
 	// state/reason", and stateErr fails one.
 	states   []string
 	stateErr error
+	// merges records every merge, as "repository#number: method@sha", and
+	// mergeErr fails one.
+	merges   []string
+	mergeErr error
 
 	// forward is what the workspace's port forward reports, and forwardErr
 	// fails opening one. forwards counts the ones opened and closed, so a test
@@ -903,6 +907,23 @@ func (f *fakeSource) CommentOnIssue(_ context.Context, repository string, number
 		return f.commentErr
 	}
 	f.comments = append(f.comments, fmt.Sprintf("%s#%d: %s", repository, number, body))
+	return nil
+}
+
+func (f *fakeSource) MergePullRequest(_ context.Context, repository string, number int, method, sha string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mergeErr != nil {
+		return f.mergeErr
+	}
+	f.merges = append(f.merges, fmt.Sprintf("%s#%d: %s@%s", repository, number, method, sha))
+	key := fmt.Sprintf("%s#%d", repository, number)
+	if issue, ok := f.issues[key]; ok && issue.Pull != nil {
+		pull := *issue.Pull
+		pull.Merged, pull.MergedBy, pull.MergedAt = true, "me", time.Now()
+		issue.State, issue.Pull = "closed", &pull
+		f.issues[key] = issue
+	}
 	return nil
 }
 

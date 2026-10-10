@@ -1025,6 +1025,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case issueStateMsg:
 		return m.issueStateSet(msg)
 
+	case pullMergedMsg:
+		return m.pullMerged(msg)
+
+	case pullSettleMsg:
+		return m.pullSettled(msg)
+
 	case auditEndedMsg:
 		return m.auditEnded(msg)
 
@@ -3772,10 +3778,13 @@ func (m *Model) paneHints() []hint {
 	// nothing points at is a picker nobody opens.
 	hints = append(hints, pressing(leader+" "+toolsKey+" tools", leader, toolsKey))
 	hints = append(hints, pressing(leader+" "+auditKey+" audit", leader, auditKey))
-	// The issue is offered where there is one to show: an issue= tag on a
-	// GitHub repository.
-	if _, ok := m.currentBox().issueNumber(); ok {
+	// The issue and the pull request are offered where there is one to show:
+	// an issue= or a pr= tag on a GitHub repository.
+	if _, ok := m.currentBox().workNumber(false); ok {
 		hints = append(hints, pressing(leader+" "+issueKey+" issue", leader, issueKey))
+	}
+	if _, ok := m.currentBox().workNumber(true); ok {
+		hints = append(hints, pressing(leader+" "+pullKey+" PR", leader, pullKey))
 	}
 	if len(m.panes()) > 1 {
 		hints = append(hints, says(leader+" ←/→ pane"))
@@ -4045,6 +4054,12 @@ func (m *Model) helpText() string {
 		"                   posts it, Alt-E edits it in $EDITOR), x closes or",
 		"                   reopens the issue, o opens the page, r reads it",
 		"                   again, q closes the tab",
+		"    " + leader + " " + pullKey + "       the pull request it is tagged pr=N with, the same",
+		"                   way and with the same keys — and its reviewers,",
+		"                   checks and reviews, and whether it is ready to",
+		"                   merge. m merges it, asking which way: squash, a",
+		"                   merge commit, or rebase. f turns to the files",
+		"                   changed and back; there, n and p step file to file",
 		"    " + leader + " " + credentialsLeaderKey + "       answer the credential request in the banner",
 		"    " + leader + " " + bannerDismissKey + "       dismiss the banner, like its ✕; it comes back",
 		"                   when what it says happens again",

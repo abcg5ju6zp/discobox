@@ -148,7 +148,7 @@ type pane struct {
 	// Service.runKey.
 	serviceRun string
 
-	// issue is the GitHub issue this pane draws in place of a terminal, nil
+	// issue is the GitHub issue or pull request this pane draws in place of a terminal, nil
 	// for every pane that draws a terminal. Its term is never attached; it is
 	// there for the key map. See issue.go.
 	issue *issuePane
@@ -607,8 +607,9 @@ func (m *Model) paneOptions(kind paneKind, readOnly bool) []termpane.Option {
 	opts = append(opts, termpane.WithPrefixBinding(toolsKey, openToolsMsg{}))
 	// The audit screen, over the workspace like a tool. See audit.go.
 	opts = append(opts, termpane.WithPrefixBinding(auditKey, openAuditMsg{}))
-	// The issue, as a tab of its own. See issue.go.
+	// The issue and the pull request, each as a tab of its own. See issue.go.
 	opts = append(opts, termpane.WithPrefixBinding(issueKey, openIssueMsg{}))
+	opts = append(opts, termpane.WithPrefixBinding(pullKey, openIssueMsg{pull: true}))
 	// The services have the same alphabet one keystroke further in: S1 through
 	// S9 are their own tabs, and S0 is the menu that reaches the ones with no
 	// tab at all. See paneServicesKey.
@@ -895,7 +896,7 @@ func (m *Model) updatePaneMsg(tagged paneMsg) tea.Cmd {
 		return m.openAudit()
 
 	case openIssueMsg:
-		return m.toggleIssue()
+		return m.toggleIssue(msg.pull)
 
 	case openCredentialsMsg:
 		return m.openCredentialDialog(m.paneBox.ID)
@@ -1818,8 +1819,10 @@ type headerSpan struct {
 	label string
 	url   string
 	// issue is the number a plain click opens as the workspace's issue tab,
-	// rather than the URL in a browser; zero for every other link.
+	// rather than the URL in a browser; zero for every other link. pull is
+	// whether the number is a pull request's.
 	issue int
+	pull  bool
 }
 
 // paneHeaderField is one field of the workspace banner: what it draws, whether
@@ -1909,6 +1912,9 @@ func (f paneHeaderFields) render(m *Model, left, right string, w int) string {
 				what := urlHit(span.url)
 				if span.issue > 0 {
 					what = hit{kind: hitIssue, idx: span.issue, url: span.url}
+					if span.pull {
+						what.kind = hitPull
+					}
 				}
 				m.zones.mark(what, x, 0, width, 1)
 				if m.zones.hovering(x, 0, width, 1) {
