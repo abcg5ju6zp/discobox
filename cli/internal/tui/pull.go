@@ -88,9 +88,10 @@ func pullChanges(st *styles, pull PullRequest) string {
 		plural(pull.Commits, "commit", "commits") + st.dimText.Render(" · ") + plusMinus(st, pull.Additions, pull.Deletions)
 }
 
-// plusMinus is a count of lines added and removed, in the diff's colors.
+// plusMinus is a count of lines added and removed, in the colors the header's
+// own diffstat is drawn in.
 func plusMinus(st *styles, additions, deletions int) string {
-	return st.statusOK.Render("+"+itoa(additions)) + " " + st.statusER.Render("−"+itoa(deletions))
+	return st.add.Render("+"+itoa(additions)) + " " + st.del.Render("−"+itoa(deletions))
 }
 
 // checkRows is the head commit's checks: how they stand, in one row, and then
@@ -413,9 +414,9 @@ func diffPart(st *styles, line, text string) string {
 	case strings.HasPrefix(line, "@@"):
 		return st.info.Render(text)
 	case strings.HasPrefix(line, "+"):
-		return st.statusOK.Render(text)
+		return st.add.Render(text)
 	case strings.HasPrefix(line, "-"):
-		return st.statusER.Render(text)
+		return st.del.Render(text)
 	case strings.HasPrefix(line, `\`):
 		// "\ No newline at end of file"
 		return st.dimText.Render(text)
@@ -427,9 +428,9 @@ func diffPart(st *styles, line, text string) string {
 func fileGlyph(st *styles, status string) string {
 	switch status {
 	case "added":
-		return st.statusOK.Render("A")
+		return st.add.Render("A")
 	case "removed":
-		return st.statusER.Render("D")
+		return st.del.Render("D")
 	case "renamed":
 		return st.info.Render("R")
 	case "copied":
