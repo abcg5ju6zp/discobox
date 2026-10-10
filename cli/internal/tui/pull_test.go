@@ -106,10 +106,10 @@ func TestClickingTheHeaderPullRequestOpensItAsATab(t *testing.T) {
 	frame := plainFrame(m)
 	for _, want := range []string{
 		"● Open", "alice wants to merge 2 commits into main from", "fix-reaper · 2d ago · 1 comment",
-		"Reviewers", "± bob requested changes", "○ erin review requested",
+		"Reviewers", "● bob requested changes", "○ erin review requested",
 		"Changes", "3 files · 2 commits · +12 −3",
-		"Checks", "1 failing · 1 pending · 1 passed", "✗ lint", "◌ e2e",
-		"◌ Not ready to merge — a required review or check is",
+		"Checks", "1 failing · 1 pending · 1 passed", "● lint", "● e2e",
+		"● Not ready to merge — a required review or check is",
 		"Fixes #4.",
 		"◦ abc1234 reap only the stopped · Alice A", "◦ def5678 test it",
 		"alice requested a review from bob",
@@ -279,7 +279,7 @@ func TestThePullRequestIsClosedAndReopened(t *testing.T) {
 	// what says how it stands.
 	d.wait("the close", func() bool { return strings.Contains(hintLine(m.hints()), "reopen PR") })
 	d.key("g")
-	if !strings.Contains(plainFrame(m), "⊘ Closed") {
+	if !strings.Contains(plainFrame(m), "○ Closed") {
 		t.Errorf("the closed pull request's badge does not say so:\n%s", plainFrame(m))
 	}
 	d.key("x")
@@ -308,7 +308,7 @@ func TestAMergedPullRequestIsNotClosed(t *testing.T) {
 	ds.issues["https://github.com/acme/foo#9"] = pull
 	d, m := openPullPane(t, ds)
 	frame := plainFrame(m)
-	for _, want := range []string{"⇄ Merged", "dave merged 2 commits into main from"} {
+	for _, want := range []string{"● Merged", "dave merged 2 commits into main from"} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("the merged pull request does not say %q:\n%s", want, frame)
 		}
@@ -388,7 +388,7 @@ func TestAFailingCheckIsALinkToItsPage(t *testing.T) {
 	if frame := rawFrame(m); !strings.Contains(frame, "https://ci.example/lint") || strings.Contains(frame, "file:///etc/passwd") {
 		t.Fatalf("the checks' links are wrong: want lint's and not e2e's:\n%q", frame)
 	}
-	x, y := at(t, m, "✗ lint")
+	x, y := at(t, m, "● lint")
 	slowClock(m)
 	tap(t, m, x+2, y)
 	select {
@@ -436,9 +436,9 @@ func TestThePullRequestBadge(t *testing.T) {
 		want          string
 	}{
 		{"open", false, false, "● Open"},
-		{"open", true, false, "◌ Draft"},
-		{"closed", false, false, "⊘ Closed"},
-		{"closed", false, true, "⇄ Merged"},
+		{"open", true, false, "○ Draft"},
+		{"closed", false, false, "○ Closed"},
+		{"closed", false, true, "● Merged"},
 	} {
 		issue := Issue{State: tc.state, Pull: &PullRequest{Draft: tc.draft, Merged: tc.merged}}
 		if got := pullState(st, issue); got != tc.want {
@@ -465,7 +465,7 @@ func TestAPullRequestReadyToMergeSaysSo(t *testing.T) {
 	if !strings.Contains(frame, "● Ready to merge into main") {
 		t.Errorf("the ready pull request does not say so:\n%s", frame)
 	}
-	if got := issueTabOf(m).name(); got != "PR #9 ✓" {
+	if got := issueTabOf(m).name(); got != "PR #9 ●" {
 		t.Errorf("the tab is named %q, want the mark on it", got)
 	}
 	if !strings.Contains(hintLine(m.hints()), "m merge") {
@@ -473,7 +473,7 @@ func TestAPullRequestReadyToMergeSaysSo(t *testing.T) {
 	}
 	d.key(m.leader())
 	d.key("left")
-	if !strings.Contains(plainFrame(m), "PR #9 ✓") {
+	if !strings.Contains(plainFrame(m), "PR #9 ●") {
 		t.Errorf("the mark does not show from the terminal:\n%s", plainFrame(m))
 	}
 }
@@ -483,11 +483,11 @@ func TestTheMergeBannerSaysWhyNot(t *testing.T) {
 	t.Parallel()
 	st := newStyles(false)
 	for state, want := range map[string]string{
-		"dirty":    "✗ Not ready to merge — conflicts with main must be resolved",
-		"behind":   "◌ Not ready to merge — out of date with main",
-		"blocked":  "◌ Not ready to merge — a required review or check is missing",
-		"unstable": "◌ Not ready to merge — its checks have not passed",
-		"unknown":  "… GitHub has not said yet whether this can merge — r asks again",
+		"dirty":    "● Not ready to merge — conflicts with main must be resolved",
+		"behind":   "● Not ready to merge — out of date with main",
+		"blocked":  "● Not ready to merge — a required review or check is missing",
+		"unstable": "● Not ready to merge — its checks have not passed",
+		"unknown":  "○ GitHub has not said yet whether this can merge — r asks again",
 	} {
 		pull := testPull()
 		pull.Pull.Mergeable = state
@@ -543,7 +543,7 @@ func TestThePullRequestIsMerged(t *testing.T) {
 	}
 	d.wait("the badge", func() bool {
 		d.key("g")
-		return strings.Contains(plainFrame(m), "⇄ Merged")
+		return strings.Contains(plainFrame(m), "● Merged")
 	})
 	if got := issueTabOf(m).name(); got != "PR #9" {
 		t.Errorf("the merged tab is still named %q", got)

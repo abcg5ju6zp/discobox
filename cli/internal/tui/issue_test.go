@@ -103,7 +103,7 @@ func TestClickingTheHeaderIssueOpensItAsATab(t *testing.T) {
 		"issue #4", "● Open", "alice", "opened this issue 3d ago",
 		"Assignees", "bob", "Labels", "[bug]", "Milestone", "v1",
 		"Sub-issues", "1 of 1 done", "#5 Write a failing test",
-		"It reaps", "• one", "👍 2",
+		"It reaps", "• one", "+1 2",
 		"carol added the bug label",
 		"bob commented", "I can reproduce it.",
 		"dave mentioned this in", "#9 Reap only",
@@ -398,7 +398,7 @@ func TestEventsReadAsThePageWritesThem(t *testing.T) {
 		{IssueEvent{Kind: "closed", StateReason: "not_planned"}, "closed this as not planned"},
 		{IssueEvent{Kind: "closed", Subject: "abc1234"}, "closed this as completed in abc1234"},
 		{IssueEvent{Kind: "renamed", From: "a", To: "b"}, "changed the title from “a” to “b”"},
-		{IssueEvent{Kind: "cross-referenced", Source: &IssueRef{Repository: "acme/bar", Number: 3, Title: "x"}}, "mentioned this in ○ acme/bar#3 x"},
+		{IssueEvent{Kind: "cross-referenced", Source: &IssueRef{Repository: "acme/bar", Number: 3, Title: "x"}}, "mentioned this in ● acme/bar#3 x"},
 		{IssueEvent{Kind: "some_new_event"}, "some new event"},
 	} {
 		if got := eventText(st, tc.event, "acme/foo"); got != tc.want {
