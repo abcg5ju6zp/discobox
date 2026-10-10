@@ -876,8 +876,8 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 		for _, label := range issue.Labels {
 			chip := truncate(labelChip(st, label), room)
 			last := len(rows) - 1
-			if last >= 0 && lipgloss.Width(rows[last])+1+lipgloss.Width(chip) <= room {
-				rows[last] += " " + chip
+			if last >= 0 && lipgloss.Width(rows[last])+2+lipgloss.Width(chip) <= room {
+				rows[last] += "  " + chip
 				continue
 			}
 			rows = append(rows, chip)
@@ -1013,23 +1013,21 @@ func issueState(st *styles, issue Issue) string {
 	}
 }
 
-// labelChip is a label drawn in its own color, as the page draws it, with the
-// text light or dark for whichever reads on it.
+// labelChip is a label: a dot in the color its page draws it in, and its
+// name in the window's own text. The page paints the whole label, but nothing
+// in this window is a painted field except a title bar and the row under the
+// cursor, and half of GitHub's label colors cannot be read as text on a dark
+// terminal. Without color it is bracketed, so one label ends where the next
+// begins.
 func labelChip(st *styles, label IssueLabel) string {
-	if !st.color || len(label.Color) != 6 {
+	if !st.color {
 		return "[" + label.Name + "]"
 	}
-	r, errR := strconv.ParseUint(label.Color[0:2], 16, 8)
-	g, errG := strconv.ParseUint(label.Color[2:4], 16, 8)
-	b, errB := strconv.ParseUint(label.Color[4:6], 16, 8)
-	if errR != nil || errG != nil || errB != nil {
-		return "[" + label.Name + "]"
+	dot := st.dimText
+	if _, err := strconv.ParseUint(label.Color, 16, 32); err == nil && len(label.Color) == 6 {
+		dot = lipgloss.NewStyle().Foreground(lipgloss.Color("#" + label.Color))
 	}
-	text := lipgloss.Color("#ffffff")
-	if (299*r+587*g+114*b)/1000 > 150 {
-		text = lipgloss.Color("#000000")
-	}
-	return lipgloss.NewStyle().Background(lipgloss.Color("#" + label.Color)).Foreground(text).Render(" " + label.Name + " ")
+	return dot.Render("●") + " " + label.Name
 }
 
 // reactionGlyphs are the reactions as the page draws them, in its order.

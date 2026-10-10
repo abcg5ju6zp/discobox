@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -153,16 +154,20 @@ func pullReady(issue Issue) bool {
 // mergeBanner is the page's merge box, as one bar across the top of an open
 // pull request: whether it can merge now, in GitHub's own terms, and when it
 // cannot, the reason. It is the first thing under the title because it is the
-// question the tab is opened to answer; ready is a filled bar, so it is seen
-// without being read.
+// question the tab is opened to answer; ready is a band across the tab, so it
+// is seen without being read.
 func mergeBanner(st *styles, issue Issue, width int) string {
 	pull := issue.Pull
 	if pull == nil || issue.State != "open" {
 		return ""
 	}
 	if pullReady(issue) {
-		said := truncate(" ✓ Ready to merge into "+pull.Base+" — "+pullMergeKey+" merges it", width)
-		return st.statusOK.Bold(true).Reverse(true).Render(pad(said, width))
+		// A band the width of the tab, in the field a group's title bar is
+		// drawn on, with the three things the window's bands carry: the mark
+		// that catches the eye, the sentence, and the key that acts.
+		left := " " + st.statusOK.Bold(true).Render("● Ready to merge") + st.attentionText.Render(" into "+pull.Base)
+		right := st.key.Render(pullMergeKey) + st.attentionHint.Render(" merges it ")
+		return highlight(st, padANSI(spread(truncate(left, max(width-lipgloss.Width(right)-1, 1)), right, width), width), colInactive)
 	}
 	paint, glyph := st.statusWA, "◌"
 	var said string
