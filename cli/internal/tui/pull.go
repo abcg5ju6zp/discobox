@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -434,74 +433,143 @@ func fileGlyph(st *styles, status string) string {
 	return st.statusWA.Render("M")
 }
 
-// pullFileLines is a pull request's Files changed, at width: the files as a
-// list, and then each one's diff under its name. at is the line each file's
-// diff starts on, for stepping between them.
-func (m *Model) pullFileLines(issue Issue, width int) (lines []string, at []int) {
+// pullFileLines is a pull request's Files changed, at width: a list of the
+// files with a cursor on one, as the window draws every list — the chevron
+// and the row's field — which Enter opens the diff of. first is the line the
+// first file is on.
+func (m *Model) pullFileLines(issue Issue, cursor, width int) (lines []string, first int) {
 	st := m.st
 	pull := issue.Pull
 	head := st.dialogTitle.Render("Files changed") + " " + st.dimText.Render("#"+itoa(issue.Number)+" · "+plural(pull.ChangedFiles, "file", "files")+" · ") +
 		plusMinus(st, pull.Additions, pull.Deletions)
 	out := append(wrapLines(head, width), "")
+	first = len(out)
 
-	for _, file := range pull.Files {
-		counts := fmt.Sprintf("+%d −%d", file.Additions, file.Deletions)
-		room := max(width-2-1-len([]rune(counts)), 1)
-		out = append(out, fileGlyph(st, file.Status)+" "+pad(truncateMiddle(file.Path, room), room)+" "+plusMinus(st, file.Additions, file.Deletions))
+	for i, file := range pull.Files {
+		counts := plusMinus(st, file.Additions, file.Deletions)
+		room := max(width-2-2-1-lipgloss.Width(counts), 1)
+		row := fileGlyph(st, file.Status) + " " + pad(truncateMiddle(fileName(file), room), room) + " " + counts
+		if i == cursor {
+			out = append(out, highlight(st, padANSI(st.key.Render("❯")+" "+row, width), colHighlightBG))
+			continue
+		}
+		out = append(out, "  "+row)
 	}
 	if pull.FilesTruncated {
 		more := plural(pull.ChangedFiles-len(pull.Files), "more file", "more files")
 		out = append(out, st.statusWA.Render(truncate(more+" — o opens them on GitHub", width)))
 	}
-
-	for _, file := range pull.Files {
-		name := file.Path
-		if file.Previous != "" && file.Previous != file.Path {
-			name = file.Previous + " → " + file.Path
-		}
-		counts := plusMinus(st, file.Additions, file.Deletions)
-		name = truncateMiddle(name, max(width-2-2-1-lipgloss.Width(counts), 1))
-		bar := groupBar(st, fileGlyph(st, file.Status)+" "+st.attentionText.Render(name), counts, width)
-		out = append(out, bar...)
-		// The row a step between files lands on is the bar, not the blank
-		// above it.
-		at = append(at, len(out)-1)
-		if file.Patch == "" {
-			out = append(out, st.dimText.Render(truncate("no diff to show — a binary file, a rename, or a change too large", width)))
-			continue
-		}
-		for _, line := range strings.Split(strings.TrimRight(file.Patch, "\n"), "\n") {
-			// A long line runs on rather than being cut: a diff is read to
-			// its end, and the color says which line the rest belongs to.
-			for _, piece := range strings.Split(ansi.Hardwrap(untab(line), width, true), "\n") {
-				out = append(out, diffPart(st, line, piece))
-			}
-		}
+	if len(pull.Files) == 0 {
+		out = append(out, st.dimText.Render("no files changed"))
 	}
-	return out, at
+	return out, first
 }
 
-// toFile steps the files changed to the next file's diff, or the one before:
-// the page is one long diff, and a file is the unit it is read in.
-func (v *issuePane) toFile(delta int) {
-	if !v.files {
+// fileName is a changed file as a row names it: where it was, for one that
+// moved, and where it is.
+func fileName(file PullFile) string {
+	if file.Previous != "" && file.Previous != file.Path {
+		return file.Previous + " → " + file.Path
+	}
+	return file.Path
+}
+
+// pullDiffLines is one file's diff, at width, under a bar with its name, its
+// place among the files, and its count of lines.
+func (m *Model) pullDiffLines(issue Issue, i, width int) []string {
+	st := m.st
+	files := issue.Pull.Files
+	if i < 0 || i >= len(files) {
+		return []string{st.dimText.Render("no file to show")}
+	}
+	file := files[i]
+	counts := st.attentionHint.Render(itoa(i+1)+" of "+itoa(len(files))+"  ") + plusMinus(st, file.Additions, file.Deletions)
+	// The bar comes with a blank row above it, for a page of them; this is
+	// the top of a page.
+	out := groupBar(st, fileGlyph(st, file.Status)+" "+st.attentionText.Render(fileName(file)), counts, width)[1:]
+	if file.Patch == "" {
+		return append(out, st.dimText.Render(truncate("no diff to show — a binary file, a rename, or a change too large", width)))
+	}
+	for _, line := range strings.Split(strings.TrimRight(file.Patch, "\n"), "\n") {
+		// A long line runs on rather than being cut: a diff is read to its
+		// end, and the color says which line the rest belongs to.
+		for _, piece := range strings.Split(ansi.Hardwrap(untab(line), width, true), "\n") {
+			out = append(out, diffPart(st, line, piece))
+		}
+	}
+	return out
+}
+
+// filesKey is a key on the files changed, and reports whether it was one of
+// theirs. On the list the arrows move the cursor and Enter opens the diff of
+// the file under it; in a diff they scroll, as on any page, n and p turn to
+// the next file's and the one before, and Esc goes back to the list.
+func (v *issuePane) filesKey(key string) bool {
+	if v.issue == nil || v.issue.Pull == nil {
+		return false
+	}
+	switch {
+	case !v.fileOpen && (key == "up" || key == "k" || key == "p"):
+		v.moveFile(-1)
+	case !v.fileOpen && (key == "down" || key == "j" || key == "n"):
+		v.moveFile(1)
+	case !v.fileOpen && key == "enter":
+		v.openFile(v.fileCursor)
+	case v.fileOpen && key == "n":
+		v.openFile(v.fileCursor + 1)
+	case v.fileOpen && key == "p":
+		v.openFile(v.fileCursor - 1)
+	case v.fileOpen && (key == "esc" || key == "backspace"):
+		v.fileOpen = false
+	default:
+		return false
+	}
+	return true
+}
+
+// moveFile moves the list's cursor, held between the first file and the last.
+func (v *issuePane) moveFile(delta int) {
+	v.fileCursor = min(max(v.fileCursor+delta, 0), max(len(v.issue.Pull.Files)-1, 0))
+	// The cursor is drawn into the lines.
+	v.changes.lines = nil
+}
+
+// openFile turns to one file's diff, from its top. Past either end of the
+// files it stays where it is.
+func (v *issuePane) openFile(i int) {
+	if i < 0 || i >= len(v.issue.Pull.Files) {
 		return
 	}
-	offset := v.changes.offset
-	if delta > 0 {
-		for _, line := range v.fileAt {
-			if line > offset {
-				v.changes.offset = line
-				break
-			}
-		}
-	} else {
-		for i := len(v.fileAt) - 1; i >= 0; i-- {
-			if v.fileAt[i] < offset {
-				v.changes.offset = v.fileAt[i]
-				break
-			}
+	v.fileCursor, v.fileOpen = i, true
+	v.changes.lines, v.diff = nil, issuePage{}
+}
+
+// pressFile is a click on a row of the files changed: it points at the file,
+// and a second click opens it, as on every list in the window.
+func (m *Model) pressFile(i, clicks int) tea.Cmd {
+	p := m.focusedPane()
+	if p == nil || p.issue == nil || !p.issue.files || p.issue.fileOpen || p.issue.issue == nil || p.issue.issue.Pull == nil {
+		return nil
+	}
+	v := p.issue
+	v.moveFile(i - v.fileCursor)
+	if clicks > 1 {
+		v.openFile(v.fileCursor)
+	}
+	return nil
+}
+
+// fileRows are the rows of the tab the list's files are drawn on, by file, of
+// the body rows on screen: where the pointer finds them.
+func (v *issuePane) fileRows(body int) map[int]int {
+	if !v.files || v.fileOpen || v.issue == nil || v.issue.Pull == nil {
+		return nil
+	}
+	rows := map[int]int{}
+	for i := range v.issue.Pull.Files {
+		if row := v.fileTop + i; row >= 0 && row < body {
+			rows[row] = i
 		}
 	}
-	v.scroll(0)
+	return rows
 }

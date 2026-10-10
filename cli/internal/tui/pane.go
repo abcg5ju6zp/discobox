@@ -2178,6 +2178,10 @@ func (m *Model) viewPaneBox(p *pane, top string, edge lipgloss.Style, width int)
 		// The links the issue draws are controls (REVIEW.md), marked from the
 		// lines as drawn, at the origin the grid is drawn at.
 		x, y := m.paneOrigin(p)
+		// The files changed are a list, and a row of one is a control too.
+		for row, file := range p.issue.fileRows(len(lines)) {
+			m.zones.mark(hit{kind: hitPullFile, idx: file}, x, y+row, grid, 1)
+		}
 		for row, line := range lines {
 			links := lineLinks(line)
 			// From the right, so lighting one leaves the byte offsets of

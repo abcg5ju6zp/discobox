@@ -606,16 +606,19 @@ pane, not a second viewer, and everything below holds for it. What it adds:
   one that has not passed, a link to its own page. In the timeline a push is its commits, a review is its verdict,
   its summary, and each thread it started on the diff under the lines it is
   about, replies with it.
-- **Files changed is a second page of the tab** (`f`, and back): the files as
-  a list, then each one's diff, colored by its first column, long lines run on
-  rather than cut. `n` and `p` step a file at a time. Each page keeps its own
-  place (`issuePage`); the keys line offers the diff's keys there and nothing
-  that answers.
+- **Files changed is a second page of the tab** (`f`, and back), and a list
+  like every other in the window: a cursor the arrows move, `Enter` (or a
+  second click on the row, `hitPullFile`) opening the diff of the file under
+  it, `Esc` back to the list. A diff is one file's, colored by its first
+  column in the header diffstat's colors, long lines run on rather than cut;
+  `n` and `p` turn to the next file's and the one before. Each page keeps its
+  own place (`issuePage`); the keys line offers the list's or the diff's keys
+  and nothing that answers.
 - **Whether it can merge is the first thing under the title** (`mergeBanner`),
-  in GitHub's own terms (`mergeable_state`): a filled bar when it is ready —
+  in GitHub's own terms (`mergeable_state`): a band across the tab when it is ready —
   open, not a draft, and clean, which is no conflicts, checks passed and every
   required review in — and otherwise the one reason it is not. Ready also marks
-  the tab (`PR #9 ✓`), so it shows from whichever pane has the keys. GitHub
+  the tab (`PR #9 ●`), so it shows from whichever pane has the keys. GitHub
   works the state out when first asked, so the client's full read asks again
   before it answers and a read that still came back unknown is asked again in
   a moment, a few times (`pullSettle`); past that the bar says GitHub has not
@@ -633,6 +636,16 @@ pane, not a second viewer, and everything below holds for it. What it adds:
   it until the first read; `issue=9` on a pull request is then a pull request,
   title and page.
 
+- **It looks like the window, not like the page.** The page is the model for
+  what is shown, never for how. Markdown is rendered in the window's palette
+  (`markdownStyle`), not the renderer's: the terminal's own text, headings in
+  the accent, code in the command green with no field behind it. A title is
+  the accent and bold; a comment, a review and a file's diff are headed by the
+  list's group bar (`groupBar`); what happened between comments is a table as
+  the audit screen's is, time first (`eventRows`); a state is the list's dot,
+  filled and colored or hollow and dim, beside its word; a label is a dot in
+  its color and its name; a reaction is its name and a count. Nothing is a
+  painted field but a bar and the row under a cursor.
 - **A tab, not a screen.** It is a pane in the shells column (`pane.issue`),
   so it is everything a tab is for free: a number, a place in `leader ←/→`,
   the column's `[+]` and `[x]`, `leader X`, and the whole key map behind the

@@ -174,8 +174,10 @@ func TestTheLeaderSaysWhenThereIsNoPullRequest(t *testing.T) {
 	}
 }
 
-// f turns the tab to the files changed and back, each page keeping its place;
-// n and p step through the diff a file at a time.
+// f turns the tab to the files changed and back, each page keeping its place.
+// The files are a list like any other in the window: the arrows move its
+// cursor, Enter opens the diff of the file under it, n and p turn to the next
+// file's and the one before, and Esc goes back to the list.
 func TestThePullRequestShowsItsFilesChanged(t *testing.T) {
 	t.Parallel()
 	ds := pullSource()
@@ -185,43 +187,62 @@ func TestThePullRequestShowsItsFilesChanged(t *testing.T) {
 	read := v.conversation.offset
 
 	d.key("f")
-	frame := plainFrame(m)
+	frame := tightFrame(m)
 	for _, want := range []string{
 		"Files changed #9 · 3 files · +12 −3",
-		"M reaper/reaper.go", "A reaper/reaper_test.go", "+10 −3",
-		"@@ -1,3 +1,4 @@", "-    all()", "+    stopped()",
+		"❯ M reaper/reaper.go +10 −3", "A reaper/reaper_test.go +2 −0", "A logo.png",
 	} {
 		if !strings.Contains(frame, want) {
-			t.Errorf("the files changed do not say %q:\n%s", want, frame)
+			t.Errorf("the files changed do not say %q:\n%s", want, plainFrame(m))
 		}
 	}
-	if !v.files || v.changes.offset != 0 {
-		t.Fatalf("f: files %v at %d, want the files changed from their top", v.files, v.changes.offset)
+	if strings.Contains(frame, "@@") {
+		t.Errorf("the list of files shows a diff nobody opened:\n%s", plainFrame(m))
 	}
 	hints := hintLine(m.hints())
-	if !strings.Contains(hints, "next file") || strings.Contains(hints, "close PR") {
-		t.Errorf("the files' keys line is %q, want the diff's keys and no close", hints)
+	if !strings.Contains(hints, "Enter diff") || strings.Contains(hints, "close PR") {
+		t.Errorf("the list's keys line is %q, want the list's keys and no close", hints)
 	}
 	if got := v.pageURL(); got != "https://github.com/acme/foo/pull/9/files" {
 		t.Errorf("o would open %q, want the files changed", got)
 	}
 
-	if len(v.fileAt) != 3 {
-		t.Fatalf("%d files to step between, want 3", len(v.fileAt))
+	d.key("down")
+	if v.fileCursor != 1 || !strings.Contains(tightFrame(m), "❯ A reaper/reaper_test.go") {
+		t.Fatalf("↓ left the cursor on file %d:\n%s", v.fileCursor, plainFrame(m))
 	}
-	// Tall enough to scroll in, whatever the window.
-	v.changes.lines = append(v.changes.lines, make([]string, 200)...)
-	d.key("n")
-	if v.changes.offset != v.fileAt[0] {
-		t.Errorf("n went to line %d, want the first file's diff at %d", v.changes.offset, v.fileAt[0])
+	d.key("up")
+	d.key("up")
+	if v.fileCursor != 0 {
+		t.Errorf("↑ past the first file left the cursor on %d", v.fileCursor)
+	}
+
+	d.key("enter")
+	frame = tightFrame(m)
+	for _, want := range []string{"M reaper/reaper.go 1 of 3 +10 −3", "@@ -1,3 +1,4 @@", "- all()", "+ stopped()"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("the file's diff does not say %q:\n%s", want, plainFrame(m))
+		}
+	}
+	if strings.Contains(frame, "package reaper") {
+		t.Errorf("one file's diff shows another's:\n%s", plainFrame(m))
+	}
+	if hints := hintLine(m.hints()); !strings.Contains(hints, "next file") || !strings.Contains(hints, "Esc files") {
+		t.Errorf("the diff's keys line is %q", hints)
 	}
 	d.key("n")
-	if v.changes.offset != v.fileAt[1] {
-		t.Errorf("n again went to line %d, want the second file's diff at %d", v.changes.offset, v.fileAt[1])
+	if v.fileCursor != 1 || !strings.Contains(tightFrame(m), "+package reaper") {
+		t.Errorf("n did not turn to the second file's diff:\n%s", plainFrame(m))
+	}
+	d.key("n")
+	d.key("n")
+	if v.fileCursor != 2 || !strings.Contains(plainFrame(m), "no diff to show") {
+		t.Errorf("n past the last file: on %d:\n%s", v.fileCursor, plainFrame(m))
 	}
 	d.key("p")
-	if v.changes.offset != v.fileAt[0] {
-		t.Errorf("p went to line %d, want back at the first file's diff at %d", v.changes.offset, v.fileAt[0])
+	d.key("esc")
+	if v.fileOpen || !strings.Contains(tightFrame(m), "❯ A reaper/reaper_test.go") {
+		t.Errorf("Esc did not go back to the list with the cursor on the file that was open:\n%s", plainFrame(m))
 	}
 
 	d.key("f")
@@ -230,25 +251,40 @@ func TestThePullRequestShowsItsFilesChanged(t *testing.T) {
 	}
 }
 
-// A file GitHub sent no diff for says so, rather than showing nothing under
-// its name.
+// A click on a file points at it, and a second opens its diff.
+func TestClickingAFileOpensItsDiff(t *testing.T) {
+	t.Parallel()
+	ds := pullSource()
+	d, m := openPullPane(t, ds)
+	v := issueTabOf(m).issue
+	d.key("f")
+	// Two presses on the one clock, so the second is the first's double.
+	now := time.Now()
+	m.now = func() time.Time { return now }
+	x, y := at(t, m, "reaper/reaper_test.go")
+	tap(t, m, x, y)
+	if v.fileCursor != 1 || v.fileOpen {
+		t.Fatalf("a click: cursor on %d, open %v; want it on the file and the list still up", v.fileCursor, v.fileOpen)
+	}
+	tap(t, m, x, y)
+	if !v.fileOpen || !strings.Contains(plainFrame(m), "+package reaper") {
+		t.Errorf("a second click did not open the file's diff:\n%s", plainFrame(m))
+	}
+}
+
+// A file GitHub sent no diff for says so, and a long line of a diff runs on
+// rather than being cut.
 func TestAFileWithNoDiffSaysSo(t *testing.T) {
 	t.Parallel()
 	m := &Model{st: newStyles(false)}
-	lines, at := m.pullFileLines(testPull(), 80)
-	if len(at) != 3 {
-		t.Fatalf("%d files, want 3", len(at))
-	}
-	last := ansi.Strip(strings.Join(lines[at[2]:], "\n"))
+	last := ansi.Strip(strings.Join(m.pullDiffLines(testPull(), 2, 80), "\n"))
 	if !strings.Contains(last, "A logo.png") || !strings.Contains(last, "no diff to show") {
 		t.Errorf("the file with no patch reads:\n%s", last)
 	}
-	// A line longer than the tab runs on, and none is wider than it.
 	pull := testPull()
 	pull.Pull.Files[0].Patch = "+" + strings.Repeat("x", 200)
-	lines, _ = m.pullFileLines(pull, 40)
 	var long int
-	for _, line := range lines {
+	for _, line := range m.pullDiffLines(pull, 0, 40) {
 		if w := ansi.StringWidth(line); w > 40 {
 			t.Errorf("a line of the diff is %d wide in a tab of 40: %q", w, line)
 		}
@@ -258,6 +294,11 @@ func TestAFileWithNoDiffSaysSo(t *testing.T) {
 	}
 	if long < 5 {
 		t.Errorf("the long line was drawn on %d rows, want it wrapped to its end", long)
+	}
+	for _, line := range func() []string { lines, _ := m.pullFileLines(testPull(), 0, 30); return lines }() {
+		if w := ansi.StringWidth(line); w > 30 {
+			t.Errorf("a row of the files is %d wide in a tab of 30: %q", w, line)
+		}
 	}
 }
 
