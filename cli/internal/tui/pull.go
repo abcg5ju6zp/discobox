@@ -302,12 +302,6 @@ func (m *Model) pullMerged(msg pullMergedMsg) tea.Cmd {
 	return tea.Batch(m.loadIssue(p, true), status("merged #%d (%s)", v.number, msg.method))
 }
 
-// commitLine is one pushed commit, as the page lists them between the
-// comments.
-func commitLine(st *styles, e IssueEvent, width int, now time.Time) string {
-	return truncate(st.dimText.Render("◦ "+e.Subject)+" "+e.Message+st.dimText.Render(" · "+e.Actor+" · "+ago(e.At, now)), width)
-}
-
 // pullEventText is eventText for a pull request's timeline: the events only a
 // pull request has, and the ones it words differently.
 func pullEventText(st *styles, e IssueEvent, issue Issue) string {
