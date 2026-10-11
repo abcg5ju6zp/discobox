@@ -1,6 +1,6 @@
 # 26-10-11-657 — A stopped discobox is read from what it last posted
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-10-11
 - **Relates to**: [ADR 0030](0030-pool-agent-polls-and-pushes-sandbox-agent-status.md),
   the channel this extends, and whose §3 it supersedes in part;
