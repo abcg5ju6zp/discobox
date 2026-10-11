@@ -1,6 +1,7 @@
 # 0137 — A terminal can be read, typed into, and waited on without attaching
 
-- **Status**: Accepted
+- **Status**: Accepted (§2's screen served only while the discobox runs
+  superseded by [ADR 26-10-11-657](26-10-11-657-a-stopped-discobox-is-read-from-what-it-last-posted.md) §4)
 - **Date**: 2026-09-15
 - **Relates to**: [ADR 0038](0038-terminal-identity-is-the-exec-id-terminals-revive-in-place.md),
   a terminal's identity; [ADR 0108](0108-a-sandbox-stops-itself-when-its-terminals-go-quiet.md),
