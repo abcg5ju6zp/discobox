@@ -17,9 +17,12 @@ touches before you read the diff:
 - **Sandbox → pool and host.** The sandbox agent runs as root inside the box;
   the pool agent runs outside it. `sandbox-agent/REVIEW.md`,
   `pool-agent/REVIEW.md`, `server/providers/REVIEW.md`.
-- **Sandbox → the network.** All egress goes through the pool proxy, which
-  holds the secrets, swaps sentinels for them, and records what was sent.
-  `proxy/REVIEW.md`.
+- **Sandbox → the network.** Egress goes through the pool proxy, which holds
+  the secrets, swaps sentinels for them, and records what was sent. The one
+  thing the sandbox's bridge connects directly is an address in the sandbox's
+  own subnets, which the pool cannot reach (`proxy/DESIGN.md`); a change that
+  widens what goes around the proxy goes around its policy, its secret
+  swapping and its audit trail. `proxy/REVIEW.md`.
 - **Anyone → the control plane.** Authentication, authorization, and the tokens
   sandboxes and pools hold. `server/internal/auth/REVIEW.md`,
   `server/internal/auth/sandbox/REVIEW.md`.
