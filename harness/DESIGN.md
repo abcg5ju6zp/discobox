@@ -209,6 +209,16 @@ launchers, and configure scripts.
   `DISABLE_AUTOUPDATER` in claude-code's env layer, `check_for_update_on_startup`
   in codex's system config, `OPENCODE_DISABLE_AUTOUPDATE` in opencode's env
   layer, `COPILOT_AUTO_UPDATE=false` in copilot's. `discobox-harness-upgrade` is the by-hand "newest, now".
+- An image says what the discobox terminal can do when its agent will not
+  infer it. An exec the console opens is given `TERM=xterm-256color` and
+  nothing that says its terminal takes OSC 8 hyperlinks, which Claude Code
+  asks for before it writes one, so claude-code's env layer sets `FORCE_HYPERLINK=1`
+  and its markdown links are written as links, which `termpane` draws. The env
+  layer reaches every exec in a claude-code discobox, and what `claude` runs
+  from them: anything else following the `supports-hyperlinks` convention reads
+  the variable too, ahead of asking whether it writes to a terminal, and may
+  put OSC 8 into a pipe. That cost is kept to the one image whose agent needs
+  the hint, rather than made every exec's default.
 - Every harness image that runs a model provides
   **`/usr/local/bin/discobox-prompt`**, a one-shot prompting interface a
   process in the discobox asks for a model through

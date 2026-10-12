@@ -123,6 +123,33 @@ func TestClaudeStorageIsEnvironmental(t *testing.T) {
 	}
 }
 
+// A discobox's terminal draws OSC 8 links (termpane keeps them), and the
+// console's exec is given TERM=xterm-256color and nothing that says so. Claude
+// Code does not read that as a terminal that takes hyperlinks, so it prints a
+// markdown link as plain text. FORCE_HYPERLINK is the variable it reads first.
+// It is the image's env rather than the launcher's, so a `claude` typed into a
+// shell links too.
+func TestImageSaysTheTerminalTakesHyperlinks(t *testing.T) {
+	raw, err := os.ReadFile("image.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var image harness.ImageMetadata
+	if err := json.Unmarshal(raw, &image); err != nil {
+		t.Fatal(err)
+	}
+	if got := image.Env["FORCE_HYPERLINK"]; got != "1" {
+		t.Errorf("image env FORCE_HYPERLINK = %q, want \"1\": Claude Code does not write OSC 8 links for TERM alone", got)
+	}
+	launcher, err := os.ReadFile("launch.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(launcher), "FORCE_HYPERLINK") {
+		t.Error("launch.sh sets FORCE_HYPERLINK, which a plain `claude` would not get")
+	}
+}
+
 func TestDefinitionConfigure(t *testing.T) {
 	def := Driver{}.Definition()
 	if def.Configure == nil {
