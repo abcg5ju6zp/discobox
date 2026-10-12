@@ -3111,6 +3111,40 @@ func (s *OptSandboxAgentCloneProgress) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes SandboxAgentInventoryScreens as json.
+func (o OptSandboxAgentInventoryScreens) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	o.Value.Encode(e)
+}
+
+// Decode decodes SandboxAgentInventoryScreens from json.
+func (o *OptSandboxAgentInventoryScreens) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptSandboxAgentInventoryScreens to nil")
+	}
+	o.Set = true
+	o.Value = make(SandboxAgentInventoryScreens)
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptSandboxAgentInventoryScreens) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptSandboxAgentInventoryScreens) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes SandboxAgentResourceUsage as json.
 func (o OptSandboxAgentResourceUsage) Encode(e *jx.Encoder) {
 	if !o.Set {
@@ -4524,6 +4558,291 @@ func (s *SandboxAgentGitSourceStatus) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *SandboxAgentGitSourceStatus) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *SandboxAgentInventory) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *SandboxAgentInventory) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("digest")
+		e.Str(s.Digest)
+	}
+	{
+		if s.Execs != nil {
+			e.FieldStart("execs")
+			e.ArrStart()
+			for _, elem := range s.Execs {
+				elem.Encode(e)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		e.FieldStart("observedAt")
+		json.EncodeDateTime(e, s.ObservedAt)
+	}
+	{
+		if s.Screens.Set {
+			e.FieldStart("screens")
+			s.Screens.Encode(e)
+		}
+	}
+	{
+		if s.Services != nil {
+			e.FieldStart("services")
+			e.ArrStart()
+			for _, elem := range s.Services {
+				elem.Encode(e)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.Tools != nil {
+			e.FieldStart("tools")
+			e.ArrStart()
+			for _, elem := range s.Tools {
+				elem.Encode(e)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.Unchanged.Set {
+			e.FieldStart("unchanged")
+			s.Unchanged.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfSandboxAgentInventory = [7]string{
+	0: "digest",
+	1: "execs",
+	2: "observedAt",
+	3: "screens",
+	4: "services",
+	5: "tools",
+	6: "unchanged",
+}
+
+// Decode decodes SandboxAgentInventory from json.
+func (s *SandboxAgentInventory) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode SandboxAgentInventory to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "digest":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := d.Str()
+				s.Digest = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"digest\"")
+			}
+		case "execs":
+			if err := func() error {
+				s.Execs = make([]SandboxExec, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem SandboxExec
+					if err := elem.Decode(d); err != nil {
+						return err
+					}
+					s.Execs = append(s.Execs, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"execs\"")
+			}
+		case "observedAt":
+			requiredBitSet[0] |= 1 << 2
+			if err := func() error {
+				v, err := json.DecodeDateTime(d)
+				s.ObservedAt = v
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"observedAt\"")
+			}
+		case "screens":
+			if err := func() error {
+				s.Screens.Reset()
+				if err := s.Screens.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"screens\"")
+			}
+		case "services":
+			if err := func() error {
+				s.Services = make([]SandboxService, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem SandboxService
+					if err := elem.Decode(d); err != nil {
+						return err
+					}
+					s.Services = append(s.Services, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"services\"")
+			}
+		case "tools":
+			if err := func() error {
+				s.Tools = make([]SandboxTool, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem SandboxTool
+					if err := elem.Decode(d); err != nil {
+						return err
+					}
+					s.Tools = append(s.Tools, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"tools\"")
+			}
+		case "unchanged":
+			if err := func() error {
+				s.Unchanged.Reset()
+				if err := s.Unchanged.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"unchanged\"")
+			}
+		default:
+			return errors.Errorf("unexpected field %q", k)
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode SandboxAgentInventory")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000101,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfSandboxAgentInventory) {
+					name = jsonFieldsNameOfSandboxAgentInventory[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *SandboxAgentInventory) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *SandboxAgentInventory) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s SandboxAgentInventoryScreens) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields implements json.Marshaler.
+func (s SandboxAgentInventoryScreens) encodeFields(e *jx.Encoder) {
+	for k, elem := range s {
+		e.FieldStart(k)
+
+		elem.Encode(e)
+	}
+}
+
+// Decode decodes SandboxAgentInventoryScreens from json.
+func (s *SandboxAgentInventoryScreens) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode SandboxAgentInventoryScreens to nil")
+	}
+	m := s.init()
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		var elem SandboxExecScreen
+		if err := func() error {
+			if err := elem.Decode(d); err != nil {
+				return err
+			}
+			return nil
+		}(); err != nil {
+			return errors.Wrapf(err, "decode field %q", k)
+		}
+		m[string(k)] = elem
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode SandboxAgentInventoryScreens")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s SandboxAgentInventoryScreens) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *SandboxAgentInventoryScreens) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -6324,6 +6643,12 @@ func (s *SandboxExec) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.ObservedAt.Set {
+			e.FieldStart("observedAt")
+			s.ObservedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
 		if s.Pid.Set {
 			e.FieldStart("pid")
 			s.Pid.Encode(e)
@@ -6383,7 +6708,7 @@ func (s *SandboxExec) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSandboxExec = [19]string{
+var jsonFieldsNameOfSandboxExec = [20]string{
 	0:  "command",
 	1:  "createdAt",
 	2:  "env",
@@ -6393,16 +6718,17 @@ var jsonFieldsNameOfSandboxExec = [19]string{
 	6:  "harnessId",
 	7:  "id",
 	8:  "metadata",
-	9:  "pid",
-	10: "primary",
-	11: "startedAt",
-	12: "startupCommand",
-	13: "status",
-	14: "stopped",
-	15: "tty",
-	16: "unit",
-	17: "user",
-	18: "workdir",
+	9:  "observedAt",
+	10: "pid",
+	11: "primary",
+	12: "startedAt",
+	13: "startupCommand",
+	14: "status",
+	15: "stopped",
+	16: "tty",
+	17: "unit",
+	18: "user",
+	19: "workdir",
 }
 
 // Decode decodes SandboxExec from json.
@@ -6518,6 +6844,16 @@ func (s *SandboxExec) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"metadata\"")
 			}
+		case "observedAt":
+			if err := func() error {
+				s.ObservedAt.Reset()
+				if err := s.ObservedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"observedAt\"")
+			}
 		case "pid":
 			if err := func() error {
 				s.Pid.Reset()
@@ -6568,7 +6904,7 @@ func (s *SandboxExec) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"startupCommand\"")
 			}
 		case "status":
-			requiredBitSet[1] |= 1 << 5
+			requiredBitSet[1] |= 1 << 6
 			if err := func() error {
 				if err := s.Status.Decode(d); err != nil {
 					return err
@@ -6588,7 +6924,7 @@ func (s *SandboxExec) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"stopped\"")
 			}
 		case "tty":
-			requiredBitSet[1] |= 1 << 7
+			requiredBitSet[2] |= 1 << 0
 			if err := func() error {
 				v, err := d.Bool()
 				s.Tty = bool(v)
@@ -6620,7 +6956,7 @@ func (s *SandboxExec) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"user\"")
 			}
 		case "workdir":
-			requiredBitSet[2] |= 1 << 2
+			requiredBitSet[2] |= 1 << 3
 			if err := func() error {
 				v, err := d.Str()
 				s.Workdir = string(v)
@@ -6642,8 +6978,8 @@ func (s *SandboxExec) Decode(d *jx.Decoder) error {
 	var failures []validate.FieldError
 	for i, mask := range [3]uint8{
 		0b10000011,
-		0b10100000,
-		0b00000100,
+		0b01000000,
+		0b00001001,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -7689,6 +8025,12 @@ func (s *SandboxExecScreen) encodeFields(e *jx.Encoder) {
 		e.ArrEnd()
 	}
 	{
+		if s.ObservedAt.Set {
+			e.FieldStart("observedAt")
+			s.ObservedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
 		if s.OutputAt.Set {
 			e.FieldStart("outputAt")
 			s.OutputAt.Encode(e, json.EncodeDateTime)
@@ -7716,7 +8058,7 @@ func (s *SandboxExecScreen) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSandboxExecScreen = [11]string{
+var jsonFieldsNameOfSandboxExecScreen = [12]string{
 	0:  "altScreen",
 	1:  "cols",
 	2:  "cursorCol",
@@ -7724,10 +8066,11 @@ var jsonFieldsNameOfSandboxExecScreen = [11]string{
 	4:  "cursorVisible",
 	5:  "exited",
 	6:  "lines",
-	7:  "outputAt",
-	8:  "rows",
-	9:  "scrollback",
-	10: "title",
+	7:  "observedAt",
+	8:  "outputAt",
+	9:  "rows",
+	10: "scrollback",
+	11: "title",
 }
 
 // Decode decodes SandboxExecScreen from json.
@@ -7831,6 +8174,16 @@ func (s *SandboxExecScreen) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"lines\"")
 			}
+		case "observedAt":
+			if err := func() error {
+				s.ObservedAt.Reset()
+				if err := s.ObservedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"observedAt\"")
+			}
 		case "outputAt":
 			if err := func() error {
 				s.OutputAt.Reset()
@@ -7842,7 +8195,7 @@ func (s *SandboxExecScreen) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"outputAt\"")
 			}
 		case "rows":
-			requiredBitSet[1] |= 1 << 0
+			requiredBitSet[1] |= 1 << 1
 			if err := func() error {
 				v, err := d.Int64()
 				s.Rows = int64(v)
@@ -7893,7 +8246,7 @@ func (s *SandboxExecScreen) Decode(d *jx.Decoder) error {
 	var failures []validate.FieldError
 	for i, mask := range [2]uint8{
 		0b01111111,
-		0b00000001,
+		0b00000010,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -8431,10 +8784,17 @@ func (s *SandboxExecsResponse) encodeFields(e *jx.Encoder) {
 		}
 		e.ArrEnd()
 	}
+	{
+		if s.ObservedAt.Set {
+			e.FieldStart("observedAt")
+			s.ObservedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
 }
 
-var jsonFieldsNameOfSandboxExecsResponse = [1]string{
+var jsonFieldsNameOfSandboxExecsResponse = [2]string{
 	0: "execs",
+	1: "observedAt",
 }
 
 // Decode decodes SandboxExecsResponse from json.
@@ -8463,6 +8823,16 @@ func (s *SandboxExecsResponse) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"execs\"")
+			}
+		case "observedAt":
+			if err := func() error {
+				s.ObservedAt.Reset()
+				if err := s.ObservedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"observedAt\"")
 			}
 		default:
 			return errors.Errorf("unexpected field %q", k)
@@ -9364,6 +9734,12 @@ func (s *SandboxService) encodeFields(e *jx.Encoder) {
 		e.Str(s.Name)
 	}
 	{
+		if s.ObservedAt.Set {
+			e.FieldStart("observedAt")
+			s.ObservedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
 		if s.Path.Set {
 			e.FieldStart("path")
 			s.Path.Encode(e)
@@ -9403,7 +9779,7 @@ func (s *SandboxService) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSandboxService = [14]string{
+var jsonFieldsNameOfSandboxService = [15]string{
 	0:  "description",
 	1:  "error",
 	2:  "execId",
@@ -9412,12 +9788,13 @@ var jsonFieldsNameOfSandboxService = [14]string{
 	5:  "fileName",
 	6:  "id",
 	7:  "name",
-	8:  "path",
-	9:  "pid",
-	10: "ports",
-	11: "problem",
-	12: "startedAt",
-	13: "status",
+	8:  "observedAt",
+	9:  "path",
+	10: "pid",
+	11: "ports",
+	12: "problem",
+	13: "startedAt",
+	14: "status",
 }
 
 // Decode decodes SandboxService from json.
@@ -9513,6 +9890,16 @@ func (s *SandboxService) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"name\"")
 			}
+		case "observedAt":
+			if err := func() error {
+				s.ObservedAt.Reset()
+				if err := s.ObservedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"observedAt\"")
+			}
 		case "path":
 			if err := func() error {
 				s.Path.Reset()
@@ -9573,7 +9960,7 @@ func (s *SandboxService) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"startedAt\"")
 			}
 		case "status":
-			requiredBitSet[1] |= 1 << 5
+			requiredBitSet[1] |= 1 << 6
 			if err := func() error {
 				if err := s.Status.Decode(d); err != nil {
 					return err
@@ -9593,7 +9980,7 @@ func (s *SandboxService) Decode(d *jx.Decoder) error {
 	var failures []validate.FieldError
 	for i, mask := range [2]uint8{
 		0b11000000,
-		0b00100000,
+		0b01000000,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -9695,6 +10082,12 @@ func (s *SandboxServicesResponse) Encode(e *jx.Encoder) {
 // encodeFields encodes fields.
 func (s *SandboxServicesResponse) encodeFields(e *jx.Encoder) {
 	{
+		if s.ObservedAt.Set {
+			e.FieldStart("observedAt")
+			s.ObservedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
 		e.FieldStart("services")
 		e.ArrStart()
 		for _, elem := range s.Services {
@@ -9704,8 +10097,9 @@ func (s *SandboxServicesResponse) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSandboxServicesResponse = [1]string{
-	0: "services",
+var jsonFieldsNameOfSandboxServicesResponse = [2]string{
+	0: "observedAt",
+	1: "services",
 }
 
 // Decode decodes SandboxServicesResponse from json.
@@ -9717,8 +10111,18 @@ func (s *SandboxServicesResponse) Decode(d *jx.Decoder) error {
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
+		case "observedAt":
+			if err := func() error {
+				s.ObservedAt.Reset()
+				if err := s.ObservedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"observedAt\"")
+			}
 		case "services":
-			requiredBitSet[0] |= 1 << 0
+			requiredBitSet[0] |= 1 << 1
 			if err := func() error {
 				s.Services = make([]SandboxService, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
@@ -9745,7 +10149,7 @@ func (s *SandboxServicesResponse) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00000001,
+		0b00000010,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -10669,6 +11073,12 @@ func (s *SandboxToolsResponse) Encode(e *jx.Encoder) {
 // encodeFields encodes fields.
 func (s *SandboxToolsResponse) encodeFields(e *jx.Encoder) {
 	{
+		if s.ObservedAt.Set {
+			e.FieldStart("observedAt")
+			s.ObservedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
 		e.FieldStart("tools")
 		e.ArrStart()
 		for _, elem := range s.Tools {
@@ -10678,8 +11088,9 @@ func (s *SandboxToolsResponse) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSandboxToolsResponse = [1]string{
-	0: "tools",
+var jsonFieldsNameOfSandboxToolsResponse = [2]string{
+	0: "observedAt",
+	1: "tools",
 }
 
 // Decode decodes SandboxToolsResponse from json.
@@ -10691,8 +11102,18 @@ func (s *SandboxToolsResponse) Decode(d *jx.Decoder) error {
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
+		case "observedAt":
+			if err := func() error {
+				s.ObservedAt.Reset()
+				if err := s.ObservedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"observedAt\"")
+			}
 		case "tools":
-			requiredBitSet[0] |= 1 << 0
+			requiredBitSet[0] |= 1 << 1
 			if err := func() error {
 				s.Tools = make([]SandboxTool, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
@@ -10719,7 +11140,7 @@ func (s *SandboxToolsResponse) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00000001,
+		0b00000010,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.

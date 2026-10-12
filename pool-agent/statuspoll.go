@@ -58,6 +58,7 @@ func startSandboxAgentStatusPoller(ctx context.Context, logger *slog.Logger, boo
 		client:       client,
 		tokens:       map[string]cachedSandboxAgentToken{},
 		samples:      map[string]sandboxResourceSample{},
+		inventories:  map[string]string{},
 	}
 	// The two cadences poll disjoint sets — tick leaves the configure
 	// sandboxes to tickConfigure — so each sandbox's reports still come from one
@@ -109,6 +110,9 @@ type sandboxAgentStatusPoller struct {
 	// the resource reporter so the two loops share one poll of each sandbox
 	// rather than each making its own (ADR 0071 resource accounting §2).
 	samples map[string]sandboxResourceSample
+	// inventories is the digest of the inventory the control plane last took
+	// from each sandbox (reportInventories).
+	inventories map[string]string
 	// converging holds the sandboxes a runtime-config delivery is under way
 	// for (convergeRuntimeConfig).
 	converging sync.Map
@@ -148,6 +152,10 @@ func (p *sandboxAgentStatusPoller) tick(ctx context.Context) {
 		}
 	}
 	p.pollAndReport(ctx, running)
+	// The standing tick's alone: nobody reads a configure sandbox that has
+	// stopped, and its one-second poll is no cadence to hash screens at
+	// (ADR 26-10-11-657 §2).
+	p.reportInventories(ctx, running)
 }
 
 // tickConfigure polls only the running configure sandboxes, between the

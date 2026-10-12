@@ -37,9 +37,12 @@ func (d *apiDataSource) Open(ctx context.Context, action tui.Interaction, sandbo
 // them.
 func (d *apiDataSource) Execs(ctx context.Context, sandboxID string) ([]tui.Exec, error) {
 	d = d.at(sandboxID)
-	execs, err := d.app.listSandboxExecs(ctx, d.projectID, sandboxID)
+	execs, observedAt, err := d.app.listSandboxExecs(ctx, d.projectID, sandboxID)
 	if err != nil {
 		return nil, err
+	}
+	if !observedAt.IsZero() {
+		return nil, tui.ErrNotRunning
 	}
 	out := make([]tui.Exec, 0, len(execs))
 	for _, exec := range execs {
@@ -123,9 +126,12 @@ func (d *apiDataSource) Services(ctx context.Context, sandboxID string) ([]tui.S
 	if err != nil {
 		return nil, err
 	}
-	services, err := listSandboxServices(ctx, client, d.projectID, sandboxID)
+	services, observedAt, err := listSandboxServices(ctx, client, d.projectID, sandboxID)
 	if err != nil {
 		return nil, err
+	}
+	if !observedAt.IsZero() {
+		return nil, tui.ErrNotRunning
 	}
 	out := make([]tui.Service, 0, len(services))
 	for _, service := range services {

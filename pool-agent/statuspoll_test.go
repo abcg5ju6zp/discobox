@@ -49,6 +49,23 @@ type fakeSandboxAgentStatusClient struct {
 	mu       sync.Mutex
 	reported []SandboxAgentStatusEntry
 	mints    int
+	// inventories is every inventory report made, in order; wanted is what
+	// the next one is answered with, and inventoryErr fails it instead.
+	inventories  [][]SandboxInventoryEntry
+	wanted       []string
+	inventoryErr error
+}
+
+func (c *fakeSandboxAgentStatusClient) ReportSandboxInventories(_ context.Context, req SandboxInventoryReportRequest) (*SandboxInventoryReportResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inventories = append(c.inventories, append([]SandboxInventoryEntry(nil), req.Sandboxes...))
+	if c.inventoryErr != nil {
+		return nil, c.inventoryErr
+	}
+	wanted := c.wanted
+	c.wanted = nil
+	return &SandboxInventoryReportResponse{Wanted: wanted}, nil
 }
 
 func (c *fakeSandboxAgentStatusClient) MintSandboxAgentStatusTokens(_ context.Context, req MintSandboxAgentStatusTokensRequest) (*MintSandboxAgentStatusTokensResponse, error) {

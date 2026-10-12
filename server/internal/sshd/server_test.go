@@ -75,6 +75,12 @@ func (f *fakeSandboxService) AwaitSandboxHTTPClient(ctx context.Context, project
 	return f.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
 }
 
+func (f *fakeSandboxService) AcquireRunningSandboxHTTPClient(context.Context, string, string, []string) (*services.HTTPClientLease, *model.Sandbox, error) {
+	panic("not implemented")
+}
+func (f *fakeSandboxService) ReadSandboxInventory(context.Context, string, string, []string, services.InventoryRead) ([]byte, error) {
+	panic("not implemented")
+}
 func (f *fakeSandboxService) FallbackHarnessConfig(context.Context, string) (*model.HarnessConfig, error) {
 	return nil, nil
 }

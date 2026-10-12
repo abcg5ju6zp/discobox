@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,7 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	poolapimodel "github.com/discobox-ai/discobox/pool-agent/api/model"
+
 	poolagentauth "github.com/discobox-ai/discobox/server/internal/auth/poolagent"
+	"github.com/discobox-ai/discobox/server/internal/sandbox"
 	"github.com/discobox-ai/discobox/server/internal/sandboxagentclient"
 	services "github.com/discobox-ai/discobox/server/internal/services"
 )
@@ -62,7 +66,19 @@ func sandboxAgentTerminalProxyHandler(service services.SandboxService) http.Hand
 		if strings.HasSuffix(r.URL.Path, "/attach") || waitForCreate {
 			acquire = service.AwaitSandboxHTTPClient
 		}
+		// A read the sandbox's inventory answers never starts the sandbox
+		// (ADR 26-10-11-657 §4): its pool agent refuses it for a sandbox that
+		// is not running, and that refusal is answered from the inventory
+		// below. So is a stopped sandbox whose pool cannot be asked at all.
+		inventoryRead, storedRead := sandboxInventoryRead(r)
+		if storedRead {
+			acquire = service.AcquireRunningSandboxHTTPClient
+		}
 		lease, sandboxModel, err := acquire(r.Context(), projectID, sandboxID, scopes)
+		if storedRead && errors.Is(err, sandbox.ErrNotRunning) {
+			serveSandboxInventoryRead(w, r, service, projectID, sandboxID, scopes, inventoryRead)
+			return
+		}
 		if err != nil {
 			writeSandboxAgentProxyError(w, statusCodeForProxyError(err), err.Error())
 			return
@@ -83,6 +99,24 @@ func sandboxAgentTerminalProxyHandler(service services.SandboxService) http.Hand
 			return
 		}
 		proxy := sandboxPoolReverseProxy(target, lease)
+		if storedRead {
+			// The pool agent found the sandbox not running — stopped, or not
+			// yet done starting — and refused rather than start it, saying
+			// so in a header.
+			proxy.ModifyResponse = func(resp *http.Response) error {
+				if resp.StatusCode == http.StatusConflict && resp.Header.Get(poolapimodel.SandboxNotRunningHeader) != "" {
+					return errSandboxNotRunning
+				}
+				return nil
+			}
+			proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+				if errors.Is(err, errSandboxNotRunning) {
+					serveSandboxInventoryRead(w, r, service, projectID, sandboxID, scopes, inventoryRead)
+					return
+				}
+				sandboxPoolProxyError(w, r, err)
+			}
+		}
 		if waitForCreate {
 			// This option belongs to the control plane, not the sandbox agent.
 			query := r.URL.Query()
@@ -91,6 +125,50 @@ func sandboxAgentTerminalProxyHandler(service services.SandboxService) http.Hand
 		}
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+var errSandboxNotRunning = errors.New("the pool agent refused a read of a sandbox that is not running")
+
+// sandboxInventoryRead reports which of the reads a sandbox's inventory
+// answers this request is, if any: listing execs, services or tools, reading
+// one exec or service, or a terminal's screen (ADR 26-10-11-657 §4). Every
+// other route — the actions, and the reads with no last value to answer with
+// — is proxied as it always was.
+func sandboxInventoryRead(r *http.Request) (services.InventoryRead, bool) {
+	if r.Method != http.MethodGet {
+		return services.InventoryRead{}, false
+	}
+	// chi has matched the route, so the ids are read from it rather than cut
+	// from the path: an exec named "screen" is still an exec.
+	execID, serviceID := chi.URLParam(r, "execId"), chi.URLParam(r, "serviceId")
+	pattern := chi.RouteContext(r.Context()).RoutePattern()
+	switch {
+	case strings.HasSuffix(pattern, "/sandboxes/{sandboxId}/execs"):
+		return services.InventoryRead{Part: services.InventoryExecs}, true
+	case strings.HasSuffix(pattern, "/sandboxes/{sandboxId}/services"):
+		return services.InventoryRead{Part: services.InventoryServices}, true
+	case strings.HasSuffix(pattern, "/sandboxes/{sandboxId}/tools"):
+		return services.InventoryRead{Part: services.InventoryTools}, true
+	case strings.HasSuffix(pattern, "/execs/{execId}"):
+		return services.InventoryRead{Part: services.InventoryExec, ID: execID}, true
+	case strings.HasSuffix(pattern, "/execs/{execId}/screen"):
+		return services.InventoryRead{Part: services.InventoryScreen, ID: execID}, true
+	case strings.HasSuffix(pattern, "/services/{serviceId}"):
+		return services.InventoryRead{Part: services.InventoryService, ID: serviceID}, true
+	}
+	return services.InventoryRead{}, false
+}
+
+// serveSandboxInventoryRead answers a read from the sandbox's last inventory.
+func serveSandboxInventoryRead(w http.ResponseWriter, r *http.Request, service services.SandboxService, projectID, sandboxID string, scopes []string, read services.InventoryRead) {
+	body, err := service.ReadSandboxInventory(r.Context(), projectID, sandboxID, scopes, read)
+	if err != nil {
+		writeSandboxAgentProxyError(w, statusCodeForProxyError(err), err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 func writeSandboxAgentProxyError(w http.ResponseWriter, status int, message string) {

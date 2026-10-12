@@ -59,6 +59,8 @@ type MintSandboxAgentStatusTokensResponseBody = apimodel.MintSandboxAgentStatusT
 type SandboxAgentStatusToken = apimodel.SandboxAgentStatusToken
 type ReportPoolResourcesBody = apimodel.ReportPoolResourcesBody
 type ReportSandboxAgentStatusBody = apimodel.ReportSandboxAgentStatusBody
+type ReportSandboxInventoriesBody = apimodel.ReportSandboxInventoriesBody
+type ReportSandboxInventoriesResponseBody = apimodel.ReportSandboxInventoriesResponseBody
 type OptBool = serverapi.OptBool
 type OptString = serverapi.OptString
 type OptURI = serverapi.OptURI
@@ -174,6 +176,16 @@ type SandboxService interface {
 	// (ADR 0039 tier 1). Callers that want the fail-fast answer keep using
 	// AcquireSandboxHTTPClient.
 	AwaitSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*HTTPClientLease, *model.Sandbox, error)
+	// AcquireRunningSandboxHTTPClient is the acquire for a read the sandbox's
+	// inventory can answer (ADR 26-10-11-657 §4). The pool agent refuses such
+	// a read of a sandbox that is not running, and the caller answers that
+	// from ReadSandboxInventory; this refuses with sandbox.ErrNotRunning only
+	// a sandbox recorded as stopped whose pool cannot be asked.
+	AcquireRunningSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*HTTPClientLease, *model.Sandbox, error)
+	// ReadSandboxInventory answers read from the inventory the sandbox last
+	// posted, as the JSON its own route would have answered plus observedAt.
+	// A sandbox that has posted none, or none of that part, is a 409.
+	ReadSandboxInventory(ctx context.Context, projectID, sandboxID string, scopes []string, read InventoryRead) ([]byte, error)
 	AssignSandboxHarnessSecrets(ctx context.Context, projectID, sandboxID, harnessConfigID string) (map[string]string, error)
 	// ExportSandbox streams the discobox as a `.dbox` archive: its spec, then
 	// its durable tree (ADR 0123 §1). It refuses a running discobox, because a
@@ -360,6 +372,9 @@ type PoolService interface {
 	ReportPoolSandboxStates(ctx context.Context, poolID string, input ReportPoolSandboxStatesBody) error
 	MintSandboxAgentStatusTokens(ctx context.Context, poolID string, input MintSandboxAgentStatusTokensBody) (*MintSandboxAgentStatusTokensResponseBody, error)
 	ReportSandboxAgentStatus(ctx context.Context, poolID string, input ReportSandboxAgentStatusBody) error
+	// ReportSandboxInventories records what the pool's sandboxes' list reads
+	// answer, and names the sandboxes it needs in full (ADR 26-10-11-657 §2).
+	ReportSandboxInventories(ctx context.Context, poolID string, input ReportSandboxInventoriesBody) (*ReportSandboxInventoriesResponseBody, error)
 	ReportPoolResources(ctx context.Context, poolID string, input ReportPoolResourcesBody) error
 	// ListPoolHeldSandboxes returns the ID of every sandbox row on the pool, in
 	// any state: the set whose trees the pool agent may not reap
@@ -651,3 +666,23 @@ type ApprovedUse struct {
 	// against. A use a host trust was granted for has none.
 	GrantID string
 }
+
+// InventoryRead names one of the reads a sandbox's inventory answers
+// (ADR 26-10-11-657 §4).
+type InventoryRead struct {
+	Part InventoryPart
+	// ID is the exec or service read, for the parts that read one.
+	ID string
+}
+
+// InventoryPart is which of a sandbox's routes a read is of.
+type InventoryPart string
+
+const (
+	InventoryExecs    InventoryPart = "execs"
+	InventoryExec     InventoryPart = "exec"
+	InventoryServices InventoryPart = "services"
+	InventoryService  InventoryPart = "service"
+	InventoryTools    InventoryPart = "tools"
+	InventoryScreen   InventoryPart = "screen"
+)

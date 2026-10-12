@@ -318,6 +318,14 @@ type Handler interface {
 	//
 	// GET /projects/{projectId}/sandboxes/{sandboxId}
 	GetSandbox(ctx context.Context, params GetSandboxParams) (GetSandboxRes, error)
+	// GetSandboxAgentInventory implements get-sandbox-agent-inventory operation.
+	//
+	// What the sandbox's exec, service and tool lists and its terminals' screens answer right now, in
+	// one document, so the control plane can answer those reads while the sandbox is not running (ADR
+	// 26-10-11-657). Only a token carrying the inventory scope may read it.
+	//
+	// GET /api/projects/{projectId}/sandboxes/{sandboxId}/inventory
+	GetSandboxAgentInventory(ctx context.Context, params GetSandboxAgentInventoryParams) (GetSandboxAgentInventoryRes, error)
 	// GetSandboxAgentStatus implements get-sandbox-agent-status operation.
 	//
 	// Get sandbox-agent-reported status (git status, harness session state, active connections).
@@ -346,7 +354,8 @@ type Handler interface {
 	//
 	// The terminal's screen as text, rendered from the terminal emulator its shim keeps, with recent
 	// scrollback on request. Reading it does not attach, resize the terminal, or count as activity. 409
-	// for an exec with no terminal.
+	// for an exec with no terminal. A discobox that is not running is answered from the screen it last
+	// posted, which has no scrollback.
 	//
 	// GET /api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/screen
 	GetSandboxExecScreen(ctx context.Context, params GetSandboxExecScreenParams) (GetSandboxExecScreenRes, error)
@@ -763,6 +772,13 @@ type Handler interface {
 	//
 	// POST /api/pools/{poolId}/sandbox-agent-status
 	ReportSandboxAgentStatus(ctx context.Context, req *ReportSandboxAgentStatusBody, params ReportSandboxAgentStatusParams) (ReportSandboxAgentStatusRes, error)
+	// ReportSandboxInventories implements report-sandbox-inventories operation.
+	//
+	// Report the inventory of one or more hosted sandboxes, in full when it changed and by digest when
+	// it did not.
+	//
+	// POST /api/pools/{poolId}/sandbox-inventories
+	ReportSandboxInventories(ctx context.Context, req *ReportSandboxInventoriesBody, params ReportSandboxInventoriesParams) (ReportSandboxInventoriesRes, error)
 	// ReportSandboxSecretRejection implements report-sandbox-secret-rejection operation.
 	//
 	// Report what an upstream made of a swapped credential.

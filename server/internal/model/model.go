@@ -1497,6 +1497,28 @@ type SandboxSecretResolution struct {
 	SecretID string
 }
 
+// SandboxInventory is what a sandbox's list reads last answered — its execs,
+// services, tools, and each terminal's visible screen — as its sandbox agent
+// posted it (ADR 26-10-11-657). The control plane answers those reads from it
+// while the sandbox is not running.
+//
+// It is a row of its own rather than a column on Sandbox because it is large
+// and read only for one sandbox at a time: on the sandbox row it would be
+// loaded and returned by every listing. It is deleted with its sandbox.
+type SandboxInventory struct {
+	SandboxID string `gorm:"primaryKey;column:sandbox_id;type:text" json:"sandboxId" doc:"Sandbox the inventory is of"`
+	ProjectID string `gorm:"column:project_id;not null;type:text;index" json:"projectId" doc:"Project ID"`
+	// Digest is the sandbox agent's hash of the inventory's parts. The pool
+	// agent reports an unchanged inventory by it alone.
+	Digest string `gorm:"column:digest;not null;type:text" json:"digest" doc:"Sandbox-agent digest of the inventory's parts"`
+	// Document is the inventory as the sandbox agent sent it, sealed: it holds
+	// terminal content and the environment exec records carry.
+	Document []byte `gorm:"column:document" json:"-"`
+	// ObservedAt is when the sandbox last had this inventory, on its own
+	// clock: when it was taken, or the last poll that found it unchanged.
+	ObservedAt time.Time `gorm:"column:observed_at;not null" json:"observedAt" doc:"When the sandbox last had this inventory" format:"date-time"`
+}
+
 // SandboxSecret binds a sandbox environment variable to a project secret via a
 // sentinel placeholder. The sandbox is provisioned with the sentinel value; the
 // proxy swaps it for the real value resolved from the referenced secret. The
@@ -1757,6 +1779,7 @@ func AllModels() []any {
 		&SecretRequest{},
 		&SecretGrant{},
 		&SandboxSecret{},
+		&SandboxInventory{},
 		&SSHKey{},
 		&Peer{},
 		&CredentialVerdict{},

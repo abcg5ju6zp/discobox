@@ -254,6 +254,11 @@ type Runtime interface {
 	// sandbox agent has not answered yet: Docker calls it running, and nothing
 	// in it can be reached.
 	SandboxBooting(sandboxID string) bool
+	// AwaitSandboxBoot waits out a boot of the sandbox that is under way and
+	// starts nothing: it returns at once for a sandbox that is not booting.
+	// A boot can end without the sandbox up, so a caller that waited looks at
+	// the sandbox again.
+	AwaitSandboxBoot(ctx context.Context, sandboxID string) error
 	// GitOriginPath is the repository behind a source's origin route, as the
 	// sandbox itself reaches it: its namespace of this pool's cache, served
 	// fetch-only (ADR 26-10-10-545 §7), or the bare origin repository an
@@ -2624,6 +2629,11 @@ func (r *MemorySandboxRuntime) EnsureSandboxRunning(ctx context.Context, sandbox
 // started.
 func (r *MemorySandboxRuntime) SandboxBooting(string) bool {
 	return false
+}
+
+// AwaitSandboxBoot has nothing to wait for: a memory sandbox never boots.
+func (r *MemorySandboxRuntime) AwaitSandboxBoot(context.Context, string) error {
+	return nil
 }
 
 func (r *MemorySandboxRuntime) GitOriginPath(ctx context.Context, sandboxID, slug string) (GitRepositoryLocation, error) {

@@ -478,6 +478,44 @@ components:
                 - clean
                 - observedAt
             type: object
+        SandboxAgentInventory:
+            additionalProperties: false
+            description: What a sandbox's list reads answer, posted so that they can be answered while it is not running (ADR 26-10-11-657). A part the sandbox cannot answer is absent, not empty.
+            properties:
+                digest:
+                    description: Hash of execs, services, tools and screens, and of nothing else. Two inventories with one digest answer every read alike.
+                    type: string
+                execs:
+                    description: What listing the sandbox's execs answers.
+                    items:
+                        $ref: '#/components/schemas/SandboxExec'
+                    type: array
+                observedAt:
+                    description: When the sandbox agent took this inventory, on the sandbox's clock.
+                    format: date-time
+                    type: string
+                screens:
+                    additionalProperties:
+                        $ref: '#/components/schemas/SandboxExecScreen'
+                    description: The visible screen of every exec that has one, by exec ID, with no scrollback.
+                    type: object
+                services:
+                    description: What listing the sandbox's services answers.
+                    items:
+                        $ref: '#/components/schemas/SandboxService'
+                    type: array
+                tools:
+                    description: What listing the sandbox's tools answers.
+                    items:
+                        $ref: '#/components/schemas/SandboxTool'
+                    type: array
+                unchanged:
+                    description: True when the digest is the one the caller named as known. The parts are then omitted.
+                    type: boolean
+            required:
+                - observedAt
+                - digest
+            type: object
         SandboxAgentListeningPort:
             additionalProperties: false
             properties:
@@ -819,6 +857,10 @@ components:
                         type: string
                     description: Caller-supplied exec metadata.
                     type: object
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 pid:
                     description: Sandbox-local process ID when known.
                     format: int64
@@ -999,6 +1041,10 @@ components:
                     items:
                         type: string
                     type: array
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 outputAt:
                     description: When the program last wrote output.
                     format: date-time
@@ -1091,6 +1137,10 @@ components:
                     items:
                         $ref: '#/components/schemas/SandboxExec'
                     type: array
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
             required:
                 - execs
             type: object
@@ -1221,6 +1271,10 @@ components:
                 name:
                     description: Display name from the declaration's front matter, defaulted from the filename.
                     type: string
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 path:
                     description: Absolute path to the declaring script inside the sandbox.
                     type: string
@@ -1261,6 +1315,10 @@ components:
         SandboxServicesResponse:
             additionalProperties: false
             properties:
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 services:
                     items:
                         $ref: '#/components/schemas/SandboxService'
@@ -1384,6 +1442,10 @@ components:
         SandboxToolsResponse:
             additionalProperties: false
             properties:
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 tools:
                     items:
                         $ref: '#/components/schemas/SandboxTool'
@@ -2047,7 +2109,7 @@ paths:
                 - Sandbox Execs
     /api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/screen:
         get:
-            description: The terminal's screen as text, rendered from the terminal emulator its shim keeps, with recent scrollback on request. Reading it does not attach, resize the terminal, or count as activity. 409 for an exec with no terminal.
+            description: The terminal's screen as text, rendered from the terminal emulator its shim keeps, with recent scrollback on request. Reading it does not attach, resize the terminal, or count as activity. 409 for an exec with no terminal. A discobox that is not running is answered from the screen it last posted, which has no scrollback.
             operationId: get-sandbox-exec-screen
             parameters:
                 - description: Project that owns the sandbox.
@@ -2265,6 +2327,44 @@ paths:
             summary: List recent sandbox harness hook payload logs.
             tags:
                 - Harness Hooks
+    /api/projects/{projectId}/sandboxes/{sandboxId}/inventory:
+        get:
+            description: What the sandbox's exec, service and tool lists and its terminals' screens answer right now, in one document, so the control plane can answer those reads while the sandbox is not running (ADR 26-10-11-657). Only a token carrying the inventory scope may read it.
+            operationId: get-sandbox-agent-inventory
+            parameters:
+                - description: Project that owns the sandbox.
+                  in: path
+                  name: projectId
+                  required: true
+                  schema:
+                    type: string
+                - description: Sandbox resource ID.
+                  in: path
+                  name: sandboxId
+                  required: true
+                  schema:
+                    type: string
+                - description: Digest of the inventory the caller already holds. When the inventory still has it, the answer is marked unchanged and carries no parts.
+                  in: query
+                  name: known
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/SandboxAgentInventory'
+                    description: The sandbox's inventory.
+                default:
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                    description: Error response.
+            summary: Get what the sandbox's list reads answer, for the control plane to keep.
+            tags:
+                - Sandbox Status
     /api/projects/{projectId}/sandboxes/{sandboxId}/judge:
         post:
             description: Puts one judging job to this discobox's harness and returns what it answered. Only a discobox in judge mode answers, and only a token carrying judge:run may ask. The caller supplies evidence and the approved use; the prompt, the schema, the model role and the tools restriction are the judge runtime's own. Each ask is a fresh run with nothing carried over from the last, and one is answered at a time.

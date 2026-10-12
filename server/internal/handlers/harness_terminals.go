@@ -48,6 +48,13 @@ func (h *Handler) GetSandboxAgentStatus(context.Context, serverapi.GetSandboxAge
 	return sandboxAgentRuntimeNotImplemented(), nil
 }
 
+// GetSandboxAgentInventory is left unproxied like the status: the inventory
+// is read only by the pool agent's poll (ADR 26-10-11-657 §1), and what a
+// client reads of it comes back through the list routes it answers.
+func (h *Handler) GetSandboxAgentInventory(context.Context, serverapi.GetSandboxAgentInventoryParams) (serverapi.GetSandboxAgentInventoryRes, error) {
+	return sandboxAgentRuntimeNotImplemented(), nil
+}
+
 // UpdateSandboxAgentMeta is the sandbox agent's half of a meta write. The
 // control plane's own is UpdateSandboxMeta, which calls it and records the
 // answer (ADR 0136); this route is neither served nor proxied here.

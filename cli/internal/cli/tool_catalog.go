@@ -107,6 +107,13 @@ func findTool(catalog []tools.Definition, id string) (tools.Definition, error) {
 	return def, nil
 }
 
+// errSandboxToolsNotReadable is the tool listing refused with a conflict. A
+// discobox that is not running is not started to list its tools: it is
+// answered from what it last posted, and refused when it posted no tools
+// (ADR 26-10-11-657 §4). Listing stops there. Running a tool is use, and
+// goes on to start the discobox (runTool).
+var errSandboxToolsNotReadable = errors.New("the discobox's tools cannot be read")
+
 // sandboxTools is what the discobox's image and primary source declare.
 //
 // A sandbox that predates the route — an older server, an older sandbox agent —
@@ -129,6 +136,9 @@ func sandboxTools(ctx context.Context, client *apiclientgen.Client, projectID, s
 	if problem, ok := res.(*apiclientgen.ErrorResponseStatusCode); ok &&
 		(problem.StatusCode == http.StatusNotFound || problem.StatusCode == http.StatusNotImplemented) {
 		return nil, nil
+	}
+	if problem, ok := res.(*apiclientgen.ErrorResponseStatusCode); ok && problem.StatusCode == http.StatusConflict {
+		return nil, fmt.Errorf("%w: %w", errSandboxToolsNotReadable, responseError(res))
 	}
 	body, err := expectResponse[apimodel.SandboxToolsResponse](res)
 	if err != nil {

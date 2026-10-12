@@ -277,6 +277,10 @@ var poolRuntimeActions = map[string]bool{
 	"judge-commands":              false,
 	"sandbox-agent-status-tokens": false,
 	"sandbox-agent-status":        false,
+	// What each sandbox's list reads answer, posted when it changes
+	// (ADR 26-10-11-657 §2). One call reports a batch, so it takes no
+	// trailing ID.
+	"sandbox-inventories": false,
 	// The pool's resource report (ADR 0071, resource accounting). It addresses the pool itself, so
 	// it takes no trailing ID.
 	"resources": false,

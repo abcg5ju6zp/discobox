@@ -99,9 +99,13 @@ flowchart LR
   verifies the authenticated **pool principal** for that pool, and any
   sandbox ID named is acted on only if that pool hosts it (skipped here, or
   by the store for state/progress batches).
+  `ReportSandboxInventories` ([ADR 26-10-11-657](../../../../docs/adr/26-10-11-657-a-stopped-discobox-is-read-from-what-it-last-posted.md) §2) stores an inventory sent in
+  full in `sandbox_inventories`, moves a held one's observation time forward
+  when it is sent by digest alone, and answers with the sandboxes whose
+  digest it does not hold.
   `MintSandboxAgentStatusTokens` always mints the hardcoded `status:read`
-  scope via `ControlPlane.CreateSandboxAgentToken`, never a caller-supplied
-  one, so this endpoint can never be used to obtain a broader sandbox-agent
+  and `inventory:read` scopes via `ControlPlane.CreateSandboxAgentToken`,
+  never a caller-supplied one, so this endpoint can never be used to obtain a broader sandbox-agent
   token. `ReportSandboxAgentStatus` and `ReportPoolResources` write their
   sandbox columns through narrow column updates
   (`store.UpdateSandboxAgentStatus`, `store.UpdateSandboxResources`), not

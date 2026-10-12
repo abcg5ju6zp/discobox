@@ -26,6 +26,11 @@ const (
 	// carrying it are minted server-side with this scope hardcoded, never
 	// derived from a caller's request (see server's MintSandboxAgentStatusTokens).
 	ScopeStatusRead = "status:read"
+	// ScopeInventoryRead authorizes only the inventory route (ADR 26-10-11-657
+	// §1). It is minted beside status:read, for the pool agent's poll, and is
+	// its own scope because the inventory holds what status never did:
+	// terminal content and exec records.
+	ScopeInventoryRead = "inventory:read"
 	// ScopeTCPConnect gates the direct-tcpip tunnel endpoint (ADR 0024 §3).
 	ScopeTCPConnect = "tcp:connect"
 	// ScopeUDPConnect gates the UDP tunnel endpoint, its datagram twin
@@ -262,6 +267,12 @@ func (a *SignedTokenAuthenticator) authorizeRequest(r *http.Request, claims Sign
 	return nil
 }
 
+// inventoryRoute reports whether path is the sandbox's inventory route itself.
+func inventoryRoute(path string) bool {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	return len(segments) == 6 && segments[0] == "api" && segments[1] == "projects" && segments[3] == "sandboxes" && segments[5] == "inventory"
+}
+
 func routeIdentity(path string) (string, string, bool) {
 	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if len(segments) < 5 || segments[0] != "api" || segments[1] != "projects" || segments[3] != "sandboxes" {
@@ -295,6 +306,15 @@ func requiredRequestScope(r *http.Request) string {
 	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/status") {
 		return ScopeStatusRead
 	}
+	// The inventory is told by its whole route, never by a suffix: it is read
+	// with a scope of its own, and an exec or a service named "inventory" must
+	// not be readable with it.
+	if inventoryRoute(r.URL.EscapedPath()) {
+		if r.Method == http.MethodGet {
+			return ScopeInventoryRead
+		}
+		return ""
+	}
 	// Exec events across a sandbox are read-only audit data, read like an exec.
 	// Named before /execs, which this path does not contain: without its own
 	// entry it would fall through to no scope at all.
@@ -323,6 +343,31 @@ func requiredRequestScope(r *http.Request) string {
 		case http.MethodGet:
 			return ScopeExecRead
 		case http.MethodPost, http.MethodDelete:
+			return ScopeExecWrite
+		default:
+			return ""
+		}
+	}
+	// Tools and services are told below the exec block, so an exec named
+	// "tools" or "services" is still gated as the exec it is.
+	//
+	// Listing tools reads declaration files, and what it says is how to start
+	// an exec, so it is read like one (ADR 0125 §7).
+	if strings.HasSuffix(r.URL.Path, "/tools") {
+		if r.Method == http.MethodGet {
+			return ScopeExecRead
+		}
+		return ""
+	}
+	// A service is an exec (ADR 0070), gated by the exec scopes as the pool
+	// agent and the control plane gate it: reading one reads an exec record
+	// and its transcript, and starting, stopping or restarting one creates or
+	// ends an exec.
+	if strings.Contains(r.URL.Path, "/services") {
+		switch r.Method {
+		case http.MethodGet:
+			return ScopeExecRead
+		case http.MethodPost:
 			return ScopeExecWrite
 		default:
 			return ""

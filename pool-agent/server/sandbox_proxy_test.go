@@ -216,6 +216,8 @@ func TestSandboxExecProxyRejectsTerminalScope(t *testing.T) {
 // error and proxied anyway, which for an archived sandbox meant a 500 from the
 // proxy about a missing IP address — true, and useless. The upstream here fails
 // the test if it is reached at all: the request must not survive the latch.
+// A transcript read is the request here because it is a read that still goes
+// through the latch (ADR 26-10-11-657 §5); the lists do not.
 func TestSandboxExecProxyRejectsArchivedSandbox(t *testing.T) {
 	projectID := "project-1"
 	poolID := "pool-1"
@@ -244,7 +246,7 @@ func TestSandboxExecProxyRejectsArchivedSandbox(t *testing.T) {
 		t.Fatalf("new router: %v", err)
 	}
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/project/project-1/pool/pool-1/sandboxes/sandbox-1/execs", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/project/project-1/pool/pool-1/sandboxes/sandbox-1/execs/exec-1/logs", nil)
 	req.Header.Set("Authorization", "Bearer "+sign(projectID, poolID, sandboxID, ScopeExecRead))
 	req.Header.Set(sandboxAgentAuthorizationHeader, "Bearer sandbox-token")
 	resp := httptest.NewRecorder()

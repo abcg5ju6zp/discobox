@@ -23,6 +23,18 @@ const ErrorTypeSandboxArchived = "https://discobox.ai/errors/sandbox-archived"
 // exists" and settles as a healthy sandbox.
 const ErrorTypeSandboxImageUnavailable = "https://discobox.ai/errors/sandbox-image-unavailable"
 
+// SandboxNotRunningHeader marks the 409 a pool agent answers a read of a
+// sandbox that is not running with, and names the state it found: `stopped`,
+// or `starting` for one whose boot outlasted the request.
+//
+// It is this API's `type` for the routes that have no problem document to
+// put one in. The sandbox-directed routes are proxied onward, and what they
+// refuse with is plain text, because it is relayed to a person — by git, by
+// the CLI — as it stands. So the condition travels beside the text instead of
+// in it. The control plane answers the reads it holds an inventory for from
+// that inventory when it sees this header (ADR 26-10-11-657 §4).
+const SandboxNotRunningHeader = "X-Discobox-Sandbox-Not-Running"
+
 // ErrorTypeSandboxNoContainer is the RFC 7807 `type` a pool agent sets on the
 // 409 it returns for a sandbox whose tree it holds and that has no container:
 // one being rebuilt, or one whose container was lost and that needs repair.

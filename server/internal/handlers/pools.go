@@ -240,6 +240,14 @@ func (h *Handler) ReportSandboxAgentStatus(ctx context.Context, req *apimodel.Re
 	return &serverapi.ReportSandboxAgentStatusNoContent{}, nil
 }
 
+func (h *Handler) ReportSandboxInventories(ctx context.Context, req *apimodel.ReportSandboxInventoriesBody, params serverapi.ReportSandboxInventoriesParams) (serverapi.ReportSandboxInventoriesRes, error) {
+	resp, err := h.services.Pools.ReportSandboxInventories(ctx, params.PoolId, *req)
+	if err != nil {
+		return apiError(err), nil
+	}
+	return resp, nil
+}
+
 func (h *Handler) ReportPoolResources(ctx context.Context, req *apimodel.ReportPoolResourcesBody, params serverapi.ReportPoolResourcesParams) (serverapi.ReportPoolResourcesRes, error) {
 	if err := h.services.Pools.ReportPoolResources(ctx, params.PoolId, *req); err != nil {
 		return apiError(err), nil

@@ -139,14 +139,15 @@ func (s *Service) UpdatePoolStatus(ctx context.Context, poolID string, input ser
 	return pool, nil
 }
 
-// MintSandboxAgentStatusTokens mints short-lived, status:read-only
-// sandbox-agent tokens for the sandboxes a pool agent requests, so its
-// standing status-poll loop can call each sandbox-agent's status endpoint
-// without discobox-server ever originating a call into a sandbox itself.
+// MintSandboxAgentStatusTokens mints short-lived sandbox-agent tokens for the
+// sandboxes a pool agent requests, so its standing poll can read each
+// sandbox agent's status (ADR 0030) and inventory (ADR 26-10-11-657) without
+// discobox-server ever originating a call into a sandbox itself.
 //
-// The minted scope is always exactly ScopeStatusRead, a Go literal never
-// derived from the request: there is no code path here, buggy or malicious,
-// by which this endpoint can mint anything broader.
+// The minted scopes are always exactly ScopeStatusRead and
+// ScopeInventoryRead, Go literals never derived from the request: there is no
+// code path here, buggy or malicious, by which this endpoint can mint
+// anything broader.
 func (s *Service) MintSandboxAgentStatusTokens(ctx context.Context, poolID string, input services.MintSandboxAgentStatusTokensBody) (*services.MintSandboxAgentStatusTokensResponseBody, error) {
 	poolID = strings.TrimSpace(poolID)
 	if poolID == "" {
@@ -176,7 +177,7 @@ func (s *Service) MintSandboxAgentStatusTokens(ctx context.Context, poolID strin
 			ProjectID: pool.ProjectID,
 			PoolID:    poolID,
 			SandboxID: sandboxID,
-			Scopes:    []string{poolagentauth.ScopeStatusRead},
+			Scopes:    []string{poolagentauth.ScopeStatusRead, poolagentauth.ScopeInventoryRead},
 		})
 		if err != nil {
 			return nil, err
@@ -234,6 +235,68 @@ func (s *Service) ReportSandboxAgentStatus(ctx context.Context, poolID string, i
 		}
 	}
 	return nil
+}
+
+// maxSandboxInventoryBytes bounds one stored inventory. The pool agent posts
+// nothing larger; this is the same bound held where the row is written.
+const maxSandboxInventoryBytes = 4 << 20
+
+// ReportSandboxInventories records the inventories a pool agent read from its
+// sandboxes — what their list reads answer — so those reads can be answered
+// while a sandbox is not running (ADR 26-10-11-657 §2).
+//
+// An entry with an inventory replaces the one held. An entry with a digest
+// alone says the inventory held under that digest still stood at observedAt;
+// when no inventory is held under it, the sandbox is named in the answer and
+// the pool agent sends it in full next time. Entries naming a sandbox this
+// pool does not host are skipped, as the status batch skips them.
+func (s *Service) ReportSandboxInventories(ctx context.Context, poolID string, input services.ReportSandboxInventoriesBody) (*services.ReportSandboxInventoriesResponseBody, error) {
+	poolID = strings.TrimSpace(poolID)
+	if poolID == "" {
+		return nil, apperrors.NewStatusError(http.StatusBadRequest, "poolId is required")
+	}
+	principal, ok := auth.PrincipalFromContext(ctx)
+	if !ok || principal.Type != auth.PrincipalTypePool || principal.PoolID != poolID {
+		return nil, apperrors.NewStatusError(http.StatusForbidden, "pool agent is not authorized to report sandbox inventories")
+	}
+	pool, err := s.store.GetPoolByID(ctx, poolID)
+	if err != nil {
+		return nil, apperrors.NotFound(err, "pool not found")
+	}
+	response := &services.ReportSandboxInventoriesResponseBody{Wanted: []string{}}
+	for _, entry := range input.Sandboxes {
+		sandboxID := strings.TrimSpace(entry.SandboxId)
+		digest := strings.TrimSpace(entry.Digest)
+		if sandboxID == "" || digest == "" {
+			continue
+		}
+		sandboxModel, err := s.store.GetSandbox(ctx, pool.ProjectID, sandboxID)
+		if err != nil || strings.TrimSpace(sandboxModel.PoolID) != poolID {
+			continue
+		}
+		inventory, full := entry.Inventory.Get()
+		if !full {
+			held, err := s.store.ConfirmSandboxInventory(ctx, pool.ProjectID, sandboxID, digest, entry.ObservedAt)
+			if err != nil {
+				return nil, err
+			}
+			if !held {
+				response.Wanted = append(response.Wanted, sandboxID)
+			}
+			continue
+		}
+		document, err := json.Marshal(inventory)
+		if err != nil || len(document) > maxSandboxInventoryBytes {
+			continue
+		}
+		// The store checks again that the pool still hosts the sandbox, in
+		// the transaction that writes: it may have been deleted since the
+		// look above.
+		if err := s.store.PutSandboxInventory(ctx, pool.ProjectID, poolID, sandboxID, digest, document, entry.ObservedAt); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+	}
+	return response, nil
 }
 
 // reportedMeta is the name, description and tags a status report carries

@@ -96,6 +96,25 @@ pool (`ErrNoContainer`) is repaired; still archived on the pool
 or one that failed, repaired; no runtime at all (`ErrNotFound`, which is also a create not yet placed
 on a pool) is waited out while it is being created and repaired otherwise.
 
+## A sandbox that is not running is read from its inventory
+
+`ReadSandboxInventory` (`inventory.go`) answers one read — the exec, service
+or tool list, one exec or service, a terminal's screen — from the
+`sandbox_inventories` row the pool agent last reported for the sandbox
+([ADR 26-10-11-657](../../../../docs/adr/26-10-11-657-a-stopped-discobox-is-read-from-what-it-last-posted.md) §4).
+The answer is the part as posted, never re-encoded from a model of it, plus
+`observedAt`; records are served as posted, so an exec last seen running reads
+as running. The primary terminal's alias is resolved as the sandbox agent
+resolves it: a primary that is starting or running, else the most recently
+created one. No inventory, or none of that part, is a 409 naming
+`discobox start`; an exec or service the list does not hold is a 404. It is
+authorized exactly as the live read is.
+
+`AcquireRunningSandboxHTTPClient` is the acquire for those reads. It leases
+as `AcquireSandboxHTTPClient` does — the pool agent, not the row, says
+whether the sandbox is running — and refuses with `sandbox.ErrNotRunning`
+only a sandbox recorded as stopped whose pool is not reachable.
+
 ## Attach waits, acquire does not
 
 `AcquireSandboxHTTPClient` is the choke point every route onto a sandbox goes

@@ -67,11 +67,11 @@ func (a *App) newSandboxTerminalListCommand(sandboxID *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			terminals, err := a.listSandboxTerminals(cmd.Context(), projectID, resolvedSandboxID)
+			terminals, observedAt, err := a.listSandboxTerminals(cmd.Context(), projectID, resolvedSandboxID)
 			if err != nil {
 				return err
 			}
-			return a.writeSandboxTerminals(cmd, terminals)
+			return a.writeSandboxTerminals(cmd, terminals, observedAt)
 		},
 	}
 	a.addQuietFlag(cmd)
@@ -272,10 +272,10 @@ func createTerminalExecBody(opts sandboxTerminalCreateOptions) (*apimodel.Create
 
 // listSandboxTerminals returns the execs that were created in harness (terminal)
 // mode, i.e. those carrying a harnessId.
-func (a *App) listSandboxTerminals(ctx context.Context, projectID, sandboxID string) ([]apimodel.SandboxExec, error) {
-	execs, err := a.listSandboxExecs(ctx, projectID, sandboxID)
+func (a *App) listSandboxTerminals(ctx context.Context, projectID, sandboxID string) ([]apimodel.SandboxExec, time.Time, error) {
+	execs, observedAt, err := a.listSandboxExecs(ctx, projectID, sandboxID)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	out := make([]apimodel.SandboxExec, 0, len(execs))
 	for _, exec := range execs {
@@ -283,7 +283,7 @@ func (a *App) listSandboxTerminals(ctx context.Context, projectID, sandboxID str
 			out = append(out, exec)
 		}
 	}
-	return out, nil
+	return out, observedAt, nil
 }
 
 func (a *App) writeSandboxTerminal(cmd *cobra.Command, terminal *apimodel.SandboxExec) error {
@@ -293,17 +293,18 @@ func (a *App) writeSandboxTerminal(cmd *cobra.Command, terminal *apimodel.Sandbo
 	if a.output == "json" {
 		return writeJSON(cmd.OutOrStdout(), terminal)
 	}
-	return a.writeSandboxTerminals(cmd, []apimodel.SandboxExec{*terminal})
+	return a.writeSandboxTerminals(cmd, []apimodel.SandboxExec{*terminal}, terminal.ObservedAt.Or(time.Time{}))
 }
 
-func (a *App) writeSandboxTerminals(cmd *cobra.Command, terminals []apimodel.SandboxExec) error {
+func (a *App) writeSandboxTerminals(cmd *cobra.Command, terminals []apimodel.SandboxExec, observedAt time.Time) error {
 	terminals = sortedByRecency(terminals, func(t apimodel.SandboxExec) time.Time { return t.CreatedAt })
 	if a.quiet {
 		return writeResourceIDs(cmd.OutOrStdout(), terminals, func(t apimodel.SandboxExec) string { return t.ID })
 	}
 	if a.output == "json" {
-		return writeJSON(cmd.OutOrStdout(), map[string]any{"terminals": terminals})
+		return writeJSON(cmd.OutOrStdout(), storedAnswerJSON("terminals", terminals, observedAt))
 	}
+	defer noteStoredAnswer(cmd, observedAt)
 	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tAGENT\tSTATUS\tPID\tEXIT\tWORKDIR\tCOMMAND\tCREATED")
 	for _, terminal := range terminals {

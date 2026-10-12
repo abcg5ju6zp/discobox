@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	workerapimodel "github.com/discobox-ai/discobox/pool-agent/api/model"
 	"github.com/discobox-ai/discobox/pool-agent/sandboxruntime"
 )
 
@@ -68,8 +69,9 @@ func TestAutoStartPreservesStartupFailure(t *testing.T) {
 
 // Only exec attach waits for a container to be rebuilt, because it is the only
 // route the control plane waits on; everything else is answered at once, so a
-// failed sandbox whose container is gone does not hold `discobox tools`,
-// service listings, tunnels or git for the whole rebuild wait.
+// failed sandbox whose container is gone does not hold a transcript read,
+// tunnels or git for the whole rebuild wait. (Listing execs, services or tools
+// starts nothing at all: TestSandboxReadsNeverStartAStoppedSandbox.)
 func TestAutoStartWaitsForAContainerOnlyWhereTheControlPlaneDoes(t *testing.T) {
 	runtime := &ensureRecorder{err: sandboxruntime.ErrNoContainer}
 	service := &sandboxService{runtime: runtime}
@@ -79,9 +81,9 @@ func TestAutoStartWaitsForAContainerOnlyWhereTheControlPlaneDoes(t *testing.T) {
 
 	base := "/api/project/p/pool/w/sandboxes/sbx_1"
 	for path, wantWait := range map[string]bool{
-		base + "/tools":                   false,
-		base + "/services":                false,
-		base + "/execs":                   false,
+		base + "/execs/ex_1/logs":         false,
+		base + "/services/web/logs":       false,
+		base + "/execs/ex_1/events":       false,
 		base + "/execs/ex_1/attach":       true,
 		base + "/tcp/attach":              false,
 		base + "/http/8080/":              false,
@@ -102,17 +104,32 @@ func TestAutoStartWaitsForAContainerOnlyWhereTheControlPlaneDoes(t *testing.T) {
 }
 
 // bootingRuntime is a runtime holding one sandbox whose container Docker calls
-// running, and whose boot may still be under way.
+// running, and whose boot may still be under way. Waiting the boot out ends
+// it, leaving the sandbox in afterBoot.
 type bootingRuntime struct {
 	sandboxruntime.Runtime
-	booting bool
+	booting   bool
+	afterBoot sandboxruntime.Status
+	awaited   int
+	status    sandboxruntime.Status
 }
 
 func (r *bootingRuntime) GetSandbox(context.Context, string) (*sandboxruntime.Sandbox, error) {
-	return &sandboxruntime.Sandbox{SandboxID: "sbx_1", Status: sandboxruntime.StatusRunning}, nil
+	status := r.status
+	if status == "" {
+		status = sandboxruntime.StatusRunning
+	}
+	return &sandboxruntime.Sandbox{SandboxID: "sbx_1", Status: status}, nil
 }
 
 func (r *bootingRuntime) SandboxBooting(string) bool { return r.booting }
+
+func (r *bootingRuntime) AwaitSandboxBoot(context.Context, string) error {
+	r.awaited++
+	r.booting = false
+	r.status = r.afterBoot
+	return nil
+}
 
 // A read of what is inside a sandbox is refused, not proxied, while the
 // sandbox is still booting: its agent is not answering yet, so passing the read
@@ -129,9 +146,10 @@ func TestRequireRunningRefusesASandboxStillBooting(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			served = false
-			service := &sandboxService{runtime: &bootingRuntime{booting: tc.booting}}
+			runtime := &bootingRuntime{booting: tc.booting}
+			service := &sandboxService{runtime: runtime}
 			router := chi.NewRouter()
-			router.Handle("/sandboxes/{sandboxId}/screen", service.requireRunning(next))
+			router.Handle("/sandboxes/{sandboxId}/screen", service.requireRunning(refuseBooting, next))
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/sandboxes/sbx_1/screen", nil))
 			if served != tc.wantServed {
@@ -139,6 +157,49 @@ func TestRequireRunningRefusesASandboxStillBooting(t *testing.T) {
 			}
 			if !tc.wantServed && (rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "is starting")) {
 				t.Fatalf("status %d body %q, want 409 saying it is starting", rec.Code, rec.Body.String())
+			}
+			if !tc.wantServed && rec.Header().Get(workerapimodel.SandboxNotRunningHeader) != "starting" {
+				t.Fatalf("%s = %q, want starting", workerapimodel.SandboxNotRunningHeader, rec.Header().Get(workerapimodel.SandboxNotRunningHeader))
+			}
+			if runtime.awaited != 0 {
+				t.Fatal("a route that refuses a booting sandbox waited its boot out")
+			}
+		})
+	}
+}
+
+// The lists wait out a boot something else began, and start nothing: a client
+// that has just created or started a discobox lists it next, and must get the
+// discobox's own answer rather than what it posted before it last stopped. A
+// boot can end without the sandbox up, and then the read is refused as for
+// any sandbox that is not running.
+func TestRequireRunningWaitsOutABootForTheLists(t *testing.T) {
+	for name, tc := range map[string]struct {
+		before     sandboxruntime.Status
+		afterBoot  sandboxruntime.Status
+		wantServed bool
+	}{
+		"the boot ends with the sandbox up": {afterBoot: sandboxruntime.StatusRunning, wantServed: true},
+		// A boot is marked before its container is started.
+		"the container has not started yet":   {before: sandboxruntime.StatusStopped, afterBoot: sandboxruntime.StatusRunning, wantServed: true},
+		"the boot ends with the sandbox down": {afterBoot: sandboxruntime.StatusStopped},
+	} {
+		t.Run(name, func(t *testing.T) {
+			served := false
+			runtime := &bootingRuntime{booting: true, status: tc.before, afterBoot: tc.afterBoot}
+			service := &sandboxService{runtime: runtime}
+			router := chi.NewRouter()
+			router.Handle("/sandboxes/{sandboxId}/execs", service.requireRunning(waitOutBoot, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { served = true })))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/sandboxes/sbx_1/execs", nil))
+			if runtime.awaited != 1 {
+				t.Fatalf("boot awaited %d times, want once", runtime.awaited)
+			}
+			if served != tc.wantServed {
+				t.Fatalf("served = %v, want %v (status %d, body %q)", served, tc.wantServed, rec.Code, rec.Body.String())
+			}
+			if !tc.wantServed && (rec.Code != http.StatusConflict || rec.Header().Get(workerapimodel.SandboxNotRunningHeader) != "stopped") {
+				t.Fatalf("status %d, %s = %q; want 409 marked stopped", rec.Code, workerapimodel.SandboxNotRunningHeader, rec.Header().Get(workerapimodel.SandboxNotRunningHeader))
 			}
 		})
 	}
