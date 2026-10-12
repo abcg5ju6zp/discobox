@@ -1,6 +1,8 @@
 # 0039 — Attach waits for readiness at every tier
 
 - **Status**: Accepted (the progress-frame transport of "Progress is a frame, and only tier 1 sends it" superseded by [0060](0060-provisioning-progress-is-a-recorded-phase-the-client-polls.md))
+- **Amended by**: [26-10-12-711](26-10-12-711-using-a-failed-discobox-with-no-container-repairs-it-once.md) — tier 1 waits for every action, not only attach,
+  and tier 2 no longer waits for a container
 - **Date**: 2026-08-12
 - **Relates to**: [ADR 0017](0017-resource-state-is-desired-and-observed-with-no-operations.md)
   §12, which put the on-demand start latch in the pool agent because it is the

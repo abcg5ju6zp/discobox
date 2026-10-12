@@ -1,6 +1,8 @@
 # 0064 — Repair rebuilds on the current image
 
 - **Status**: Accepted
+- **Amended by**: [26-10-12-711](26-10-12-711-using-a-failed-discobox-with-no-container-repairs-it-once.md) — an automatic repair re-pins only under an
+  `automatic` upgrade policy
 - **Date**: 2026-08-20
 - **Amends**: [0035](0035-repair-is-one-rebuild-intent-plus-a-start-instruction.md) §1 — the
   repair intent now carries a re-pin as well as `RepairGeneration`
