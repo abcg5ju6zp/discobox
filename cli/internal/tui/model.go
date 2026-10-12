@@ -2013,13 +2013,11 @@ func (m *Model) actions(targets []Sandbox) []action {
 			applyable, applyWhy = false, "nothing has changed yet"
 		}
 	}
-	// A row named by its terminal's title is not showing the configured name,
-	// which is the one rename edits: accepting a rename there would change
-	// nothing on screen.
+	// The name is written into the box (ADR 26-10-12-026), which is started to
+	// take it. An archived one has nothing to start.
 	renameable, renameWhy := one, "takes exactly one box"
-	if one && targets[0].nameIsTitle() {
-		renameable = false
-		renameWhy = "the name shown is the terminal's title, which the harness sets — a rename would not change it"
+	if one && targets[0].State == StateArchived {
+		renameable, renameWhy = false, "an archived box cannot be started to take a name — unarchive it first"
 	}
 	return []action{
 		{key: "a", press: "a", label: "attach", detail: "join the harness terminal", enabled: attachable,
@@ -2285,9 +2283,18 @@ type renameDoneMsg struct {
 // common edit — a word added to a name that is nearly right — is a word typed
 // rather than a name retyped.
 func (m *Model) askRename(box Sandbox) tea.Cmd {
-	m.dialog = inputDialog("Rename", "What should this discobox be called?", "name", box.Name,
+	// Enter on what is shown asks for nothing, whichever name that is: on a
+	// box nobody has named it is the harness's title, spinner and all, and
+	// accepting it would freeze that as the box's name. An empty line takes a
+	// given name away, which puts the title back; on a box with none there is
+	// nothing to take.
+	question := "What should this discobox be called?"
+	if box.GivenName != "" {
+		question += " An empty name gives back the title its harness set."
+	}
+	m.dialog = inputDialog("Rename", question, "name", box.Name,
 		func(name string) tea.Cmd {
-			if name == "" || name == box.Name {
+			if name == box.Name || (name == "" && box.GivenName == "") {
 				return status("name unchanged")
 			}
 			return func() tea.Msg { return renameMsg{id: box.ID, name: name} }
@@ -2306,6 +2313,9 @@ func (m *Model) renameDone(msg renameDoneMsg) tea.Cmd {
 	m.busy = ""
 	if msg.err != nil {
 		return m.report(true, "rename: %v", msg.err)
+	}
+	if msg.name == "" {
+		return tea.Batch(m.refresh(), m.report(false, "name cleared"))
 	}
 	return tea.Batch(m.refresh(), m.report(false, "renamed to %s", msg.name))
 }
@@ -3433,8 +3443,9 @@ func (m *Model) viewStatus() string {
 //
 // Neither is on the row. The name a row shows is the display name, which is
 // the primary terminal's window title as soon as the harness has set one — so
-// the configured name, the one rename edits and every other `discobox` command
-// takes, is exactly the thing that goes missing while a box is working. The id
+// the configured name, the handle the box was created with and a `discobox`
+// command still takes, is exactly the thing that goes missing while a box is
+// working. The id
 // is nowhere on this screen at all; the workspace banner carries it, and
 // getting to it meant attaching.
 //
@@ -3933,8 +3944,8 @@ func (m *Model) helpText() string {
 		"  over SSH in a separate window, and this one keeps running.",
 		"",
 		"  rename opens the current name for editing. Enter accepts, Esc",
-		"  cancels. A box whose harness has titled its terminal shows that",
-		"  title and cannot be renamed.",
+		"  cancels. The name you give a box replaces the title its harness",
+		"  set, and emptying a name you gave gives the title back.",
 		"",
 		"  A row is: state, name, harness, git position, age, cpu, memory and",
 		"  disk use, and lines changed.",
