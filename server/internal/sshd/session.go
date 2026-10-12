@@ -9,9 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"golang.org/x/crypto/ssh"
 
@@ -334,7 +336,7 @@ func (sess *sshSession) attach(ctx context.Context, req *ssh.Request, target exe
 	// channel, where sftp and scp expect their own protocol's diagnostics.
 	if !target.subsystem && sandboxModel.AutomaticRepairLandedSince(acquireStarted) {
 		notice := "discobox: this discobox had failed and had no container, so it was repaired before this session started"
-		if failure := sandboxModel.AutomaticRepair.Failure; failure != "" {
+		if failure := noticeText(sandboxModel.AutomaticRepair.Failure); failure != "" {
 			notice += "; it had failed with: " + failure
 		}
 		if _, err := fmt.Fprintln(sess.channel.Stderr(), notice); err != nil {
@@ -343,6 +345,25 @@ func (sess *sshSession) attach(ctx context.Context, req *ssh.Request, target exe
 	}
 
 	go sess.pump(conn, lease)
+}
+
+// noticeText makes a recorded failure fit to write on a session's stderr as
+// part of one line: its white space is folded, and every rune a terminal would
+// act on rather than show — a control, ESC among them, or an invisible format
+// character such as a bidirectional override — is written as its Go escape.
+// The failure is whatever the container runtime printed, and this stream is
+// somebody's terminal.
+func noticeText(value string) string {
+	var b strings.Builder
+	for _, r := range strings.Join(strings.Fields(value), " ") {
+		if unicode.IsPrint(r) {
+			b.WriteRune(r)
+			continue
+		}
+		quoted := strconv.QuoteRune(r)
+		b.WriteString(quoted[1 : len(quoted)-1])
+	}
+	return b.String()
 }
 
 func buildCreateExecRequest(target execTarget, ptyRequested bool, cols, rows uint16, term string, env map[string]string) sandboxgen.CreateSandboxExecRequest {
