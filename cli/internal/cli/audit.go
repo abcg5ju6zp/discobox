@@ -875,14 +875,17 @@ func displayArgv(argv []string) string {
 // is display data (ADR 0130 §6): printed raw, an escape sequence in a judge's
 // reason could move the cursor and overwrite the row that said "deny".
 func terminalSafe(value string) string {
-	return escapeNonPrinting(value, false)
+	return escapeNonPrinting(value, nil)
 }
 
 // terminalSafeMultiline is terminalSafe that keeps line breaks and tabs, for a
 // value printed as a block rather than into one cell.
 func terminalSafeMultiline(value string) string {
-	return escapeNonPrinting(value, true)
+	return escapeNonPrinting(value, isLayoutRune)
 }
+
+// isLayoutRune reports whether r is a line break or a tab.
+func isLayoutRune(r rune) bool { return r == '\n' || r == '\t' }
 
 // writeTerminalSafeJSON writes value as indented JSON with every non-printing
 // rune in it written as a \u escape. Go's encoder escapes C0 controls, ESC
@@ -914,14 +917,16 @@ func writeTerminalSafeJSON(w io.Writer, value any) error {
 	return err
 }
 
-func escapeNonPrinting(value string, keepLayout bool) string {
+// escapeNonPrinting writes every rune of value that is neither printable nor
+// one keep lets through as its Go escape. A nil keep lets nothing through.
+func escapeNonPrinting(value string, keep func(rune) bool) string {
 	var b strings.Builder
 	for i := 0; i < len(value); {
 		r, size := utf8.DecodeRuneInString(value[i:])
 		switch {
 		case r == utf8.RuneError && size == 1:
 			fmt.Fprintf(&b, `\x%02x`, value[i])
-		case keepLayout && (r == '\n' || r == '\t'):
+		case keep != nil && keep(r):
 			b.WriteRune(r)
 		case r == ' ' || unicode.IsPrint(r):
 			b.WriteRune(r)
