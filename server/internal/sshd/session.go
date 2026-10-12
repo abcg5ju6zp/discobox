@@ -251,7 +251,10 @@ func (sess *sshSession) failRequest(req *ssh.Request, subsystem bool, reason str
 		return
 	}
 	sess.reply(req, true)
-	if _, err := fmt.Fprintln(sess.channel.Stderr(), "discobox: "+reason); err != nil {
+	// The reason can carry what a container runtime printed: a start that
+	// failed, or the failures a refused repair names. This stream is
+	// somebody's terminal, so it goes out as text (noticeText).
+	if _, err := fmt.Fprintln(sess.channel.Stderr(), "discobox: "+noticeText(reason)); err != nil {
 		sess.server.logger.Debug("write ssh failure reason", "error", err)
 	}
 	code := int64(sessionSetupExitStatus)
@@ -347,12 +350,12 @@ func (sess *sshSession) attach(ctx context.Context, req *ssh.Request, target exe
 	go sess.pump(conn, lease)
 }
 
-// noticeText makes a recorded failure fit to write on a session's stderr as
-// part of one line: its white space is folded, and every rune a terminal would
+// noticeText makes a failure fit to hand an ssh client as part of one line, on
+// a session's stderr or as the reason a channel is refused: its white space is folded, and every rune a terminal would
 // act on rather than show — a control, ESC among them, or an invisible format
 // character such as a bidirectional override — is written as its Go escape.
-// The failure is whatever the container runtime printed, and this stream is
-// somebody's terminal.
+// A failure can be whatever the container runtime printed, and the client
+// prints it on somebody's terminal.
 func noticeText(value string) string {
 	var b strings.Builder
 	for _, r := range strings.Join(strings.Fields(value), " ") {

@@ -3,12 +3,14 @@ package sshd
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/discobox-ai/discobox/execstream/frame"
+	"github.com/discobox-ai/discobox/server/internal/apperrors"
 	"github.com/discobox-ai/discobox/server/internal/model"
 	"github.com/discobox-ai/discobox/server/internal/services"
 	"github.com/discobox-ai/discobox/server/internal/transport"
@@ -119,6 +121,29 @@ func TestDirectTCPIPRejectedBeforeAcceptOnDialFailure(t *testing.T) {
 
 	if _, err := client.Dial("tcp", "refused.example:9999"); err == nil {
 		t.Fatalf("expected the direct-tcpip channel to be rejected")
+	}
+}
+
+// The reason a forward is refused is printed by the ssh client on the user's
+// terminal, and a refused acquire can quote what a container runtime printed.
+// It reaches the client as text.
+func TestDirectTCPIPRejectionReasonIsText(t *testing.T) {
+	h := newTestHarness(t)
+	acme := createRouteFixtureProject(t, h.server.store, "proj_acme00000000", "Acme")
+	sandbox := createRouteFixtureSandbox(t, h.server.store, acme, "devbox")
+	h.sandboxes.acquireErr = apperrors.NewStatusError(http.StatusConflict, "the discobox failed (pull\n \x1b[2Kimage)")
+
+	signer := newTestSigner(t)
+	writeAuthorizedKeys(t, h.server.dataDir, signer)
+	client, err := h.dial(sandbox.ID, signer)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Dial("tcp", "example.test:80")
+	if err == nil || !strings.Contains(err.Error(), `the discobox failed (pull \x1b[2Kimage)`) || strings.ContainsRune(err.Error(), '\x1b') {
+		t.Fatalf("rejection = %v, want the reason on one line with the sequence escaped", err)
 	}
 }
 
