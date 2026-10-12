@@ -74,8 +74,8 @@ func (s *GitSource) Validate() error {
 				if err := (validate.String{
 					MinLength:     1,
 					MinLengthSet:  true,
-					MaxLength:     2048,
-					MaxLengthSet:  true,
+					MaxLength:     0,
+					MaxLengthSet:  false,
 					Email:         false,
 					Hostname:      false,
 					Regex:         nil,

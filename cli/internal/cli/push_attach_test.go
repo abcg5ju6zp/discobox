@@ -71,6 +71,8 @@ func TestDeliverableHereIsThisMachinesParkedDiscoboxes(t *testing.T) {
 		{"parked for a remote, created by a discobox", remoteByASandbox, thisHost, false},
 		// A remote is on no machine: whichever client attaches delivers it.
 		{"parked for a remote, created on another machine", remoteElsewhere, thisHost, true},
+		// Nor does delivering a remote need to know which machine this is.
+		{"parked for a remote, and this machine has no identity", remoteElsewhere, "", true},
 		{"running", pushDeliveredSandbox(), thisHost, false},
 		// Still parked because the reconciler has not caught up, but the
 		// delivery is reported: what `discobox new --raw` attaches to.

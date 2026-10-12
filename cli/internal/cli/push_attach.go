@@ -41,7 +41,7 @@ import (
 // and what lands in it can be read by the sandbox that created it. That
 // sandbox delivers it, held to what it can reach itself (§7).
 func deliverableHere(sb apimodel.Sandbox, hostID string) bool {
-	if hostID == "" || !sandboxAwaitingSource(sb) || sb.Runtime.SourceDeliveredAt.IsSet() {
+	if !sandboxAwaitingSource(sb) || sb.Runtime.SourceDeliveredAt.IsSet() {
 		return false
 	}
 	if sb.CreatedBySandboxId.Or("") != "" {
@@ -58,8 +58,10 @@ func deliverableHere(sb apimodel.Sandbox, hostID string) bool {
 	if remotesOnly {
 		return true
 	}
+	// A source from a directory is this machine's to deliver only when this
+	// machine is known to be the one that holds it.
 	origin, ok := sb.Origin.Get()
-	return ok && origin.HostId == hostID
+	return hostID != "" && ok && origin.HostId == hostID
 }
 
 // delivery is one delivery to a parked discobox in flight: done closes when it
