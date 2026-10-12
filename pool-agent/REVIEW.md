@@ -98,6 +98,12 @@ reasons.
 - **A cache is never shallow, and never fetches.** Do not add a path that runs
   `git fetch` against a remote from the pool, or one that accepts a shallow
   push.
+- An imported origin (`origins/<slug>.git` out of an archive) is untrusted
+  down to its `config`. Never run git in it or fetch from its path: read its
+  refs as files and lend its objects as an alternate
+  (`gitcache.readImportedRepository`), and keep refusing links and an
+  alternates file in it, which would lend the cache another repository's
+  objects.
 
 ## Error responses
 
