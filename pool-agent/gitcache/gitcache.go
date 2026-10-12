@@ -471,14 +471,17 @@ func (s *Store) Receiving(ctx context.Context, path, sandboxID, slug string) (Re
 	return remoteView(ctx, path, namespace)
 }
 
-// RemoteView is what a namespace holds of its remote's branches at one
-// moment.
+// RemoteView is what a namespace holds of its remote's branches and tags at
+// one moment.
 type RemoteView string
 
 func remoteView(ctx context.Context, path, namespace string) (RemoteView, error) {
-	out, err := git(ctx, path, nil, nil, "for-each-ref", "--format=%(objectname) %(refname)", namespaceRef(namespace, "refs/remotes/origin/"))
+	// Tags too: a delivery from a checkout with no remote-tracking branch
+	// still says which tags there are, and a later push never carries one.
+	out, err := git(ctx, path, nil, nil, "for-each-ref", "--format=%(objectname) %(refname)",
+		namespaceRef(namespace, "refs/remotes/origin/"), namespaceRef(namespace, "refs/tags/"))
 	if err != nil {
-		return "", fmt.Errorf("read the remote's branches in git cache namespace %s: %w", namespace, err)
+		return "", fmt.Errorf("read the remote's branches and tags in git cache namespace %s: %w", namespace, err)
 	}
 	return RemoteView(out), nil
 }
