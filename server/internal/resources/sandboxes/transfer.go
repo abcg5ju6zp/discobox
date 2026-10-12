@@ -335,8 +335,11 @@ func (s *Service) ImportSandbox(ctx context.Context, projectID string, archive i
 		sb.Tags = spec.Tags
 	}
 	// And of the name it was given (ADR 26-10-12-026 §2), on the same terms.
-	if spec.MetaName != nil && *spec.MetaName != "" && sandboxmeta.ValidateName(*spec.MetaName) == nil {
-		sb.MetaName = spec.MetaName
+	// Trimmed as the file's own reader trims it.
+	if spec.MetaName != nil {
+		if name := strings.TrimSpace(*spec.MetaName); name != "" && sandboxmeta.ValidateName(name) == nil {
+			sb.MetaName = &name
+		}
 	}
 	// The image is the destination harness config's, exactly as a create takes
 	// it from there (ADR 0123 §1). It cannot come from the archive: the rest of

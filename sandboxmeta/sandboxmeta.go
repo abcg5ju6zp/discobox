@@ -86,6 +86,10 @@ func Parse(data []byte) (Meta, error) {
 	if meta.Tags == nil {
 		meta.Tags = map[string]string{}
 	}
+	// The name is read trimmed, as a change trims the one it sets (Apply): a
+	// name padded by whoever wrote the file is the same name, and is held to
+	// the same length.
+	meta.Name = strings.TrimSpace(meta.Name)
 	if err := meta.Validate(); err != nil {
 		return Meta{}, err
 	}
