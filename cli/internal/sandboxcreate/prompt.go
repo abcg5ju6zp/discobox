@@ -232,7 +232,7 @@ func BuildPromptSandboxBody(ctx context.Context, opts PromptOptions) (*apimodel.
 // collapsed into one — including a reference that resolves to the primary
 // source's own directory.
 func setSourceCodeReferences(ctx context.Context, body *apimodel.CreateSandboxBody, local *LocalSources, opts PromptOptions, primary resolvedRunSource, sourceOptions runSourceOptions) error {
-	declared, err := declaredPromptSources(opts, primary)
+	declared, err := declaredPromptSources(ctx, opts, primary)
 	if err != nil {
 		return err
 	}
@@ -337,21 +337,24 @@ func taken(references apiclientgen.SandboxCreateConfigSourceCodeReferences, prim
 }
 
 // declaredPromptSources are the sources the primary source's repository
-// declares, or nothing when the caller opted out or the source is not one this
-// machine holds.
+// declares, or nothing when the caller opted out.
 //
-// The file is read out of the source's directory on this machine, not the one
-// it takes in the sandbox: the sandbox does not exist yet, and off a POSIX host
-// the two are not even the same path.
-//
-// A remote primary source declares nothing here: the file lives in a checkout,
-// and there is none — reading it would mean cloning the repository on this
-// machine first, which is the sandbox's job, not the client's.
-func declaredPromptSources(opts PromptOptions, primary resolvedRunSource) (map[string]string, error) {
-	if opts.SkipDeclaredSources || primary.LocalDirectory == "" || primary.URL != "" {
+// For a source on this machine the file is read out of its directory here,
+// not the one it takes in the sandbox: the sandbox does not exist yet, and off
+// a POSIX host the two are not even the same path. For a remote primary source
+// it is read from the remote, at the commit the source is pinned to, which
+// takes one small fetch and no clone (ADR 26-10-10-545 §4).
+func declaredPromptSources(ctx context.Context, opts PromptOptions, primary resolvedRunSource) (map[string]string, error) {
+	if opts.SkipDeclaredSources {
 		return nil, nil
 	}
-	return readDeclaredSources(primary.LocalDirectory)
+	if primary.LocalDirectory != "" {
+		return readDeclaredSources(primary.LocalDirectory)
+	}
+	if primary.URL != "" && primary.Checkout.Commit != "" {
+		return readRemoteDeclaredSources(ctx, primary.URL, primary.Checkout.Commit, primary.Checkout.RefName)
+	}
+	return nil, nil
 }
 
 type promptSandboxCreator interface {

@@ -68,3 +68,19 @@ func TestOnlyASandboxKeyIsForOneSandbox(t *testing.T) {
 		t.Fatal("no data key made a directory key")
 	}
 }
+
+// A sandbox's route to its own pool is not a remote: a discobox created from
+// inside one must not be keyed by, or told to fetch from, an address that
+// resolves only there.
+func TestAPoolsOriginsHostIsNotARemote(t *testing.T) {
+	plumbing := "https://" + PoolOriginsHost + "/api/project/p/pool/q/sandboxes/sbx-1/git-origins/primary.git"
+	if !OnPoolOriginsHost(plumbing) {
+		t.Fatal("a pool origin route was not recognized")
+	}
+	if got := RemoteKey(plumbing); got != "" {
+		t.Fatalf("RemoteKey of a pool origin route = %q, want none", got)
+	}
+	if OnPoolOriginsHost("https://github.com/acme/widget") || OnPoolOriginsHost("/srv/git/x") {
+		t.Fatal("an ordinary remote was taken for a pool origin route")
+	}
+}

@@ -133,7 +133,11 @@ func pushedText(moved []SourcePush) string {
 		push := moved[0]
 		text := "pushed " + shortCommit(push.Commit)
 		if push.Branch != "" {
-			text += " to origin/" + push.Branch
+			remote := push.Remote
+			if remote == "" {
+				remote = "origin"
+			}
+			text += " to " + remote + "/" + push.Branch
 		}
 		return text + " in the discobox"
 	}

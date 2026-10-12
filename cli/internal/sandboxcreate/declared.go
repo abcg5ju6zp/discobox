@@ -20,7 +20,9 @@ import (
 //
 // It is read here, on the client, and not by the pool or the server: deciding
 // what a declared source resolves to means looking at this machine's disk for a
-// checkout of it, which nothing else in the system can see. That is also why it
+// checkout of it, which nothing else in the system can see. A remote primary
+// source's is read from its remote, at the commit it is pinned to
+// (readRemoteDeclaredSources). That is also why it
 // is a file of its own rather than a field of .discobox/project.json — that one
 // is read by pool-agent, out of the materialized clone, long after every source
 // has been resolved (ADR 0012 §7).
@@ -69,6 +71,72 @@ func readDeclaredSources(root string) (map[string]string, error) {
 		}
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	return parseDeclaredSources(data, path)
+}
+
+// readRemoteDeclaredSources reads the sources a remote repository declares at
+// commit, without cloning it (ADR 26-10-10-545 §4).
+//
+// The sources of a create are fixed in the create request, so the file is read
+// before the create and must not wait on the history. The pinned commit alone
+// is fetched, with no trees or blobs, into a repository thrown away
+// afterwards; reading the file then fetches the few objects on its path. A
+// remote that refuses a filtered fetch gives up the commit at depth 1 instead.
+// The throwaway repository is not this client's cache of the remote, which
+// stays complete.
+//
+// ref is the branch or tag the commit was resolved from, when there was one:
+// a remote that will not be asked for a commit by id is asked for that, and
+// believed only while it still names the commit.
+func readRemoteDeclaredSources(ctx context.Context, remote, commit, ref string) (map[string]string, error) {
+	where := remote + "@" + commit[:min(len(commit), 12)] + ":" + declaredSourcesFile
+	dir, err := os.MkdirTemp("", "discobox-declared-sources-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	git := func(args ...string) (string, error) {
+		return gitutil.Output(ctx, dir, nil, nil, args...)
+	}
+	if _, err := git("init", "--quiet", "--bare", "."); err != nil {
+		return nil, fmt.Errorf("read %s: %w", where, err)
+	}
+	// A named remote, so the objects the read needs are fetched from it on
+	// demand.
+	if _, err := git("remote", "add", "origin", remote); err != nil {
+		return nil, fmt.Errorf("read %s: %w", where, err)
+	}
+	_, err = git("fetch", "--quiet", "--no-tags", "--depth=1", "--filter=tree:0", "origin", commit)
+	if err != nil {
+		_, err = git("fetch", "--quiet", "--no-tags", "--depth=1", "origin", commit)
+	}
+	if err != nil && ref != "" {
+		if _, refErr := git("fetch", "--quiet", "--no-tags", "--depth=1", "origin", ref); refErr == nil {
+			if fetched, headErr := git("rev-parse", "--verify", "--quiet", "FETCH_HEAD"); headErr == nil && strings.TrimSpace(fetched) == commit {
+				err = nil
+			}
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", where, err)
+	}
+	listed, err := git("ls-tree", "--name-only", commit, "--", declaredSourcesFile)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", where, err)
+	}
+	if strings.TrimSpace(listed) == "" {
+		return nil, nil
+	}
+	data, err := git("show", commit+":"+declaredSourcesFile)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", where, err)
+	}
+	return parseDeclaredSources([]byte(data), where)
+}
+
+// parseDeclaredSources parses a declared-sources file read from path, which
+// names it in what is said about it.
+func parseDeclaredSources(data []byte, path string) (map[string]string, error) {
 	var declared map[string]string
 	if err := json.Unmarshal(data, &declared); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
@@ -121,6 +189,11 @@ func declaredSourceCheckout(primaryRoot, name string) string {
 // disagreement so a directory that only shares a name is visible rather than
 // silently substituted.
 func resolveDeclaredSourceArg(ctx context.Context, primaryRoot, name, url string) (arg string, report DeclaredSource) {
+	if primaryRoot == "" {
+		// A remote primary source has no directory on this machine, and so
+		// nothing beside it to look in: every source it declares is its URL.
+		return url, DeclaredSource{Name: name, URL: url}
+	}
 	checkout := declaredSourceCheckout(primaryRoot, name)
 	report = DeclaredSource{Name: name, URL: url, Checkout: checkout}
 	info, err := os.Stat(checkout)

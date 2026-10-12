@@ -108,6 +108,92 @@ func TestResolveRunSourceLeavesOutAnUpstreamTheSandboxCannotReach(t *testing.T) 
 	}
 }
 
+// A checkout's remote is the one its branch tracks, else origin, else its only
+// remote (ADR 26-10-10-545 §2). A branch that tracks nothing is how most work
+// starts, and it must not move the checkout out of its remote's cache.
+func TestALocalCheckoutsRemoteIsTrackedThenOriginThenItsOnlyRemote(t *testing.T) {
+	const origin, fork, only = "https://github.com/example/project.git", "https://github.com/me/project.git", "https://git.example.com/solo.git"
+	for name, tc := range map[string]struct {
+		configure [][]string
+		wantName  string
+		wantURL   string
+	}{
+		"a branch that tracks a fork is in the fork's cache": {
+			configure: [][]string{{"remote", "add", "origin", origin}, {"remote", "add", "fork", fork}, {"config", "branch.feature-foo.remote", "fork"}},
+			wantName:  "fork", wantURL: fork,
+		},
+		"a branch that tracks nothing is in origin's": {
+			configure: [][]string{{"remote", "add", "origin", origin}, {"remote", "add", "fork", fork}},
+			wantName:  "origin", wantURL: origin,
+		},
+		"with no origin, the only remote": {
+			configure: [][]string{{"remote", "add", "company", only}},
+			wantName:  "company", wantURL: only,
+		},
+		"several remotes and none of them origin name no remote": {
+			configure: [][]string{{"remote", "add", "one", origin}, {"remote", "add", "two", fork}},
+		},
+		"a tracked remote that is a path falls back to origin": {
+			configure: [][]string{{"remote", "add", "origin", origin}, {"remote", "add", "disk", "/srv/git/project.git"}, {"config", "branch.feature-foo.remote", "disk"}},
+			wantName:  "origin", wantURL: origin,
+		},
+		// Inside a discobox, the checkout's route to its own pool is plumbing.
+		"a remote on a pool's origins host is passed over": {
+			configure: [][]string{
+				{"remote", "add", "discobox", "https://git.discobox.internal/api/project/p/pool/q/sandboxes/sbx-1/git-origins/primary.git"},
+				{"config", "branch.feature-foo.remote", "discobox"},
+				{"remote", "add", "origin", origin},
+			},
+			wantName: "origin", wantURL: origin,
+		},
+		"a checkout whose only remote is its pool has none": {
+			configure: [][]string{{"remote", "add", "origin", "https://git.discobox.internal/api/project/p/pool/q/sandboxes/sbx-1/git-origins/primary.git"}},
+		},
+		"a branch tracking a URL written out has a remote and no name for it": {
+			configure: [][]string{{"config", "branch.feature-foo.remote", fork}},
+			wantURL:   fork,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := newRunSourceTestRepo(t)
+			git := runSourceTestGit(t, repo)
+			for _, args := range tc.configure {
+				git(args...)
+			}
+			checkout := resolvedRunSourceCheckout{RefName: "feature-foo", RefType: runSourceRefTypeBranch}
+			gotName, gotURL := localRemote(context.Background(), repo, checkout)
+			if gotName != tc.wantName || gotURL != tc.wantURL {
+				t.Fatalf("localRemote = %q %q, want %q %q", gotName, gotURL, tc.wantName, tc.wantURL)
+			}
+			source, err := resolveRunSource(context.Background(), repo, runSourceOptions{Platform: linuxSandbox, IncludeDirty: IncludeDirtyAuto})
+			if err != nil {
+				t.Fatalf("resolveRunSource: %v", err)
+			}
+			if source.UpstreamURL != tc.wantURL {
+				t.Fatalf("reported remote = %q, want %q", source.UpstreamURL, tc.wantURL)
+			}
+		})
+	}
+}
+
+// A shallow checkout is refused, with what to do about it: it cannot be
+// delivered into a cache every sandbox of its remote shares, and deepening
+// someone's checkout is not this command's to do (ADR 26-10-10-545 §3).
+func TestAShallowCheckoutIsRefusedAsASource(t *testing.T) {
+	full := newRunSourceTestRepo(t)
+	runSourceTestGit(t, full)("commit", "--allow-empty", "-m", "second")
+	shallow := filepath.Join(t.TempDir(), "shallow")
+	runSourceTestGit(t, full)("clone", "--quiet", "--depth=1", "file://"+filepath.ToSlash(full), shallow)
+
+	_, err := resolveRunSource(context.Background(), shallow, runSourceOptions{Platform: linuxSandbox, IncludeDirty: IncludeDirtyNever})
+	if err == nil || !strings.Contains(err.Error(), "shallow clone") || !strings.Contains(err.Error(), "git fetch --unshallow") {
+		t.Fatalf("a shallow checkout resolved: %v", err)
+	}
+	if _, err := resolveRunSource(context.Background(), full, runSourceOptions{Platform: linuxSandbox, IncludeDirty: IncludeDirtyNever}); err != nil {
+		t.Fatalf("a complete checkout was refused: %v", err)
+	}
+}
+
 func TestNetworkRemoteURL(t *testing.T) {
 	//nolint:gosec // G101: fake credentials, here to prove they are stripped.
 	for in, want := range map[string]string{

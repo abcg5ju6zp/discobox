@@ -305,3 +305,72 @@ func newRunSourceTestRepoIn(t *testing.T, workspace, name string) string {
 	git("commit", "-m", "base")
 	return repo
 }
+
+// A remote primary source declares sources too: the file is read from its
+// remote at the pinned commit, without cloning it, and every source it names
+// is its URL, since there is no directory on this machine to look beside (ADR
+// 26-10-10-545 §4).
+func TestARemotePrimarySourceDeclaresItsSources(t *testing.T) {
+	remote := newRunSourceTestRepoIn(t, t.TempDir(), "widget")
+	git := runSourceTestGit(t, remote)
+	before := strings.TrimSpace(git("rev-parse", "HEAD"))
+	if err := os.MkdirAll(filepath.Join(remote, ".discobox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(remote, ".discobox", "sources.json"), []byte(`{"lib": "https://github.com/acme/lib@main"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".discobox/sources.json")
+	git("commit", "-m", "declare lib")
+	declaring := strings.TrimSpace(git("rev-parse", "HEAD"))
+	url := "file://" + filepath.ToSlash(remote)
+
+	for name, allowFilter := range map[string]string{"a remote that takes a filtered fetch": "true", "a remote that refuses one": "false"} {
+		t.Run(name, func(t *testing.T) {
+			git("config", "uploadpack.allowFilter", allowFilter)
+			declared, err := readRemoteDeclaredSources(context.Background(), url, declaring, "main")
+			if err != nil {
+				t.Fatalf("read declared sources: %v", err)
+			}
+			if len(declared) != 1 || declared["lib"] != "https://github.com/acme/lib@main" {
+				t.Fatalf("declared = %v, want lib alone", declared)
+			}
+		})
+	}
+
+	// The commit pinned, not the remote's tip: before the file existed there
+	// was nothing declared.
+	declared, err := readRemoteDeclaredSources(context.Background(), url, before, "")
+	if err != nil || declared != nil {
+		t.Fatalf("declared at a commit without the file = %v, %v; want none", declared, err)
+	}
+
+	// Through the create: a remote primary's declared source is brought in by
+	// its URL, placed beside where the primary lands.
+	primary := resolvedRunSource{
+		Kind:        runSourceKindGit,
+		URL:         url,
+		Checkout:    resolvedRunSourceCheckout{Commit: declaring, RefName: "main", RefType: runSourceRefTypeBranch},
+		Destination: defaultRunDestination(linuxSandbox),
+	}
+	got, err := declaredPromptSources(context.Background(), PromptOptions{}, primary)
+	if err != nil || got["lib"] == "" {
+		t.Fatalf("declared sources of a remote primary = %v, %v", got, err)
+	}
+	if skipped, err := declaredPromptSources(context.Background(), PromptOptions{SkipDeclaredSources: true}, primary); err != nil || skipped != nil {
+		t.Fatalf("declared sources when opted out = %v, %v", skipped, err)
+	}
+	arg, report := resolveDeclaredSourceArg(context.Background(), "", "lib", got["lib"])
+	if arg != got["lib"] || report.Local || report.Checkout != "" {
+		t.Fatalf("a remote primary's declared source resolved to %q (%+v), want its URL and no local checkout", arg, report)
+	}
+
+	// A malformed file is an error there as it is on disk.
+	if err := os.WriteFile(filepath.Join(remote, ".discobox", "sources.json"), []byte(`{"lib": "../lib"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("commit", "-am", "declare a path")
+	if _, err := readRemoteDeclaredSources(context.Background(), url, strings.TrimSpace(git("rev-parse", "HEAD")), "main"); err == nil || !strings.Contains(err.Error(), "not a Git URL") {
+		t.Fatalf("a declared path was accepted: %v", err)
+	}
+}

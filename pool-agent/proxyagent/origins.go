@@ -2,6 +2,8 @@ package proxyagent
 
 import (
 	"net/url"
+
+	"github.com/discobox-ai/discobox/internal/sourcecache"
 )
 
 // The origins host: where a sandbox fetches its sources' origins, which the
@@ -13,7 +15,7 @@ const (
 	// the gate host (GateHost, api.discobox.internal) under the same reserved
 	// name: both are the pool's, answered by its proxy, and neither resolves
 	// anywhere else.
-	OriginsHost = "git.discobox.internal"
+	OriginsHost = sourcecache.PoolOriginsHost
 
 	// OriginsListenAddress is where the pool agent serves its sandboxes'
 	// origins to the proxy. Loopback, like ControlListenAddress: the proxy

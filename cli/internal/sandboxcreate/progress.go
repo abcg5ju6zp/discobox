@@ -29,13 +29,19 @@ const (
 	// dirty one spends its time in a snapshot the caller already agreed to.
 	StepPreparingSource Step = "preparing source"
 	StepCreating        Step = "creating the discobox"
-	// StepAwaitingSource is the wait for the sandbox to park ready to receive a
-	// push. Provisioning has to get that far first — the image is pulled and the
+	// StepAwaitingSource is the wait for a sandbox created before a pool
+	// cached Git to park ready to receive a push into its own repository.
+	// Provisioning has to get that far first — the image is pulled and the
 	// container is created before the sandbox parks — so this is the step that
 	// can take a while on a cold pool, and the one that gives way to the
-	// provisioning phases it is waiting on as they are recorded.
+	// provisioning phases it is waiting on as they are recorded. A source
+	// delivered into a pool's cache waits for nothing of the kind.
 	StepAwaitingSource Step = "waiting for the discobox to accept its source"
 	StepPushingSource  Step = "pushing source"
+	// StepFetchingSource is a remote-URL source being fetched into this
+	// client's own cache of its remote, because its pool does not hold it yet
+	// and only a client reaches a remote (ADR 26-10-10-545 §3).
+	StepFetchingSource Step = "fetching source"
 )
 
 // Report receives each step as it begins. A nil Report is valid and reports

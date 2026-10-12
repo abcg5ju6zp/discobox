@@ -50,12 +50,26 @@ const (
 	CallerHeader = "X-Discobox-Git-Cache-Caller"
 )
 
+// PoolOriginsHost is the host a sandbox reaches its pool's origins at (ADR
+// 26-10-08-561). A remote there is a sandbox's plumbing — the route to its
+// own pool — and never a source's remote: it resolves nowhere but inside that
+// sandbox, and names no repository anyone else could reach.
+const PoolOriginsHost = "git.discobox.internal"
+
+// OnPoolOriginsHost reports whether remote is on a pool's origins host.
+func OnPoolOriginsHost(remote string) bool {
+	normalized := NormalizeRemote(remote)
+	host, _, _ := strings.Cut(normalized, "/")
+	host, _, _ = strings.Cut(host, ":")
+	return host == PoolOriginsHost
+}
+
 // RemoteKey is the key of the cache for remote, or empty when remote does not
 // name a repository on a network: a path on the client's machine means
 // nothing on another, and is not a remote here.
 func RemoteKey(remote string) string {
 	normalized := NormalizeRemote(remote)
-	if normalized == "" {
+	if normalized == "" || OnPoolOriginsHost(remote) {
 		return ""
 	}
 	return remotePrefix + normalized

@@ -17,6 +17,7 @@ import (
 	"github.com/discobox-ai/discobox/cli/internal/origin"
 	"github.com/discobox-ai/discobox/internal/hostid"
 	"github.com/discobox-ai/discobox/internal/originkey"
+	"github.com/discobox-ai/discobox/internal/sourcecache"
 	"github.com/discobox-ai/discobox/platform"
 	"github.com/discobox-ai/discobox/sandboxpath"
 	"github.com/discobox-ai/x/gitutil"
@@ -148,9 +149,9 @@ type resolvedRunSource struct {
 	// checkout — so there is nothing there a sandbox's origin may be bound to
 	// (ADR 0093). Its commits stay here, as NoLocalCommits' do.
 	NoLocalGitDirectory bool
-	// UpstreamURL is the remote the checked-out branch tracks in the local
-	// repository, which the sandbox adds as its upstream remote. Empty when the
-	// branch tracks nothing the sandbox could reach (localUpstreamURL).
+	// UpstreamURL is the local repository's remote, which the sandbox has as
+	// its origin and which names the pool cache the source is delivered into.
+	// Empty when the repository has none a sandbox could reach (localRemote).
 	UpstreamURL string
 	Checkout    resolvedRunSourceCheckout
 	Workspace   resolvedRunSourceWorkspace
@@ -375,6 +376,9 @@ func resolveLocalRunSource(ctx context.Context, source, ref string, explicitRef 
 	if err != nil {
 		return resolvedRunSource{}, err
 	}
+	if err := refuseShallowRepository(ctx, repoRoot); err != nil {
+		return resolvedRunSource{}, err
+	}
 	noGitDirectory, err := noLocalGitDirectory(repoRoot)
 	if err != nil {
 		return resolvedRunSource{}, err
@@ -385,7 +389,7 @@ func resolveLocalRunSource(ctx context.Context, source, ref string, explicitRef 
 			return resolvedRunSource{}, err
 		}
 		resolved.NoLocalGitDirectory = noGitDirectory
-		resolved.UpstreamURL = localUpstreamURL(ctx, repoRoot, resolved.Checkout)
+		resolved.UpstreamURL = localRemoteURL(ctx, repoRoot, resolved.Checkout)
 		return resolved, nil
 	}
 	destination := localRunDestination(opts.Platform, repoRoot, absSource)
@@ -410,7 +414,7 @@ func resolveLocalRunSource(ctx context.Context, source, ref string, explicitRef 
 			return resolvedRunSource{}, err
 		}
 		resolved.Checkout = localRunCheckout(ctx, repoRoot, ref, commit)
-		resolved.UpstreamURL = localUpstreamURL(ctx, repoRoot, resolved.Checkout)
+		resolved.UpstreamURL = localRemoteURL(ctx, repoRoot, resolved.Checkout)
 		return resolved, nil
 	}
 	baseCommit, err := gitutil.ResolveCommit(ctx, repoRoot, "HEAD")
@@ -418,7 +422,7 @@ func resolveLocalRunSource(ctx context.Context, source, ref string, explicitRef 
 		return resolvedRunSource{}, err
 	}
 	resolved.Checkout = localRunCheckout(ctx, repoRoot, "", baseCommit)
-	resolved.UpstreamURL = localUpstreamURL(ctx, repoRoot, resolved.Checkout)
+	resolved.UpstreamURL = localRemoteURL(ctx, repoRoot, resolved.Checkout)
 	if opts.IncludeDirty == IncludeDirtyNever {
 		return resolved, nil
 	}
@@ -443,6 +447,23 @@ func resolveLocalRunSource(ctx context.Context, source, ref string, explicitRef 
 	}
 	resolved.Workspace = workspace
 	return resolved, nil
+}
+
+// refuseShallowRepository refuses a shallow checkout as a source, saying what
+// to do about it (ADR 26-10-10-545 §3).
+//
+// A source is delivered into a cache that every sandbox of its remote shares,
+// and a shallow push would have to cut that cache's history short for all of
+// them: a repository's shallow file is the repository's. Deepening someone's
+// checkout is not this command's to do, so it says how.
+func refuseShallowRepository(ctx context.Context, repoRoot string) error {
+	out, err := gitutil.Output(ctx, repoRoot, nil, nil, "rev-parse", "--is-shallow-repository")
+	if err != nil || strings.TrimSpace(out) != "true" {
+		// A git too old to answer has no way to say, and the pool refuses a
+		// shallow push itself.
+		return nil //nolint:nilerr // not knowing is not a refusal
+	}
+	return fmt.Errorf("%s is a shallow clone, and a discobox's source is delivered with its whole history; run `git fetch --unshallow` in it, then try again", repoRoot)
 }
 
 // noLocalGitDirectory reports whether repoRoot's .git is anything other than
@@ -770,15 +791,29 @@ func localRunCheckout(ctx context.Context, repoRoot, ref, commit string) resolve
 	return resolvedRunSourceCheckout{Commit: commit, RefType: runSourceRefTypeCommit}
 }
 
-// localUpstreamURL is the URL of the remote the checked-out branch tracks in
-// repoRoot, for the sandbox to add as its upstream remote. Its origin is this
-// repository, so the remote this checkout pushes to and pulls from is otherwise
-// unknown inside it.
+// localRemoteURL is the URL of a local checkout's remote: what the sandbox has
+// as its origin, and what names the pool cache the source is delivered into
+// (ADR 26-10-10-545 §§2, 6).
+func localRemoteURL(ctx context.Context, repoRoot string, checkout resolvedRunSourceCheckout) string {
+	_, url := localRemote(ctx, repoRoot, checkout)
+	return url
+}
+
+// localRemote is a local checkout's remote, by the name this repository
+// configures it under and its URL: the remote the checked-out branch tracks,
+// else origin, else the repository's only remote.
 //
-// Only the remote travels, not the tracking: the branch in the sandbox keeps
-// tracking origin. And only a remote the sandbox can reach: a branch that
-// tracks another local branch (".") or a remote that is a path on this machine
-// has nothing to offer it, and gets no upstream rather than a broken one.
+// Tracking is the first answer and not the only one. A branch that tracks
+// nothing is how most work starts, and it must not move a checkout out of its
+// remote's cache; a branch that tracks a fork is in the fork's. The name is
+// empty when the branch tracks a URL written out rather than a configured
+// remote, which has no remote-tracking refs to deliver.
+//
+// Only a remote the sandbox could reach counts: a branch that tracks another
+// local branch ("."), or a remote that is a path on this machine, is passed
+// over (networkRemoteURL). So is a remote on a pool's origins host — inside a
+// discobox that is the checkout's route to its own pool, another sandbox's
+// plumbing, and no repository's remote.
 //
 // A URL already written in full is sent as it is, not as this machine's
 // url.*.insteadOf rewrites it: those are this machine's way of reaching it
@@ -789,20 +824,47 @@ func localRunCheckout(ctx context.Context, repoRoot, ref, commit string) resolve
 // fetches from. Credentials written into the URL are dropped
 // (networkRemoteURL): the URL is stored on the sandbox and the sandbox's own
 // credentials are what reach the remote.
-func localUpstreamURL(ctx context.Context, repoRoot string, checkout resolvedRunSourceCheckout) string {
-	if checkout.RefType != runSourceRefTypeBranch || checkout.RefName == "" {
-		return ""
+func localRemote(ctx context.Context, repoRoot string, checkout resolvedRunSourceCheckout) (name, remoteURL string) {
+	configured := map[string]struct{}{}
+	if out, err := gitutil.Output(ctx, repoRoot, nil, nil, "remote"); err == nil {
+		for _, remote := range strings.Fields(out) {
+			configured[remote] = struct{}{}
+		}
 	}
-	remote, err := gitutil.Output(ctx, repoRoot, nil, nil, "config", "--get", "branch."+checkout.RefName+".remote")
-	if err != nil {
-		return ""
+	var candidates []string
+	if checkout.RefType == runSourceRefTypeBranch && checkout.RefName != "" {
+		if tracked, err := gitutil.Output(ctx, repoRoot, nil, nil, "config", "--get", "branch."+checkout.RefName+".remote"); err == nil {
+			if tracked = strings.TrimSpace(tracked); tracked != "" && tracked != "." {
+				candidates = append(candidates, tracked)
+			}
+		}
 	}
-	remote = strings.TrimSpace(remote)
-	if remote == "" || remote == "." {
-		return ""
+	if _, ok := configured["origin"]; ok {
+		candidates = append(candidates, "origin")
 	}
-	// branch.<name>.remote may name a URL rather than a configured remote;
-	// ls-remote --get-url resolves either, and is the first URL rewritten.
+	if len(configured) == 1 {
+		for remote := range configured {
+			candidates = append(candidates, remote)
+		}
+	}
+	for _, candidate := range candidates {
+		value := remoteFetchURL(ctx, repoRoot, candidate)
+		if value == "" || sourcecache.OnPoolOriginsHost(value) {
+			continue
+		}
+		if _, ok := configured[candidate]; !ok {
+			candidate = ""
+		}
+		return candidate, value
+	}
+	return "", ""
+}
+
+// remoteFetchURL is the network URL remote is fetched from, or empty when it
+// has none; see localRemote for which spelling of it is taken.
+func remoteFetchURL(ctx context.Context, repoRoot, remote string) string {
+	// The name may be a URL rather than a configured remote; ls-remote
+	// --get-url resolves either, and is the first URL rewritten.
 	resolved, err := gitutil.Output(ctx, repoRoot, nil, nil, "ls-remote", "--get-url", remote)
 	if err != nil {
 		return ""

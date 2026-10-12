@@ -120,6 +120,8 @@ func autoPushable(source apimodel.GitSource) bool {
 type sourcePush struct {
 	Slug   string
 	Branch string
+	// Remote is the remote the discobox's checkout sees Branch under.
+	Remote string
 	// Commit is the local tip resolved for this source, whether or not it was
 	// sent — what a caller records against a failure so the same refused push
 	// is not attempted again every beat.
@@ -188,6 +190,7 @@ func (a *App) pushSandboxSources(ctx context.Context, client *apiclientgen.Clien
 		push := sourcePush{
 			Slug:     entry.slug,
 			Branch:   resolved.Branch,
+			Remote:   sandboxpush.PoolRemote(entry.source),
 			Commit:   resolved.Commit,
 			UpToDate: err == nil && resolved.UpToDate(),
 		}
@@ -247,6 +250,7 @@ func (a *App) pushSandboxSources(ctx context.Context, client *apiclientgen.Clien
 		pushes = append(pushes, sourcePush{
 			Slug:   entry.slug,
 			Branch: result.Branch,
+			Remote: sandboxpush.PoolRemote(entry.source),
 			Commit: result.Commit,
 			Pushed: err == nil && !result.UpToDate,
 			Err:    err,

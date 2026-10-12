@@ -56,8 +56,13 @@ func TestPushableIsThisMachinesPushDeliveredDiscoboxes(t *testing.T) {
 
 	bound := pushDeliveredSandbox()
 	boundSource, _ := bound.Config.Source.Get()
-	boundSource.Delivery.Reset() // read live off the directory instead
+	boundSource.Delivery.Reset() // once read live off the directory; a push is how it follows it now
 	bound.Config.SetSource(apiclientgen.NewOptGitSource(boundSource))
+
+	cached := pushDeliveredSandbox()
+	cachedSource, _ := cached.Config.Source.Get()
+	cachedSource.Delivery = apiclientgen.NewOptGitSourceDelivery(apiclientgen.GitSourceDeliveryCache)
+	cached.Config.SetSource(apiclientgen.NewOptGitSource(cachedSource))
 
 	archived := pushDeliveredSandbox()
 	archived.Runtime.DisplayState = apiclientgen.NewOptSandboxRuntimeDisplayState("archived")
@@ -97,8 +102,9 @@ func TestPushableIsThisMachinesPushDeliveredDiscoboxes(t *testing.T) {
 		want    bool
 	}{
 		{"pushed from here", pushDeliveredSandbox(), thisHost, true},
+		{"delivered into its pool's cache from here", cached, thisHost, true},
 		{"cloned from a remote", remote, thisHost, false},
-		{"read live off the directory", bound, thisHost, false},
+		{"once read live off the directory", bound, thisHost, true},
 		{"archived", archived, thisHost, false},
 		{"still awaiting its source", parked, thisHost, false},
 		{"created on another machine", elsewhere, thisHost, false},
@@ -113,15 +119,16 @@ func TestPushableIsThisMachinesPushDeliveredDiscoboxes(t *testing.T) {
 	}
 }
 
-// A second source can need a push while the primary one is bound, so the row is
-// pushable when any source is.
+// A second source can be something to push while the primary one is a remote,
+// so the row is pushable when any source is.
 func TestPushableFollowsASecondSource(t *testing.T) {
 	sandbox := pushDeliveredSandbox()
 	primary, _ := sandbox.Config.Source.Get()
-	primary.Delivery.Reset()
+	primary.Delivery = apiclientgen.NewOptGitSourceDelivery(apiclientgen.GitSourceDeliveryCache)
+	primary.LocalDirectory.Reset()
 	sandbox.Config.SetSource(apiclientgen.NewOptGitSource(primary))
 	if pushable(sandbox, thisHost) {
-		t.Fatal("a bound primary source is nothing to push")
+		t.Fatal("a primary source that is a remote is nothing to push")
 	}
 
 	reference := apimodel.GitSource{
