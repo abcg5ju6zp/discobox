@@ -524,6 +524,16 @@ func New(ctx context.Context, ds DataSource, options ...Option) *Model {
 // workspace does.
 func (m *Model) oneShot() bool { return m.oneRun || m.attach != nil }
 
+// made is the discobox a window opened on one run made, and nil for any other
+// window or a run that made none. Such a run's window is the attach on what it
+// made, so that is where it is kept (see created).
+func (m *Model) made() *Sandbox {
+	if !m.oneRun {
+		return nil
+	}
+	return m.attach
+}
+
 // Init loads what the window is drawn from. The session comes first because the
 // header and the filter are read from it; the listing and the harnesses follow
 // on their own, so a slow server delays the rows rather than the window. The

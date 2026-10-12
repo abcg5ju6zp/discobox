@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	apimodel "github.com/discobox-ai/discobox/api/model"
@@ -611,5 +612,20 @@ func (a *App) attachRunSandbox(cmd *cobra.Command, projectID string, sandbox *ap
 	// run connects is shown from the start rather than only output produced
 	// after the attach. If the sandbox itself stops, the attach ends — run does
 	// not restart the sandbox.
-	return a.attachSandboxTerminal(ctx, projectID, sandbox.ID, primaryExecID, execAttachOptions{}, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+	err := a.attachSandboxTerminal(ctx, projectID, sandbox.ID, primaryExecID, execAttachOptions{}, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+	reportRunSandbox(cmd.ErrOrStderr(), sandbox.ID, sandbox.DisplayName)
+	return err
+}
+
+// reportRunSandbox names the discobox a run made and attached to, once the
+// attach is over. Whatever the attach drew — a full-screen harness, or the
+// window — is gone from the terminal by then, and with it the only place the
+// discobox was named, so somebody who detached would otherwise be left not
+// knowing which one is still running for them.
+func reportRunSandbox(w io.Writer, id, name string) {
+	if name = strings.TrimSpace(name); name != "" && name != id {
+		fmt.Fprintf(w, "Discobox %s (%s); \"discobox attach %s\" to return to it\n", id, terminalSafe(name), id)
+		return
+	}
+	fmt.Fprintf(w, "Discobox %s; \"discobox attach %s\" to return to it\n", id, id)
 }

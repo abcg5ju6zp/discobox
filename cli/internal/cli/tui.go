@@ -135,8 +135,11 @@ func (a *App) runConsole(cmd *cobra.Command, leaderFlag string, options ...tui.O
 	// saves the terminal's state as it finds it, and a crash before this
 	// point leaves nothing to put back.
 	guard := startConsoleGuard()
-	err = tui.Run(cmd.Context(), ds, options...)
+	made, err := tui.Run(cmd.Context(), ds, options...)
 	guard.Release()
+	if made != nil {
+		reportRunSandbox(cmd.ErrOrStderr(), made.ID, made.Name)
+	}
 	return err
 }
 
