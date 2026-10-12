@@ -30,6 +30,8 @@ type fakePull struct {
 	mergeable string
 	// merged is every merge asked for, as its body.
 	merged []string
+	// endless gives the review comments a next page, every time.
+	endless bool
 	// unsettled is how many reads of the pull request answer "unknown" for
 	// whether it can merge, before the answer.
 	unsettled int
@@ -123,6 +125,12 @@ func (f *fakePull) serve(t *testing.T) *httptest.Server {
 			f.mu.Unlock()
 			fmt.Fprint(w, `{"merged": true}`)
 		case repo + "/pulls/9/comments":
+			f.mu.Lock()
+			endless := f.endless
+			f.mu.Unlock()
+			if endless {
+				w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?page=2>; rel="next"`, r.Host, r.URL.Path))
+			}
 			fmt.Fprint(w, `[
 				{"id": 1, "pull_request_review_id": 100, "path": "reaper.go", "line": 3, "original_line": 3,
 				 "diff_hunk": "@@ -1,3 +1,4 @@\n-all()\n+stopped()", "user": {"login": "bob"}, "body": "What about paused ones?",
@@ -422,8 +430,8 @@ func TestChecksThatCouldNotBeReadAreNotNoChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(again.Pull.Checks) != len(first.Pull.Checks) {
-		t.Errorf("a failed read of the checks left %d of them, want the %d known", len(again.Pull.Checks), len(first.Pull.Checks))
+	if len(again.Pull.Checks) != len(first.Pull.Checks) || !again.Pull.ChecksPartial {
+		t.Errorf("a failed read of the checks left %d of them (partial %v), want the %d known and said to be no longer the whole", len(again.Pull.Checks), again.Pull.ChecksPartial, len(first.Pull.Checks))
 	}
 	full, err := c.Issue(t.Context(), "acme", "foo", 9, true)
 	if err != nil {
@@ -461,5 +469,33 @@ func TestAFullReadWaitsForGitHubToSayWhetherItCanMerge(t *testing.T) {
 	}
 	if issue.Pull.Mergeable != "unknown" || asked != 1+mergeSettleTries {
 		t.Errorf("mergeable = %q after %d reads of the pull request, want it left unknown after %d", issue.Pull.Mergeable, asked, 1+mergeSettleTries)
+	}
+}
+
+// More review comments than are read is said, as a long timeline is: the
+// threads past the last page read are not on the tab.
+func TestMoreReviewCommentsThanAreReadIsSaid(t *testing.T) {
+	t.Parallel()
+	fake := &fakePull{endless: true}
+	issue, err := client(fake.serve(t), "tok").Issue(t.Context(), "acme", "foo", 9, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	for _, path := range fake.requests() {
+		if path == "GET /repos/acme/foo/pulls/9/comments" {
+			asked++
+		}
+	}
+	if asked != timelinePages || !issue.Truncated {
+		t.Errorf("%d pages of review comments read, truncated %v; want %d and said", asked, issue.Truncated, timelinePages)
+	}
+
+	whole, err := client((&fakePull{}).serve(t), "tok").Issue(t.Context(), "acme", "foo", 9, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if whole.Truncated {
+		t.Errorf("a pull request read whole says it was cut short")
 	}
 }
