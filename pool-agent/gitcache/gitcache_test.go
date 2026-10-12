@@ -249,11 +249,19 @@ func TestTheRecordOfARemoteFollowsWhatWasLastDelivered(t *testing.T) {
 	if got := refs(t, path, RemoteRefPrefix); !slices.Equal(got, []string{"refs/cache/heads/main", "refs/cache/heads/release/1.0"}) {
 		t.Fatalf("remote refs after a push into an older namespace = %v", got)
 	}
+	// A delivery that brings only a tag still records the tag.
+	w.git("tag", "v2")
+	if out, err := w.push(s, path, "sbx-tagged", "widget", "", next+":refs/heads/main", "refs/tags/v2"); err != nil {
+		t.Fatalf("push: %v\n%s", err, out)
+	}
+	if got := refs(t, path, remoteTags); !slices.Equal(got, []string{"refs/cache/tags/v2"}) {
+		t.Fatalf("recorded tags after a tag-only delivery = %v", got)
+	}
 	// A delivery that names none of the remote's branches says nothing of them.
 	if out, err := w.push(s, path, "sbx-three", "widget", "", tip+":refs/heads/main"); err != nil {
 		t.Fatalf("push: %v\n%s", err, out)
 	}
-	if got := refs(t, path, RemoteRefPrefix); len(got) != 2 {
+	if got := refs(t, path, remoteHeads); len(got) != 2 {
 		t.Fatalf("remote refs after a delivery with no remote branches = %v", got)
 	}
 }
