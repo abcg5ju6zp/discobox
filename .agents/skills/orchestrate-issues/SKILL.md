@@ -1,9 +1,9 @@
 ---
 name: orchestrate-issues
-description: Run a set of discobox issues as a lead discobox — launch one worker discobox per issue with the deliver-issue skill, or, given `triage`, keep a fixed pool of 4–6 boxes triaging untriaged issues one after another and move the ready ones straight into delivery, hand them credentials within a delegation, watch their screens and answer what they ask, keep the host's disk from filling, track their pull requests while a human merges them, and have conflicted ones rebase. Use when the user wants several issues (a tracking issue's sub-issues, a wave of them) implemented in parallel discoboxes and delivered as PRs, or wants the open untriaged issues triaged.
+description: Run a set of discobox issues as a lead discobox — launch one worker discobox per issue with the deliver-issue skill, or, given `triage`, launch one box per untriaged issue, at most 4–6 at a time, and move the ready ones straight into delivery in the box that triaged them, hand them credentials within a delegation, watch their screens and answer what they ask, keep the host's disk from filling, track their pull requests while a human merges them, and have conflicted ones rebase. Use when the user wants several issues (a tracking issue's sub-issues, a wave of them) implemented in parallel discoboxes and delivered as PRs, or wants the open untriaged issues triaged.
 allowed-tools: Bash, Read, Write, Edit, Monitor, AskUserQuestion, Skill
 metadata:
-  argument-hint: "<issue numbers | a tracking issue to take the next unblocked wave from | triage [pool size 4–6]>"
+  argument-hint: "<issue numbers | a tracking issue to take the next unblocked wave from | triage [max concurrency 4–6]>"
 ---
 
 # Orchestrate Issues
@@ -13,14 +13,20 @@ start them, unblock them, and keep a human's to-do list. You never apply a
 worker's commits and never merge: work lands as PRs a human merges.
 
 Two modes. Given issues, each gets a worker that delivers it (§2–§5). Given
-`triage`, a fixed pool of boxes triages the open untriaged issues one after
-another, and a triaged issue ready for work goes straight into delivery in the
+`triage`, each open untriaged issue gets a box that triages it, a few at a
+time, and a triaged issue ready for work goes straight into delivery in the
 box that triaged it (§6). §1 is the same for both.
+
+**A box is single purpose: one issue, for its whole life.** It is launched for
+that issue, may go from triaging it to delivering it, and is then retired.
+Never hand a box a second issue, and never `/clear` one to start over: a new
+issue gets a new box. What limits the run is a **maximum concurrency** — how
+many boxes are up at once — not a set of boxes to keep busy.
 
 `orchestrate.sh` beside this file is the loop: `status`, `screen`, `say`,
 `power`, `retire`, `approve`, `kick`, `idle`, `github`, `prs`, `rebase`,
-`after-merge`, `watch`, and for triage `untriaged`, `pool`, `triage`,
-`deliver`. It keeps its state in `~/.local/state/orchestrate` (a scratchpad can
+`after-merge`, `watch`, and for triage `slots`, `untriaged`, `triages`,
+`triage`, `deliver`. It keeps its state in `~/.local/state/orchestrate` (a scratchpad can
 be wiped between sessions) and finds use IDs by their descriptions, so renewed
 grants just work.
 Copy it there and run it with `bash` (`/dev/shm` is mounted noexec).
@@ -123,13 +129,16 @@ and keep its request ID (do not filter the `progress` line out), so
   and the delegation is written around it. Work with no issue gets one filed
   first (`gh api POST …/issues`), with everything the worker needs in it: what
   was seen, the cause with file and function names, and what a fix must keep.
-- **Run at most four workers at once** (in triage mode, the pool size counts
-  every box, triaging or delivering — §6). Every worker builds Docker images
+- **Run at most four boxes at once** — the maximum concurrency, counting every
+  box that is up, triaging or delivering (§6). Every box builds Docker images
   in its own cache (tens of GB each, never shared) and the host disk is one
-  device for the whole pool. More than four has filled it. The user may raise
+  device for all of them. More than four has filled it. The user may raise
   the cap when disk holds up; six ran with 300G+ free once each worker kept to
   one Docker build at a time and the lead's own image watcher was off (`watch`
-  stops it each time it starts, since a session restart brings it back).
+  stops it each time it starts, since a session restart brings it back). Check
+  `df -h /` before the first launch: under 100G free, start with fewer and say
+  so. A finished box is retired, which frees its slot for a new box; the cap
+  is never met by giving a box more work.
 
 ## 3. Launch
 
@@ -205,8 +214,9 @@ exits on:
 Keep one table for the user, re-posted whenever a row changes. It is status
 and to-do in one. Rows are ranked by priority with a `#` column, and the columns
 are `# | Item | Agent | Issue | PR | Doing | Your move | Why this rank`: Item is
-a plain description with no numbers, Agent the box ID, Issue and PR bare
-numbers, each `-` when it does not apply. Doing is what its agent is doing
+a plain description with no numbers, Agent the full sandbox ID (`sbx_…`) of
+the box that did the work — on every row, in every re-post, stopped or not —
+Issue and PR bare numbers, each `-` when it does not apply. Doing is what its agent is doing
 (working, waiting for you, waiting on CI or review, done; never whether the box
 is running). Your move stays `–` for a PR until every check on its head is
 green, and only then reads "Review and merge"; the exception is a failing PR
@@ -225,8 +235,8 @@ merge, `after-merge` waits for GitHub to recompute and has every PR that went `d
 conflicts repeatedly should be merged as soon as it is green, and nothing
 pushed straight to `main` in between.
 
-`after-merge` retires a merged PR's worker (in triage mode it names the box
-instead, for §6 to move back into the pool). When a worker's issue turns out
+`after-merge` retires a merged PR's worker, in both modes: the box is done,
+and its slot goes to a new box. When a worker's issue turns out
 to need nothing, run `retire <issue>` yourself. It runs `discobox tag
 <discobox-id> to-delete`, adding `merged` for a merged PR and dropping `ready`
 and `blocked` (a stopped worker cannot move its own tag), and stops the box.
@@ -238,11 +248,11 @@ verify, the follow-ups worth filing, and take the next wave.
 
 ## 6. Triage mode
 
-`triage [N]`: a pool of **N boxes, 4 to 6 (default 4)**, works through the
-open issues with no `triaged` label, oldest first, one issue per box at a
-time. N caps **every** box this run has running — triaging and delivering
-together — because each one builds its own images on the one disk. While
-deliveries run, the triage pool is smaller.
+`triage [N]`: every open issue with no `triaged` label gets **its own box**,
+oldest first, with at most **N boxes up at once, 4 to 6 (default 4)**. N is
+the maximum concurrency of the whole run — triaging and delivering together —
+because each box builds its own images on the one disk. Pass it to every call
+as `ORCH_MAX=<N>` when it is not 4. While deliveries run, fewer triages do.
 
 **Ask up front**, with §1's requests, for the deliver policy — the user's
 standing answer to "deliver it now?":
@@ -256,35 +266,40 @@ standing answer to "deliver it now?":
 - **Never** deliver `deliver=no`; it is reported, not asked.
 
 **Start.** `bash orchestrate.sh untriaged` lists the candidates (open, no
-`triaged`, no `platform/*`, not held by a box). Launch one box per issue, up to
-N, as in §3 with the prompt `"Triage issue #<N> in discobox-ai/discobox."`,
-and record it in the pool, not the workers:
-`printf '<id>\t<N>\ttriaging\n' >> ~/.local/state/orchestrate/pool.tsv`.
+`triaged`, no `platform/*`, no box of this run on them). `bash orchestrate.sh
+triage <N>` launches a new box for issue N, as in §3 with the prompt `"Triage
+issue #<N> in discobox-ai/discobox."`, and records it in `triage.tsv`. It
+refuses an issue that already has a box, and refuses when N boxes are up
+(`slots` says how many are free). Launch one at a time, down the list, until
+it refuses.
 
 **Drive** as in §4 — `watch` approves, kicks, and answers to the same
 signals — plus one more: it exits on `TRIAGED <id> #<N>: <verdict line>` when
-a pool box prints its verdict. `pool` shows every pool box and its last
-verdict. For each verdict, read the issue's labels and triage comment, then:
+a triaging box prints its verdict. `triages` shows every triage box, its
+issue and its verdict. For each verdict, read the issue's labels and triage
+comment, then:
 
 - **Deliver** (`auto` under the policy, or `ask` and the user said yes):
-  `bash orchestrate.sh deliver <N>`. The box leaves the pool and becomes a
-  worker (`workers.tsv`), told `"Deliver issue #<N> in discobox-ai/discobox."`
-  with its context kept — no `/clear` — so it starts from its failing test.
-  From here it is a §4–§5 worker.
-- **Next** (`no`, or the user said not now): `bash orchestrate.sh triage <id>
-  <M>` with the next `untriaged` issue. It types `/clear` first, so the box
-  does not carry one issue's context into the next; triage-issue §0 clears the
-  checkout. An `ask` waiting on the user holds its box until answered; give
-  the others their next issue meanwhile.
-- **Out of issues**: `retire <id>` the idle box (it is tagged `to-delete` and
-  stopped).
+  `bash orchestrate.sh deliver <N>`. The same box goes on to deliver the same
+  issue: it moves to `workers.tsv`, told `"Deliver issue #<N> in
+  discobox-ai/discobox."` with its context kept, so it starts from its failing
+  test. From here it is a §4–§5 worker, and it keeps its slot.
+- **Done** (`no`, or the user said not now): `retire <id>`. The box is tagged
+  `to-delete` and stopped, whatever is left to triage.
+- **Waiting on the user** (`ask`, not yet answered): `power stop <id>`, without
+  retiring it. The stopped box keeps its context and checkout and gives up its
+  slot; `deliver <N>` starts it again when the answer is yes (and waits for a
+  slot), `retire <id>` ends it when the answer is no.
 
-When a delivering box's PR merges, it rejoins the pool if `untriaged` still
-lists work: `triage <id> <M>` moves it back (its Docker cache is warm),
-instead of tagging it `to-delete`. Launch a new box only while fewer than N
-are running.
+Every verdict, merge and retirement frees a slot: fill it with `triage <M>`
+for the next `untriaged` issue, in a **new** box. A warm Docker cache is not a
+reason to reuse one — a box that worked on another issue carries its checkout,
+its tags and its footer on the triage comment into the next, and the user can
+no longer tell which box did what. An issue whose box was retired and is
+wanted delivered after all gets a fresh worker (§3).
 
-Keep the user's to-do list as in §5, plus the triage tally: triaged, delivered
-or delivering, waiting on their answer, and `no` with each reason
-(`needs-info`, a Windows/macOS agent, a decision). When `untriaged` is empty
-and every PR has merged, report it and stop.
+Keep the user's to-do list as in §5 — each issue's row names its one box —
+plus the triage tally: triaged, delivered or delivering, waiting on their
+answer, and `no` with each reason (`needs-info`, a Windows/macOS agent, a
+decision). When `untriaged` is empty and every PR has merged, report it and
+stop.
