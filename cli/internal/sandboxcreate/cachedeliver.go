@@ -234,7 +234,7 @@ func (d cacheDelivery) deliverRemote(ctx context.Context, source apimodel.GitSou
 		_, _ = gitutil.Output(ctx, cache, nil, sandboxgit.NoPromptEnv,
 			sandboxgit.AuthArgs(d.token, []string{"fetch", "--quiet", "--no-tags", poolURL, poolTrackingRefspec})...)
 	}
-	if err := fetchRemote(ctx, cache, remote, commit); err != nil {
+	if err := fetchRemote(ctx, cache, remote, commit, d.report); err != nil {
 		return fmt.Errorf("fetch source %q from %s: %w", slug, remote, err)
 	}
 	d.report.step(StepPushingSource)
@@ -255,10 +255,9 @@ func (d cacheDelivery) deliverRemote(ctx context.Context, source apimodel.GitSou
 // either the other delivery has been reported and there is nothing left to
 // do, or the branch holds this commit and the push is a no-op.
 func (d cacheDelivery) push(ctx context.Context, repoRoot, originURL string, refspecs []string) error {
-	args := append([]string{"push", "--atomic", originURL}, refspecs...)
+	args := append([]string{"push", "--atomic", "--progress", originURL}, refspecs...)
 	attempt := func() error {
-		_, err := gitutil.Output(ctx, repoRoot, nil, sandboxgit.NoPromptEnv, sandboxgit.PushArgs(d.token, args)...)
-		return err
+		return gitTransfer(ctx, repoRoot, sandboxgit.NoPromptEnv, StepPushingSource, d.report, sandboxgit.PushArgs(d.token, args)...)
 	}
 	err := attempt()
 	if err == nil {
@@ -462,12 +461,12 @@ func clientCache(ctx context.Context, remote string) (string, error) {
 // the user's own Git configuration and credentials, and makes sure it holds
 // commit. Git never asks: this runs under a status line, where a prompt is a
 // hang with nothing on screen to explain it.
-func fetchRemote(ctx context.Context, cache, remote, commit string) error {
-	fetch := []string{"fetch", "--quiet", "--prune", "--no-tags", remote,
+func fetchRemote(ctx context.Context, cache, remote, commit string, report Report) error {
+	fetch := []string{"fetch", "--progress", "--prune", "--no-tags", remote,
 		"+refs/heads/*:" + remoteTrackingPrefix + "*", "+refs/tags/*:refs/tags/*"}
 	var err error
 	for attempt := 0; attempt < clientFetchAttempts; attempt++ {
-		if _, err = gitutil.Output(ctx, cache, nil, sandboxgit.NoPromptEnv, fetch...); err == nil || ctx.Err() != nil {
+		if err = gitTransfer(ctx, cache, sandboxgit.NoPromptEnv, StepFetchingSource, report, fetch...); err == nil || ctx.Err() != nil {
 			break
 		}
 	}
