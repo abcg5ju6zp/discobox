@@ -108,8 +108,10 @@ func TestSandboxDisplayNamePrefersTheMetaName(t *testing.T) {
 	if out.DisplayName != "Daily GH Check In" || meta.Name.Or("") != "Daily GH Check In" || out.Config.Name != "generated-name" {
 		t.Fatalf("displayName = %q, meta.name = %q, config.name = %q", out.DisplayName, meta.Name.Or(""), out.Config.Name)
 	}
-	if meta.Tags.Set || meta.Description.Set {
-		t.Fatalf("meta = %+v, want only the name: a field that is not set is left out", meta)
+	// The description is left out when unset; the tags are sent empty, for a
+	// client from before they were optional.
+	if tags, sent := meta.Tags.Get(); !sent || len(tags) != 0 || meta.Description.Set {
+		t.Fatalf("meta = %+v, want the name, empty tags and no description", meta)
 	}
 
 	// Cleared, the title names it again.

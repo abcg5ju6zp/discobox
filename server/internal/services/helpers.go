@@ -368,11 +368,14 @@ func SandboxToAPI(sandbox *model.Sandbox, fallback *model.HarnessConfig) (server
 	}
 	// The copy of what the sandbox holds (ADR 0136). Before it has reported,
 	// that is the description it was created with and nothing else;
-	// metaObservedAt is absent until then, which is what says so. Each field
-	// is there only when set (ADR 26-10-12-026 §1).
-	meta := map[string]any{}
-	if len(sandbox.Tags) > 0 {
-		meta["tags"] = sandbox.Tags
+	// metaObservedAt is absent until then, which is what says so. The name
+	// and the description are there only when set (ADR 26-10-12-026 §1). The
+	// tags are there always, empty or not: the schema no longer requires
+	// them, but a client generated from before it stopped does, and would
+	// fail to read every sandbox that has none.
+	meta := map[string]any{"tags": sandbox.Tags}
+	if sandbox.Tags == nil {
+		meta["tags"] = map[string]string{}
 	}
 	if name := sandboxMetaName(sandbox); name != "" {
 		meta["name"] = name
