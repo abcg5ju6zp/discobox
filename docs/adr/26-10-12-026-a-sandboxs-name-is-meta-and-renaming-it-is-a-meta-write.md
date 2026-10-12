@@ -34,8 +34,9 @@ inside edits directly, the server caches on the sandbox row, and
 ### 1. The name is a third field of the meta file
 
 `~/.discobox/meta.json` gains `name`: what a person or the agent calls this
-sandbox. It is one line of display text, trimmed, at most 128 bytes, with
-no control characters; absent or empty means no name has been set. It is not
+sandbox. It is one line of display text, trimmed, at most 128 bytes, of
+printable characters only — no control characters and no invisible format
+characters; absent or empty means no name has been set. It is not
 an identifier: it need not be unique, and nothing is keyed by it.
 
 All three fields are optional, in the file and on the wire. The file already

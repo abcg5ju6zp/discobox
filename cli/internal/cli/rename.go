@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strings"
 
 	apiclientgen "github.com/discobox-ai/discobox/api/gen"
 	apimodel "github.com/discobox-ai/discobox/api/model"
@@ -52,7 +51,7 @@ ID, or a short prefix of that ID.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := ""
 			if len(args) == 2 {
-				name = strings.TrimSpace(args[1])
+				name = sandboxmeta.NormalizeName(args[1])
 				if name == "" {
 					return fmt.Errorf("the name is empty: leave NAME out to clear the name")
 				}
