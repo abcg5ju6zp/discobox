@@ -25,6 +25,9 @@ const (
 	threadIndent = 2
 	// pullMergeKey merges a pull request, behind a question.
 	pullMergeKey = "m"
+	// mergeBandHint is what the ready band says beside that key, at its right
+	// end: the two together are a control (viewPaneBox marks them).
+	mergeBandHint = " merges it "
 	// pullSettleAfter and pullSettleTries are how soon, and how many times, a
 	// pull request GitHub has yet to say can merge is read again.
 	pullSettleAfter = 3 * time.Second
@@ -97,9 +100,13 @@ func plusMinus(st *styles, additions, deletions int) string {
 
 // checkRows is the head commit's checks: how they stand, in one row, and then
 // every one that has not passed, since those are the ones to go and read. Each
-// is a link to its own page, where it has one.
-func checkRows(st *styles, checks []PullCheck, width int) []string {
+// is a link to its own page, where it has one. A list that is not all of them
+// says so first, so a row of passes is not read as the whole.
+func checkRows(st *styles, checks []PullCheck, partial bool, width int) []string {
 	if len(checks) == 0 {
+		if partial {
+			return []string{st.statusWA.Render(truncate("could not be read — o opens them on GitHub", width))}
+		}
 		return nil
 	}
 	var failing, pending, passed int
@@ -122,6 +129,9 @@ func checkRows(st *styles, checks []PullCheck, width int) []string {
 	}
 	if passed > 0 {
 		parts = append(parts, st.statusOK.Render(itoa(passed)+" passed"))
+	}
+	if partial {
+		parts = append(parts, st.statusWA.Render("not all could be read"))
 	}
 	rows := []string{truncate(strings.Join(parts, st.dimText.Render(" · ")), width)}
 	for _, check := range checks {
@@ -168,7 +178,7 @@ func mergeBanner(st *styles, issue Issue, width int) string {
 		// drawn on, with the three things the window's bands carry: the mark
 		// that catches the eye, the sentence, and the key that acts.
 		left := " " + st.statusOK.Bold(true).Render("● Ready to merge") + st.attentionText.Render(" into "+pull.Base)
-		right := st.key.Render(pullMergeKey) + st.attentionHint.Render(" merges it ")
+		right := st.key.Render(pullMergeKey) + st.attentionHint.Render(mergeBandHint)
 		return highlight(st, padANSI(spread(truncate(left, max(width-lipgloss.Width(right)-1, 1)), right, width), width), colInactive)
 	}
 	paint, glyph := st.statusWA, "●"
@@ -188,6 +198,12 @@ func mergeBanner(st *styles, issue Issue, width int) string {
 		return st.dimText.Render(truncate("○ GitHub has not said yet whether this can merge — r asks again", width))
 	}
 	return paint.Bold(true).Render(truncate(glyph+" Not ready to merge — "+said, width))
+}
+
+// pushedNotice says the branch was pushed to since the tab last showed the
+// person its head: what was read before then is not what would be merged.
+func pushedNotice(was, now string) string {
+	return "commits were pushed since " + shortCommit(was) + " was read here: the head is now " + shortCommit(now)
 }
 
 // pullSettle reads a pull request again soon when GitHub had yet to say
@@ -223,10 +239,11 @@ type pullMergedMsg struct {
 }
 
 // mergeMethods are the ways to merge as the page offers them, each on the key
-// that picks it.
+// that picks it. None of them is the key that asks (pullMergeKey): a second
+// press of that one, or its repeat, would otherwise be an answer.
 var mergeMethods = []action{
 	{key: "squash", press: "s", label: "squash and merge", detail: "its commits become one commit on the base branch"},
-	{key: "merge", press: "m", label: "create a merge commit", detail: "every commit is kept, joined by a merge commit"},
+	{key: "merge", press: "c", label: "create a merge commit", detail: "every commit is kept, joined by a merge commit"},
 	{key: "rebase", press: "r", label: "rebase and merge", detail: "every commit is replayed onto the base branch"},
 }
 
@@ -264,7 +281,13 @@ func (m *Model) askMerge(p *pane) tea.Cmd {
 	if !pullReady(*v.issue) {
 		body += "\n\n" + ansi.Strip(mergeBanner(m.st, *v.issue, 200))
 	}
+	// The commit that will be merged is named: the tab reads itself again on
+	// its own clock, so the head here may be newer than the diff that was read.
 	sha := pull.HeadSHA
+	body += "\n\nat " + shortCommit(sha)
+	if v.pushed != "" {
+		body += " — " + pushedNotice(v.pushed, sha)
+	}
 	d := actionsDialog("Merge #"+itoa(v.number)+" into "+pull.Base, body, items, func(method string) tea.Cmd {
 		return m.mergePull(p, method, sha)
 	})
@@ -501,8 +524,9 @@ func (m *Model) pullDiffLines(issue Issue, i, width int) []string {
 }
 
 // filesKey is a key on the files changed, and reports whether it was one of
-// theirs. On the list the arrows move the cursor and Enter opens the diff of
-// the file under it; in a diff they scroll, as on any page, n and p turn to
+// theirs. On the list the arrows and the page keys move the cursor — a list
+// scrolls by its cursor, so a key that moved the page alone would be snapped
+// back — and Enter opens the diff of the file under it; in a diff they scroll, as on any page, n and p turn to
 // the next file's and the one before, and Esc goes back to the list.
 func (v *issuePane) filesKey(key string) bool {
 	if v.issue == nil || v.issue.Pull == nil {
@@ -513,6 +537,14 @@ func (v *issuePane) filesKey(key string) bool {
 		v.moveFile(-1)
 	case !v.fileOpen && (key == "down" || key == "j" || key == "n"):
 		v.moveFile(1)
+	case !v.fileOpen && (key == "pgup" || key == "b"):
+		v.moveFile(-max(v.page-1, 1))
+	case !v.fileOpen && (key == "pgdown" || key == " "):
+		v.moveFile(max(v.page-1, 1))
+	case !v.fileOpen && (key == "home" || key == "g"):
+		v.moveFile(-len(v.issue.Pull.Files))
+	case !v.fileOpen && (key == "end" || key == "G"):
+		v.moveFile(len(v.issue.Pull.Files))
 	case !v.fileOpen && key == "enter":
 		v.openFile(v.fileCursor)
 	case v.fileOpen && key == "n":
@@ -525,6 +557,16 @@ func (v *issuePane) filesKey(key string) bool {
 		return false
 	}
 	return true
+}
+
+// wheel is the wheel over the tab: the cursor on the list of files, as on
+// every list in the window, and the page everywhere else.
+func (v *issuePane) wheel(lines int) {
+	if v.files && !v.fileOpen && v.issue != nil && v.issue.Pull != nil {
+		v.moveFile(lines)
+		return
+	}
+	v.scroll(lines)
 }
 
 // moveFile moves the list's cursor, held between the first file and the last.
