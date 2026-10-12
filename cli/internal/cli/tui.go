@@ -1373,7 +1373,7 @@ func (d *apiDataSource) Addresses(ctx context.Context, sandboxID string) (tui.Ad
 // Tools is every tool one sandbox can be worked on with (ADR 0125).
 func (d *apiDataSource) Tools(ctx context.Context, sandboxID string) ([]tui.Tool, error) {
 	d = d.at(sandboxID)
-	catalog, err := d.app.toolCatalog(ctx, d.client, d.projectID, sandboxID)
+	catalog, _, err := d.app.toolCatalog(ctx, d.client, d.projectID, sandboxID)
 	if err != nil {
 		return nil, err
 	}
@@ -1410,7 +1410,7 @@ func tuiTools(catalog []tools.Definition) []tui.Tool {
 // error, which the status line reports.
 func (d *apiDataSource) RunHostTool(ctx context.Context, sandboxID, toolID string) error {
 	d = d.at(sandboxID)
-	catalog, err := d.app.toolCatalog(ctx, d.client, d.projectID, sandboxID)
+	catalog, _, err := d.app.toolCatalog(ctx, d.client, d.projectID, sandboxID)
 	if err != nil {
 		return err
 	}

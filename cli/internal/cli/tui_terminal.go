@@ -240,7 +240,7 @@ func (d *apiDataSource) NewTerminal(ctx context.Context, sandboxID string, cols,
 // knows.
 func (d *apiDataSource) NewTool(ctx context.Context, sandboxID, toolID string, cols, rows int) (tui.Exec, tui.Terminal, error) {
 	d = d.at(sandboxID)
-	catalog, err := d.app.toolCatalog(ctx, d.client, d.projectID, sandboxID)
+	catalog, _, err := d.app.toolCatalog(ctx, d.client, d.projectID, sandboxID)
 	if err != nil {
 		return tui.Exec{}, nil, err
 	}

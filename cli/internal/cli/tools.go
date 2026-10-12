@@ -133,7 +133,10 @@ func (a *App) runTool(cmd *cobra.Command, id, sandboxArg, source, program string
 		return err
 	}
 	ctx := cmd.Context()
-	catalog, err := target.app.toolCatalog(ctx, target.client, target.projectID, target.sandboxID)
+	// A catalog the discobox posted before it stopped is good enough to find
+	// the tool by: running it starts the discobox, which runs what it
+	// declares now.
+	catalog, _, err := target.app.toolCatalog(ctx, target.client, target.projectID, target.sandboxID)
 	if errors.Is(err, errSandboxToolsNotReadable) {
 		// Reading the tools does not start a discobox, and this one is down
 		// with none posted. Running a tool is use, though, and use starts it:
@@ -141,7 +144,7 @@ func (a *App) runTool(cmd *cobra.Command, id, sandboxArg, source, program string
 		if _, _, _, startErr := target.app.sandboxCommandOutput(ctx, target.projectID, target.sandboxID, "", []string{"true"}); startErr != nil {
 			return fmt.Errorf("%w; starting the discobox to read them: %w", err, startErr)
 		}
-		catalog, err = target.app.toolCatalog(ctx, target.client, target.projectID, target.sandboxID)
+		catalog, _, err = target.app.toolCatalog(ctx, target.client, target.projectID, target.sandboxID)
 	}
 	if err != nil {
 		return err
@@ -180,10 +183,11 @@ func (a *App) newToolsListCommand(sandboxID *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			catalog, err := target.app.toolCatalog(cmd.Context(), target.client, target.projectID, target.sandboxID)
+			catalog, observedAt, err := target.app.toolCatalog(cmd.Context(), target.client, target.projectID, target.sandboxID)
 			if err != nil {
 				return err
 			}
+			defer noteStoredAnswer(cmd, observedAt)
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "TOOL\tNAME\tKEY\tRUNS\tFROM\tDESCRIPTION")
 			for _, def := range catalog {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"time"
 
 	apiclientgen "github.com/discobox-ai/discobox/api/gen"
 	apimodel "github.com/discobox-ai/discobox/api/model"
@@ -74,10 +75,14 @@ func localTools() ([]tools.Definition, error) {
 }
 
 // toolCatalog is every tool one discobox can be worked on with.
-func (a *App) toolCatalog(ctx context.Context, client *apiclientgen.Client, projectID, sandboxID string) ([]tools.Definition, error) {
-	boxed, err := sandboxTools(ctx, client, projectID, sandboxID)
+//
+// observedAt is zero unless the discobox was not running: its own layers are
+// then what it last posted, at that time, and may not be what it declares now
+// (ADR 26-10-11-657 §4).
+func (a *App) toolCatalog(ctx context.Context, client *apiclientgen.Client, projectID, sandboxID string) (catalog []tools.Definition, observedAt time.Time, err error) {
+	boxed, observedAt, err := sandboxTools(ctx, client, projectID, sandboxID)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	var image, source []tools.Definition
 	for _, def := range boxed {
@@ -89,9 +94,9 @@ func (a *App) toolCatalog(ctx context.Context, client *apiclientgen.Client, proj
 	}
 	user, err := userTools()
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	return mergeTools(builtinTools(), image, source, user), nil
+	return mergeTools(builtinTools(), image, source, user), observedAt, nil
 }
 
 // findTool is the tool a person named in a catalog — its id, or its name when
@@ -120,7 +125,7 @@ var errSandboxToolsNotReadable = errors.New("the discobox's tools cannot be read
 // declares no tools, rather than failing every tool including the ones that
 // never needed it to answer (ADR 0125 §7). So does one that says tools are
 // not available in it.
-func sandboxTools(ctx context.Context, client *apiclientgen.Client, projectID, sandboxID string) ([]tools.Definition, error) {
+func sandboxTools(ctx context.Context, client *apiclientgen.Client, projectID, sandboxID string) ([]tools.Definition, time.Time, error) {
 	res, err := client.ListSandboxTools(ctx, apiclientgen.ListSandboxToolsParams{ProjectId: projectID, SandboxId: sandboxID})
 	if err != nil {
 		// A route the server has never heard of answers with net/http's own
@@ -129,26 +134,26 @@ func sandboxTools(ctx context.Context, client *apiclientgen.Client, projectID, s
 		// list this CLI's tools for a discobox that could run none of them.
 		var plain *plainStatusError
 		if errors.As(err, &plain) && plain.code == http.StatusNotFound && plain.body == "404 page not found" {
-			return nil, nil
+			return nil, time.Time{}, nil
 		}
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	if problem, ok := res.(*apiclientgen.ErrorResponseStatusCode); ok &&
 		(problem.StatusCode == http.StatusNotFound || problem.StatusCode == http.StatusNotImplemented) {
-		return nil, nil
+		return nil, time.Time{}, nil
 	}
 	if problem, ok := res.(*apiclientgen.ErrorResponseStatusCode); ok && problem.StatusCode == http.StatusConflict {
-		return nil, fmt.Errorf("%w: %w", errSandboxToolsNotReadable, responseError(res))
+		return nil, time.Time{}, fmt.Errorf("%w: %w", errSandboxToolsNotReadable, responseError(res))
 	}
 	body, err := expectResponse[apimodel.SandboxToolsResponse](res)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	out := make([]tools.Definition, 0, len(body.Tools))
 	for _, tool := range body.Tools {
 		out = append(out, definitionFromAPI(tool))
 	}
-	return out, nil
+	return out, body.ObservedAt.Or(time.Time{}), nil
 }
 
 func definitionFromAPI(in apimodel.SandboxTool) tools.Definition {

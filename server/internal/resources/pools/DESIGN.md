@@ -102,7 +102,8 @@ flowchart LR
   `ReportSandboxInventories` ([ADR 26-10-11-657](../../../../docs/adr/26-10-11-657-a-stopped-discobox-is-read-from-what-it-last-posted.md) §2) stores an inventory sent in
   full in `sandbox_inventories`, moves a held one's observation time forward
   when it is sent by digest alone, and answers with the sandboxes whose
-  digest it does not hold.
+  digest it does not hold. The router refuses a report body over 16 MiB
+  before the generated server buffers it (`boundInventoryReports`).
   `MintSandboxAgentStatusTokens` always mints the hardcoded `status:read`
   and `inventory:read` scopes via `ControlPlane.CreateSandboxAgentToken`,
   never a caller-supplied one, so this endpoint can never be used to obtain a broader sandbox-agent

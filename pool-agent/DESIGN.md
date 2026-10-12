@@ -728,8 +728,10 @@ last took (`?known=`) and answers "unchanged" to it, and the entry then
 carries the digest alone, which moves the stored inventory's observation time
 forward. A digest counts as taken only once the control plane's answer does
 not name the sandbox as wanted, so an inventory it does not hold is sent in
-full on the next tick. Configure sandboxes are not asked, an inventory over
-4 MiB is not posted, and a sandbox agent without the route — or a token
+full on the next tick. A report carries at most 8 MiB of inventories
+(`inventoryReportBatches`), so a large pool's first tick is several reports
+rather than one the size of the pool. Configure sandboxes are not asked, an
+inventory over 4 MiB is not posted, and a sandbox agent without the route — or a token
 without the scope, from a control plane older than this — is skipped quietly.
 
 `pool-sync` (scope `pool:sync`) is how a shared host daemon reclaims *whole*

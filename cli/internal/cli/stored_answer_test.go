@@ -206,8 +206,37 @@ func TestSandboxToolsMarksARefusedListing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = sandboxTools(t.Context(), client, "project-1", "sbx_1")
+	_, _, err = sandboxTools(t.Context(), client, "project-1", "sbx_1")
 	if !errors.Is(err, errSandboxToolsNotReadable) || !strings.Contains(err.Error(), "has posted nothing to read") {
 		t.Fatalf("err = %v, want errSandboxToolsNotReadable carrying the server's reason", err)
+	}
+}
+
+// A stopped discobox's tools are what it last posted, and the listing says so
+// like every other: the time travels with the catalog.
+func TestToolCatalogCarriesWhenAStoredListingWasPosted(t *testing.T) {
+	server := httptest.NewServer(ignoringPortProbe(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(`{"tools":[{"id":"lint","name":"lint","runs":"sandbox","layer":"source","fileName":"10-lint.sh","script":true,"program":[],"args":[],"env":[]}],"observedAt":"2026-10-11T00:00:00Z"}`))
+	}))
+	t.Cleanup(server.Close)
+	app := &App{serverURL: server.URL, autoStart: autoStartServerFalse}
+	client, err := app.apiClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, observedAt, err := app.toolCatalog(t.Context(), client, "project-1", "sbx_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC); !observedAt.Equal(want) {
+		t.Fatalf("observedAt = %v, want %v", observedAt, want)
+	}
+	found := false
+	for _, def := range catalog {
+		found = found || def.ID == "lint"
+	}
+	if !found {
+		t.Fatalf("catalog = %+v, want the discobox's posted tool in it", catalog)
 	}
 }
