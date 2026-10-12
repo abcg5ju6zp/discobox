@@ -1,6 +1,7 @@
 # 0126 — A sandbox does not share a host or a filesystem with its pool
 
 - **Status**: Accepted (its consequence that a provider-hosted backend's credentials stay in the pool superseded by [26-10-09-106](26-10-09-106-disco-vm-is-a-pool-runtime-and-the-server-runs-its-machines.md): they are the server provider's configuration)
+- **§4's live origin, bare-origin fallback and direct remote clone superseded by**: [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
 - **Date**: 2026-09-23 (rewrite of the 2026-09-17 draft, which was never
   accepted and against which nothing was implemented)
 - **Relates to**: [0006](0006-pool-is-the-runtime-host.md),

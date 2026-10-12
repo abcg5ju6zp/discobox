@@ -1,8 +1,8 @@
 # 26-10-10-545 — Git reaches a pool only from a client, and is cached there per remote
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-10-10
-- **On acceptance supersedes**, for sandboxes created after it except where
+- **Supersedes**, for sandboxes created after it except where
   a line says every sandbox:
   [0001](0001-sandbox-origin-and-remote-source-push.md) §3 (local bind as a
   provider capability) and §4's placing of the push after provisioning;
@@ -29,7 +29,7 @@
   Git HTTP route and its convergence, and
   [26-10-08-561](26-10-08-561-a-sandbox-reaches-its-origins-at-a-host-its-pool-proxy-answers.md)
   stand.
-- **On acceptance rejects**:
+- **Rejects**:
   [0128](0128-a-private-remote-source-is-fetched-with-a-credential-the-client-lends.md),
   which was never accepted or built. Its deferred pool-shared object cache is
   what this decides.

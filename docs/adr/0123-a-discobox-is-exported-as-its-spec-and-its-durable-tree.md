@@ -1,6 +1,7 @@
 # 0123 — A discobox is exported as its spec and its durable tree, and a transfer is two of those
 
 - **Status**: Accepted
+- **§4 and the source of `tree/origins/` superseded by**: [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
 - **Date**: 2026-09-16
 
 ## Context

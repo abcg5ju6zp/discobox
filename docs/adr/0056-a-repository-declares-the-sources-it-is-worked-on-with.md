@@ -1,6 +1,7 @@
 # 0056 — A repository declares the sources it is worked on with
 
 - **Status**: Accepted
+- **§1's "a remote primary source declares nothing" superseded by**: [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
 - **Date**: 2026-08-19
 
 ## Context
