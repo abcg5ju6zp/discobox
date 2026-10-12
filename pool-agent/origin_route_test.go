@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/discobox-ai/discobox/internal/sourcecache"
 	poolagent "github.com/discobox-ai/discobox/pool-agent"
 	workerclient "github.com/discobox-ai/discobox/pool-agent/api/gen"
 	workerapimodel "github.com/discobox-ai/discobox/pool-agent/api/model"
@@ -21,6 +20,7 @@ import (
 	"github.com/discobox-ai/discobox/pool-agent/sandboxtoken"
 	poolagentserver "github.com/discobox-ai/discobox/pool-agent/server"
 	"github.com/discobox-ai/discobox/proxy"
+	"github.com/discobox-ai/discobox/sourcecache"
 )
 
 // originCacheKey is the cache sandbox-1's primary source is delivered into.

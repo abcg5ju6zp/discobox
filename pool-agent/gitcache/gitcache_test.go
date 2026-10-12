@@ -48,7 +48,7 @@ func (w *work) gitEnv(env []string, args ...string) string {
 }
 
 func (w *work) try(env []string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(w.t.Context(), "git", args...)
 	cmd.Dir = w.dir
 	cmd.Env = append(os.Environ(),
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull,
@@ -111,10 +111,11 @@ func nameWithoutSending(t *testing.T, s *Store, path, caller, sandboxID, slug, o
 	if err != nil {
 		t.Fatal(err)
 	}
-	empty := exec.Command("git", "pack-objects", "--stdout")
+	empty := exec.CommandContext(t.Context(), "git", "pack-objects", "--stdout")
 	empty.Dir = t.TempDir()
 	empty.Stdin = strings.NewReader("")
-	if out, err := exec.Command("git", "init", "--quiet", empty.Dir).CombinedOutput(); err != nil {
+	//nolint:gosec // a directory this test made
+	if out, err := exec.CommandContext(t.Context(), "git", "init", "--quiet", empty.Dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	pack, err := empty.Output()
@@ -123,7 +124,8 @@ func nameWithoutSending(t *testing.T, s *Store, path, caller, sandboxID, slug, o
 	}
 	update := strings.Repeat("0", len(object)) + " " + object + " refs/heads/main\x00report-status\n"
 	request := fmt.Sprintf("%04x%s0000", len(update)+4, update) + string(pack)
-	cmd := exec.Command("git", append(append(ReceiveConfig(), config...), "receive-pack", path)...)
+	//nolint:gosec // the switches a cache is served under, and a cache this test made
+	cmd := exec.CommandContext(t.Context(), "git", append(append(ReceiveConfig(), config...), "receive-pack", path)...)
 	cmd.Env = append(append(os.Environ(), "GIT_NAMESPACE="+Namespace(sandboxID, slug)), env...)
 	cmd.Stdin = strings.NewReader(request)
 	out, err := cmd.CombinedOutput()
@@ -232,7 +234,8 @@ func TestASandboxDeliversOnlyWhatItSendsAndWhatItsOwnSourcesHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("git", append(append(ReceiveConfig(), config...), "receive-pack", "--advertise-refs", path)...)
+	//nolint:gosec // the switches a cache is served under, and a cache this test made
+	cmd := exec.CommandContext(t.Context(), "git", append(append(ReceiveConfig(), config...), "receive-pack", "--advertise-refs", path)...)
 	cmd.Env = append(os.Environ(), "GIT_NAMESPACE=sbx-child-widget")
 	advertised, err := cmd.Output()
 	if err != nil {

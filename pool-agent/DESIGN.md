@@ -19,15 +19,16 @@ from the in-sandbox `sandbox-agent` API.
 | `cmd/discobox-vsock-guest` | Local-VM guest services, built into the VM image: VSOCK-to-Docker byte splice and orderly shutdown endpoint. |
 | `cmd/discobox-cp-relay` | wslc guest half of the control-plane channel: multiplexes the guest's stdio with `cpmux` and serves the Unix socket the agent reaches the control plane through. |
 | `.` | Root `poolagent` Go package: boot contract, registration flow, control-plane HTTP client (`http.go`), status reporting, the standing sandbox-agent status poller (`statuspoll.go`, ADR 0030), resource accounting (`resourcereport.go`, `storagescan.go`, `cgroup.go`), and high-level command orchestration. |
-| `server` | Pool-local HTTP server, health/metadata endpoints, generated sandbox API route/auth adapter, the sandbox HTTP/sandbox-agent/Git proxy routes, on-demand start (`autostart.go`), and the loopback origin listener the pool proxy forwards sandboxes' origin fetches to (`NewOriginRouter`; see [Git origins](#git-origins)). |
+| `server` | Pool-local HTTP server, health/metadata endpoints, generated sandbox API route/auth adapter, the sandbox HTTP/sandbox-agent/Git proxy routes, the Git cache routes the control plane forwards clients' deliveries to (`sandbox_git_cache.go`), on-demand start (`autostart.go`), and the loopback origin listener the pool proxy forwards sandboxes' origin fetches to (`NewOriginRouter`; see [Git origins](#git-origins)). |
 | `cpmux` | Symmetric yamux session over one duplex byte stream, for guests that can only be dialed inward (wslc). |
 | `poolauth` | Pool-to-control-plane assertions: PASETO v4.public signed with the pool's Ed25519 key. |
 | `sandboxtoken` | Tokens the pool issues its own sandboxes, signed with the same key under their own audience (`discobox-pool-sandbox`); `origin:fetch` is accepted on the `git-origins` route alone. |
 | `internalhttp` | The transport for the pool's own HTTP, which never honors `HTTP_PROXY`: the control-plane client's, and the base of every transport a sandbox `Dialer` builds. |
-| `githttp` | Serves the `git-origins` route through the shared [`gitbackend`](../gitbackend) CGI bridge, run as the repository's owner. A live origin is served fetch-only with a ref allow-list; see [Git origins](#git-origins). The `git-repositories` route is not served here; see [The worktree route](#the-worktree-route). |
+| `githttp` | Serves a source's origin through the shared [`gitbackend`](../gitbackend) CGI bridge, run as the repository's owner: a bare repository made for one sandbox, or a Git namespace of a cache. A sandbox's own fetch is served fetch-only, on protocol v0, confined to what its namespace advertises; see [Git origins](#git-origins). The `git-repositories` route is not served here; see [The worktree route](#the-worktree-route). |
+| `gitcache` | The pool's cache of Git ([ADR 26-10-10-545](../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)): one bare repository per cache key under `layout.Root.PoolGitCache`, a namespace `refs/namespaces/<sandboxID>-<slug>/` per sandbox source, and the remote's own branches and tags under `refs/cache/`. Owns the pin, the configuration a push is received under, the pre-receive check a sandbox's push is held to (the agent binary run as `git-cache-pre-receive`), namespace export and import, and the sweep that removes namespaces, drops unused caches and collects the rest. It never fetches. See [Git origins](#git-origins). |
 | `execidentity` | The `SysProcAttr` that runs a subprocess as a given uid/gid. |
 | `image` | Files baked into the pool image: the systemd units (proxy, buildkitd, mediator, registry) and `registry.yml`. |
-| `sandboxruntime` | The `Runtime` interface and its implementations (`DockerSandboxRuntime`; `MemorySandboxRuntime` for tests). `Runtime` is everything the agent needs from a runtime — sandbox CRUD and power, the durable tree, origin paths, how the pool reaches a sandbox ([Reaching a Sandbox](#reaching-a-sandbox)), the state channel, and the tree and proxy-material reclaim loops — so `Serve` holds no concrete type and a second runtime is a drop-in (ADR 0144 §2). What only a Docker pool has, such as image reclamation (`WatchImages`), stays on the Docker type and is started by the Docker pool's composition in `RunAgent`. The Docker runtime implements the durable-tree export and restore a transfer moves (ADR 0123; `tree.go`). An export does not walk the sandbox's `data` or `sources` here: it runs the sandbox's pinned image as a one-shot container in the sandbox agent's export mode — the trees and config mounted read-only, no network, no capability but `DAC_READ_SEARCH`, a read-only root — refuses an image without `harness.TreeExportLabel`, verifies the stream it gets back (`sandboxtree.Copy`), and appends the `origins` this pool owns (ADR 0129). Only the sandbox can resolve which declared paths stay behind and where they live; and the reads happen in the sandbox's namespace rather than as root on this host. Closing the stream waits for the export container to be removed. Restore stays here, confined by `os.Root`. Provisions the five primary volumes (`/.discobox/{data,cache,config,sources,secrets}`) and mounts them into every sandbox; `cache` is the pool-local directory shared across the pool's sandboxes. It also mounts each source's opaque, durable pool-local data at `/.discobox/data-per-source/<slug>` (a private one for a primary with no key), and records each local source's live origin for the `git-origins` route (`origin.go`); it binds no origin into a sandbox and runs no git in its checkout — the sandbox clones its own sources, and the runtime settles them (`sources.go`; see [Sources](#sources)). In-sandbox path wiring for the primary volumes is delegated to the sandbox-agent init flow (ADR 0007); the per-source data mount already lands at its final runtime-owned path. |
+| `sandboxruntime` | The `Runtime` interface and its implementations (`DockerSandboxRuntime`; `MemorySandboxRuntime` for tests). `Runtime` is everything the agent needs from a runtime — sandbox CRUD and power, the durable tree, origin paths, how the pool reaches a sandbox ([Reaching a Sandbox](#reaching-a-sandbox)), the state channel, and the tree and proxy-material reclaim loops — so `Serve` holds no concrete type and a second runtime is a drop-in (ADR 0144 §2). What only a Docker pool has, such as image reclamation (`WatchImages`), stays on the Docker type and is started by the Docker pool's composition in `RunAgent`. The Docker runtime implements the durable-tree export and restore a transfer moves (ADR 0123; `tree.go`). An export does not walk the sandbox's `data` or `sources` here: it runs the sandbox's pinned image as a one-shot container in the sandbox agent's export mode — the trees and config mounted read-only, no network, no capability but `DAC_READ_SEARCH`, a read-only root — refuses an image without `harness.TreeExportLabel`, verifies the stream it gets back (`sandboxtree.Copy`), and appends the `origins` this pool owns (ADR 0129) — a bare repository made for the sandbox, or its namespaces of the Git cache written out as repositories for the length of the export. Only the sandbox can resolve which declared paths stay behind and where they live; and the reads happen in the sandbox's namespace rather than as root on this host. Closing the stream waits for the export container to be removed. Restore stays here, confined by `os.Root`. Provisions the five primary volumes (`/.discobox/{data,cache,config,sources,secrets}`) and mounts them into every sandbox; `cache` is the pool-local directory shared across the pool's sandboxes. It also mounts each source's opaque, durable pool-local data at `/.discobox/data-per-source/<slug>` (a private one for a primary with no key), records which Git cache each cache-delivered source's namespace is in (`origin.go`, `source-caches.json`), holds the pool's `gitcache.Store` (`Runtime.GitCache`), and sweeps it from `WatchSandboxVolumes`; it binds no origin into a sandbox and runs no git in its checkout — the sandbox clones its own sources, and the runtime settles them (`sources.go`; see [Sources](#sources)). In-sandbox path wiring for the primary volumes is delegated to the sandbox-agent init flow (ADR 0007); the per-source data mount already lands at its final runtime-owned path. |
 | `dnsforward` | The pool's DNS-over-TLS server for its sandboxes: each framed query answered by the pool container's own resolver, connections capped per sandbox by client-certificate identity. Run by the proxy unit. See [Sandbox DNS](#sandbox-dns). |
 | `proxyagent` | Pool-scoped proxy wiring: certificate bundle preparation, the `proxy` subcommand entrypoint, per-sandbox client material for the runtime-config document and the pool endpoints the bootstrap names, the sentinel resolver, the sandbox-facing agent credentials endpoint with its ephemeral-sentinel activation registry (ADR 0031), the origins host the proxy forwards to the agent (`origins.go`, ADR 26-10-08-561), and host trust: probing a host for a trust ask and keeping the proxy's pins in step with the control plane (ADR 0149). |
 | `buildkitagent` | The pool-shared BuildKit builder, its output registry, the mediator that binds a build to the sandbox that asked for it, and the per-build egress forwarder. See [Pool-Shared Builds](#pool-shared-builds). |
@@ -389,8 +390,9 @@ sequenceDiagram
 
 - **The document's sources** (`sources.go`, `runtimeSources`): each source's
   in-sandbox target, its pin, and its origin — this pool's git-origins route at
-  the origins host for a source on the client's machine, live or pushed
-  ([Git origins](#git-origins)), and the remote itself for a remote-URL source.
+  the origins host for every source a client delivers
+  ([Git origins](#git-origins)), and the remote itself for a remote-URL source
+  of a sandbox created before pools cached Git, which cloned it directly.
   A pool-served origin carries a token (`sandboxtoken`, `origin:fetch`), issued
   for a day and renewed by deciding the document once it has less than half
   left. Delivery carries over by slug: a source is delivered once.
@@ -882,20 +884,32 @@ router's bare 404, which git reports as no such repository.
 
 ### Git origins
 
-`.../sandboxes/{sandbox_id}/git-origins/{slug}.git` serves each source's
-origin, whichever kind it is, so a sandbox is only ever handed a URL
-([ADR 0126 §4](../docs/adr/0126-a-sandbox-does-not-share-a-host-or-a-filesystem-with-its-pool.md)).
-`GitOriginPath` picks the repository per request:
+A source's origin is a namespace of this pool's Git cache
+([ADR 26-10-10-545](../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)).
+The pool keeps one bare repository per cache key — the source's remote,
+normalized, so every sandbox of a remote shares one object store
+(`sourcecache`, `gitcache`) — and each source of each sandbox has
+`refs/namespaces/<sandboxID>-<slug>/` in one of them. Everything in a cache
+arrived in a client's push: the pool never fetches and holds no credential for
+a remote. A sandbox created before that has a bare repository of its own per
+client-delivered source instead (`origins/{slug}.git`,
+[ADR 0058](../docs/adr/0058-a-push-delivered-source-has-a-pool-side-origin.md)),
+served and pushed into as before.
+
+Two callers reach an origin, on different routes:
 
 ```mermaid
 flowchart TD
-  req["git-origins/{slug}.git"] --> rec{"slug in live-origins.json?"}
-  rec -->|yes| vis{"developer's .git visible<br/>here, a real directory?"}
-  vis -->|yes| live["live origin: a per-request snapshot of<br/>the developer's allowed refs, fetch-only,<br/>run as the .git's owner"]
-  vis -->|no| bare
+  sbx["sandbox, its own token<br/>git-origins/{slug}.git"] --> rec{"slug in<br/>source-caches.json?"}
+  rec -->|yes| ns["its namespace of the cache:<br/>upload-pack only, protocol v0"]
   rec -->|no| bare{"origins/{slug}.git exists?"}
-  bare -->|yes| pushed["bare origin (ADR 0058)<br/>client pushes, sandbox fetches"]
+  bare -->|yes| own["bare origin (ADR 0058)"]
   bare -->|no| nf["404"]
+  cp["control plane, forwarding a client<br/>cache key in X-Discobox-Git-Cache"] --> route{"route"}
+  route -->|"git-cache-origins/{slug}.git/pin"| pin["pin: create the refs<br/>the cache already holds"]
+  route -->|"git-cache-origins/{slug}.git"| push["push into the namespace"]
+  route -->|"git-cache-remotes/{slug}.git"| remote["refs/cache, fetch-only<br/>no namespace"]
+  route -->|"git-origins/{slug}.git"| own
 ```
 
 - **How a sandbox reaches it**
@@ -906,51 +920,84 @@ flowchart TD
   certificate; the pool proxy intercepts the host whatever its allowlist says
   and forwards the path and query to the agent's loopback origin listener
   (`proxyagent.OriginsListenAddress`), naming the certificate's sandbox in
-  `proxy.OriginClientHeader`. That listener (`NewOriginRouter`) serves this
-  route alone, to the pool's sandbox token alone, and only when the token's
-  sandbox, the path's and the proxy's are one. The control plane reaches the
-  same route on the agent's own listener with its own tokens.
-
+  `proxy.OriginClientHeader`. That listener (`NewOriginRouter`) serves the
+  `git-origins` route alone, to the pool's sandbox token alone, and only when
+  the token's sandbox, the path's and the proxy's are one.
 - **The record.** Every create that builds volumes rewrites
-  `sandboxes/{sandbox}/live-origins.json`: each clone-delivered local source's
-  Git directory, as the request named it, and the refs it declares. It is
-  pool-private, beside the volumes rather than in one, and does not travel with
-  an export — a path on this host means nothing to another pool, whose own
-  create writes its own.
-- **Visibility.** The Git directory is opened through the host mount prefix
-  (`hostMountedLocalDirectory`). One that has gone, or is no longer a real
-  directory, is not served; the bare origin answers instead, and the sandbox
-  cannot tell which it got.
-- **Fetch-only.** A live origin answers only the two smart upload-pack
-  requests. receive-pack is refused whatever the token allows, and so is the
-  dumb protocol, which hands out objects as plain files whatever is advertised
-  (`http.getanyfile=false` besides).
-- **Ref allow-list.** A live request is never served from the developer's
-  repository itself but from a snapshot of it (`liveSnapshot`): a temporary
-  bare repository holding `HEAD` and the allowed refs that exist at that
-  moment, each at the object it names then, with the developer's objects lent
-  through `objects/info/alternates`. The allowed refs are the branch `HEAD`
-  names, read per request, and the source's declared refs — its checkout
-  branch or tag and its dirty-workspace snapshot ref. The snapshot is what the
-  backend reads, so nothing else is there to advertise: not by a prefix match
-  (hideRefs reveals `feature/x` with `feature`, which a check-then-serve of the
-  developer's repository leaves open between the check and the backend), and
-  not through the developer's `.git/config`, which is never read. It is
-  removed once the request is answered.
-- **No fetch by object id.** The `uploadpack.allow*SHA1InWant` and
-  `allowRefInWant` switches are forced off, and a live origin is answered in
-  protocol v0 whatever the client asks for: a v2 upload-pack serves any object
-  asked for by id, advertised or not, whatever those switches say. v0 refuses
-  a want that no advertised ref reaches.
-- **Tokens.** The route accepts the control plane's tokens as every route does
-  (`sandbox:read` to fetch, `sandbox:write` to push into a bare origin) and,
-  alone among routes, a token this pool issued to the sandbox it names
-  (`sandboxtoken`), which fetches and never pushes: `origin:fetch` is the only
-  scope one may carry, refused otherwise on issue and on verify, and its
-  sandbox is checked against the escaped path the router serves, not the
-  decoded one an escaped slash can make name another sandbox.
-- A fetch racing the developer's own `git gc` can fail on a pruned object, as
-  the read-only bind always could.
+  `sandboxes/{sandbox}/source-caches.json`: each cache-delivered source's
+  cache key, by slug, from the create request (`writeSourceCaches`). It is
+  pool-private, beside the volumes rather than in one. `GitOriginPath` reads
+  it to serve the sandbox, and an export reads it to find the namespaces.
+- **What a sandbox is served** (`githttp.ServeBackend`, `FetchOnly`). Project
+  members are trusted with what a pool holds; a sandbox is not, and its
+  namespace shares an object store with every other sandbox of that remote.
+  Three restrictions hold only together: only the two smart upload-pack
+  requests (no receive-pack, no dumb protocol, `http.getanyfile=false`);
+  protocol v0 whatever the client asks for, because a v2 upload-pack serves
+  any object asked for by id whatever namespace it is in; and the
+  `uploadpack.allow*SHA1InWant` and `allowRefInWant` switches forced off on
+  the command line, where a cache's own configuration cannot loosen them. A
+  sandbox never writes its namespace.
+- **A delivery needs no sandbox** (`sandbox_git_cache.go`). The cache routes
+  are behind the control plane's token only, are not auto-started, and read
+  nothing about the sandbox: the path names the namespace and
+  `X-Discobox-Git-Cache` the cache, which is made on first use. So a client
+  delivers while the image is pulled.
+- **Pin** (`gitcache.Store.Pin`, `POST …/{slug}.git/pin`). The client names
+  every ref of a delivery and the object each points at; each ref whose
+  object the cache holds, reachable from a ref, is created, and the rest are
+  reported missing for the client to push. Branches are created only when
+  nothing is missing: a sandbox clones as soon as its namespace has a branch,
+  so one never appears ahead of the refs that belong with it. A branch that
+  already reaches the commit is left alone, and one holding something else is
+  a push's to move.
+- **Push.** Every push is received under `gitcache.ReceiveConfig`: never
+  shallow (`receive.shallowUpdate=false` — a repository's `shallow` file is
+  not a namespace's), deletes refused, non-fast-forwards allowed, no
+  collection. After a pin or a push the namespace's `HEAD` is pointed at a
+  branch it holds, and for a project member's delivery the namespace's
+  `refs/remotes/origin/*` and tags are copied to `refs/cache/heads/` and
+  `refs/cache/tags/` (`Delivered`).
+- **A sandbox delivering to a discobox it created**
+  ([ADR 26-09-24-630](../docs/adr/26-09-24-630-a-discobox-delivers-the-source-of-the-discoboxes-it-creates.md))
+  is named by the control plane in `X-Discobox-Git-Cache-Caller` and held to
+  what it sends and what its own namespaces reach (§7). Its pin holds an
+  object only where a namespace recorded as its own reaches it. Its push is
+  advertised only those namespaces' tips and the one it pushes into
+  (`receive.hideRefs` by full name), is kept as the pack it sent
+  (`receive.unpackLimit=1`), and passes a pre-receive hook — this binary,
+  `git-cache-pre-receive` — that refuses a ref reaching an object that
+  neither arrived in the push's quarantine nor is reachable from its own
+  namespaces. Git alone accepts a ref at any object the store holds. Its
+  delivery does not move `refs/cache`, and it cannot fetch the remote view.
+- **The remote view** (`git-cache-remotes`) serves `refs/cache/*` with every
+  namespace hidden, fetch-only: what a client fetches before it fetches the
+  remote itself.
+- **Sweep** (`gitcache.Store.Sweep`, from `WatchSandboxVolumes`, every 24h).
+  A namespace whose sandbox the control plane no longer holds is removed
+  after the sandbox tree retention (24h from the first answer that omits
+  it); a cache with no namespace is removed 30 days after its last delivery,
+  or at once when it was made for one sandbox's source; every other cache is
+  collected with `git gc --prune=now`. Each cache is held exclusively while
+  it is swept (`Store.Use` holds it shared for every pin, push and fetch),
+  because a pin or a delta push creates refs at objects that may be old, and
+  a prune must not overlap one. With no answer from the control plane nothing
+  is removed.
+- **Export and import** (ADR 0123, §9). An export writes each namespace out
+  as `origins/{slug}.git` for the length of the export
+  (`exportCachedOrigins`), so the archive keeps its shape. A create that
+  finds such a repository for a cache-delivered source reads it into the
+  namespace and removes it (`adoptImportedOrigins`) — unless the namespace
+  already holds a branch, which is never overwritten.
+- **Tokens.** The `git-origins` route accepts the control plane's tokens as
+  every route does (`sandbox:read` to fetch, `sandbox:write` to push into a
+  bare origin) and, alone among routes, a token this pool issued to the
+  sandbox it names (`sandboxtoken`), which fetches and never pushes:
+  `origin:fetch` is the only scope one may carry, refused otherwise on issue
+  and on verify, and its sandbox is checked against the escaped path the
+  router serves, not the decoded one an escaped slash can make name another
+  sandbox. The cache routes take `sandbox:write` for a pin or a push and
+  `sandbox:read` otherwise.
 
 ## Sandbox DNS
 
@@ -1059,9 +1106,10 @@ flowchart LR
   list and the manifest source list. See ADR 0007.
 - A source's slug is assigned by the control plane and sent on the create
   request, because it is shared addressing: the directory the source is
-  materialized in (`sources/<slug>`), its origin (`origins/<slug>.git`), its
-  per-source data mount, and the `git-repositories`/`git-origins` routes a
-  client fetches and pushes through all name it. The pool derives one from the
+  materialized in (`sources/<slug>`), its origin (its namespace of the pool's
+  Git cache, or `origins/<slug>.git`), its per-source data mount, and the
+  `git-repositories`/`git-origins` routes a client fetches and pushes through
+  all name it. The pool derives one from the
   source's key only when none is sent, and `adoptSourcePaths` renames a source
   materialized under such a derived name once the real slug arrives, so a
   sandbox provisioned before the slug was sent keeps the work committed in it.
@@ -1086,27 +1134,28 @@ flowchart LR
   it is this sandbox's alone and is kept, deleted, and exported exactly as the
   rest of that tree is. A sandbox created before the name was reserved may have
   a reference holding it; `sourceDataPlan` leaves that layout as it was.
-- Every source whose origin is on the client's machine has it served over Git
-  HTTP ([Git origins](#git-origins)) and bound into nothing: the sandbox's
-  `origin` remote is the route's URL, which its agent asserts on every pass, so
-  `git fetch origin` and `git rebase origin/<branch>` are ordinary git inside
-  the sandbox whichever way the source was delivered. What differs is only what
-  answers the route:
-  - **Clone-delivered**: the developer's own repository's `.git` directory,
-    live, through a per-request snapshot of its allowed refs — never the working
-    tree, whose ignored files (`.env` and the like) must not reach a sandbox.
-    `checkLocalGitDirectory` refuses a `.git` that is not a real directory (a
-    linked worktree's file, a symlink); a current client has such a source
-    pushed instead. See ADR 0093 and ADR 0126 §4.
-  - **Push-delivered**: a bare repository at
-    `.../sandboxes/{sandbox}/origins/{slug}.git`, created by `initGitOrigin` at
-    provisioning time and owned by the sandbox user, which the client pushes into
-    through the `git-origins` route and re-pushes into whenever the sandbox needs
-    newer commits. It is under the sandbox's own tree, so archive, purge and the
-    volume reaper cover it already; it is deliberately not under `sources/`,
-    which the sandbox can write. See ADR 0058.
-  A source with no local directory is a remote URL, whose origin is that remote;
-  the sandbox clones it through its proxy like any other fetch.
+- Every source a client delivers has its origin served over Git HTTP
+  ([Git origins](#git-origins)) and bound into nothing. The sandbox's agent
+  asserts the route's URL on the remote the checkout reaches its pool under,
+  on every pass. What answers the route, and what that remote is called,
+  follow the source's recorded delivery:
+  - **`cache`**: the source's namespace of this pool's Git cache. The
+    checkout knows the pool as `discobox` (`sourcePoolRemote`), its `origin`
+    is the source's own remote, and the diff-stat base follows
+    `refs/remotes/discobox/<branch>` (`sourceUpstreamRef`). Nothing of it is
+    under the sandbox's tree.
+  - **`push`**, and a local source recorded as `clone`
+    (`gitSourceHasOwnOrigin`): a bare repository at
+    `.../sandboxes/{sandbox}/origins/{slug}.git`, created by `initGitOrigin`
+    and owned by the sandbox user, which a client pushes into. The checkout's
+    `origin` is the pool. It is under the sandbox's own tree, so archive,
+    purge and the volume reaper cover it; it is deliberately not under
+    `sources/`, which the sandbox can write. The `clone` case is a source an
+    earlier pool served live from the developer's Git directory: its
+    repository is empty until a client next pushes, and its checkout is
+    untouched. See ADR 0058.
+  A remote-URL source recorded as `clone` has that remote as its origin; its
+  sandbox cloned it through its proxy and the pool serves nothing for it.
 - Normalize provider-owned source destination defaults before both mounting
   sources and writing the public sandbox manifest so manifest consumers observe
   the paths actually used by the runtime.

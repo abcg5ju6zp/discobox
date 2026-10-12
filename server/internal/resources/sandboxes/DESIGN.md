@@ -137,7 +137,7 @@ rather than polling for readiness (ADR 0039 tier 1).
   a sandbox that is archived, on its way out, or failed and settled — no write
   will clear those. A failed sandbox whose generation is unobserved is a retry
   in flight (an upgrade or repair recorded new intent), and is waited for.
-- Reachable is not usable, and the gap is push-delivered source. Such a sandbox
+- Reachable is not usable, and the gap is a source its client has not delivered. Such a sandbox
   has a container — and so a runtime state naming its pool — from the moment it
   parks at `awaiting_source`, so the acquire succeeds while its workspace is
   still empty; attaching then would auto-start it and launch the harness against
@@ -489,101 +489,95 @@ runtime component interprets its contents. The keys are folded into the
 create's spec fingerprint (`sourceDataFingerprint`), so a container built
 without those mounts is rebuilt.
 
-A sandbox's source reaches it one of two ways, stated on `GitSource.Delivery`
-and decided by the server. Delivery is never inferred from which source fields
-are set: a source with nothing to clone from is a malformed request and fails.
+Every Git source of a sandbox is delivered by a client into its pool's cache of
+Git, and nothing chooses between deliveries
+([ADR 26-10-10-545](../../../../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
+§1). `resolveSourceDelivery` records that on each source at create — the
+primary `Source` and every `SourceCodeReferences` entry alike — as
+`GitSource.Delivery = cache` and a `GitSource.CacheKey`. Both are the server's
+record: a create that names a delivery is refused, and a cache key a client
+sent is replaced. The server never runs Git and the pool never fetches from a
+remote.
 
-- `clone` — the sandbox fetches the source itself, from a remote URL or from a
-  local directory bind-mounted into the pool host.
-- `push` — the client pushes the source into the sandbox's own Git repository.
+`sourceCacheKey` names the pool cache, through `sourcecache`:
 
-A remote URL always clones. A local directory clones only when **both** of these
-hold, and `sourceNeedsPush` answers `push` otherwise:
+| The source | The key |
+| --- | --- |
+| Has a remote | `remote/<host>/<path>`: the remote, normalized (`sourcecache.NormalizeRemote`) |
+| Has none, and its client reported a host identity | `directory/<sourceDataKey>` |
+| Neither | `sandbox/<sandboxID>/<slug>`: a cache of its own, removed with the sandbox |
 
-- the provider instance exposes the source's path to its sandboxes (the
-  directory lies under one of `ProviderDefinition.LocalSourceRoots`);
-- the client is on this machine (`Origin.HostID` equals the server's, via
-  `internal/hostid`) — and is not a sandbox. A sandbox's origin is its own
-  claim, and it can read the user's off any discobox's record, so a create
-  from a sandbox decides delivery with no origin at all: its local sources are
-  always pushed ([ADR 26-09-24-630](../../../../docs/adr/26-09-24-630-a-discobox-delivers-the-source-of-the-discoboxes-it-creates.md) §3).
-  For the same reason it may not name a host path by URL — `file://` or a bare
-  path, which the pool agent would clone as itself (`refuseHostURLs`); only
-  network schemes are a remote.
+- A remote-URL source's remote is its `URL`; a local checkout's is the
+  `UpstreamURL` its client reported (`sourceRemote`). A value that is not a
+  network remote — a path, `file://`, a pool's origins host — is no remote.
+- The host identity is deliberately not part of a remote's key: every member of
+  a project shares one cache per remote on a pool (§2).
+- A sandbox creating a discobox is treated the same. Its origin and its remote
+  are its own claim, and that is harmless: the pool holds a sandbox to what it
+  sends and what its own namespaces reach, whichever cache it names (§7).
 
-Neither implies the other — a Docker provider on a remote server binds fine,
-just not to the caller's files. Unknowns resolve to `push`: a needless push is slow, a bind of
-an unreachable path fails.
+`GitSource.NoLocalRepository`, `NoLocalCommits` and `NoLocalGitDirectory` are
+still recorded facts about the client's filesystem, and decide nothing here.
+Only `NoLocalRepository` matters later: its commits are gone once that create
+is over, so a client cannot deliver it again
+([ADR 0045](../../../../docs/adr/0045-a-directory-with-no-repository-is-delivered-by-push.md)).
 
-Reachability is a property of the path, not of the provider. A Docker instance
-carries the host directories its `hostMounts` name into its pool workers and
-nothing else, so a checkout outside them — `/workspace/src` on an instance
-mounting `/home` — is as unreachable as one on another machine, and is
-delivered by `push` rather than failing in the pool agent with
-`repository '/host/…' does not exist`. The roots come from the engine that
-makes those mounts (`dockerworker.Engine.HostMounts`), so the claim and the
-mounts cannot drift. A backend whose pools are VMs answers the same question
-with whatever it shares into the guest — the macOS `vz` provider exports
-`/Users` read-only over virtiofs and publishes that — so what a root means never
-changes, only what makes a path reachable.
+Sandboxes created earlier keep their recorded delivery, and it keeps its
+meaning: `push` is a bare repository the pool made for that sandbox, which a
+client pushes into; `clone` is a source the sandbox fetched itself. Nothing
+rewrites them (§8).
 
-The decision is made per source, for the primary `Source` and every
-`SourceCodeReferences` entry alike: a reference is a local directory the sandbox
-either binds or cannot see, exactly as the primary source is, and one the
-sandbox cannot reach is exactly as undeliverable. A sandbox can therefore bind
-its primary source and still wait for a push of a reference, or the other way
-round.
-
-`GitSource.NoLocalRepository`, `GitSource.NoLocalCommits` and
-`GitSource.NoLocalGitDirectory` each force `push` ahead of both checks. The first
-says the directory the source came from is in no Git repository at all; the
-second says it is a repository `git init` left with no commits, whose empty base
-commit the client synthesized. Either way there is nothing at that path to clone
-however reachable it is, and only the client holds the source. The third says the
-repository's `.git` is not its Git directory — a linked worktree or submodule
-checkout — and a bound origin is only ever that directory, never the working tree
-around it, whose ignored files are the ones a developer keeps out of git. All
-three are facts about the client's filesystem, which the server cannot see and
-the client cannot get wrong; the decision they feed is still made here, which is
-why a client still may not ask for `push` outright.
-
-They stay separate fields because only `NoLocalRepository` also means the commits
-are gone once that create is over — its repository was built for the run and
-deleted with it. A source resolved from a repository with no commits, or from a
-worktree, keeps its objects in the user's own repository, so the client can still
-deliver it later. See
-[ADR 0045](../../../../docs/adr/0045-a-directory-with-no-repository-is-delivered-by-push.md),
-[ADR 0083](../../../../docs/adr/0083-a-repository-with-no-commits-is-uncommitted-work-on-an-empty-base.md)
-and [ADR 0093](../../../../docs/adr/0093-a-local-sources-origin-is-its-git-directory.md).
+`clientDeliveredSources` is what a sandbox waits on: every `cache` and `push`
+source, and — only while the sandbox has never run (`sandboxHasNeverRun`) — a
+local source recorded as `clone`. That last one was served live from the
+developer's Git directory, which no pool does now, so one that has not cloned
+yet has nothing to clone until a client pushes.
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant S as Server
-    participant W as Worker
+    participant P as Pool agent
     C->>S: create (origin, checkout.commit)
-    S->>S: delivery = push
-    S->>W: create (no url/localDirectory)
-    W->>W: git init --bare origin repository
-    S->>S: state = awaiting_source
-    loop every push-delivered source
-        C->>S: git push <commit>:refs/heads/<branch> (+ snapshot ref)
-        S->>W: proxied git-receive-pack
+    S->>S: delivery = cache, cacheKey
+    S-->>C: sandbox
+    par delivery
+        loop every client-delivered source
+            C->>S: pin (refs and the object each names)
+            S->>P: proxied pin, naming the cache
+            opt the cache lacks something
+                C->>S: git push --atomic (branch, snapshot, remote's refs)
+                S->>P: proxied git-receive-pack
+            end
+        end
+        C->>S: complete-source-push (confirms every source's commit)
+    and provisioning
+        S->>P: create
+        opt no delivery reported yet
+            S->>S: state = awaiting_source
+        end
     end
-    C->>S: complete-source-push (confirms every source's commit)
-    S->>W: create again → origin HEAD → clone → checkout + restore
-    W->>W: start harness
+    S->>P: create again → namespace HEAD → sandbox clones → settle
+    P->>P: start harness
 ```
+
+A delivery does not wait for the sandbox (§3). Its route names the sandbox and
+the slug, the proxy names the cache, and the pool needs nothing else, so the
+client delivers while the image is pulled. `CompleteSandboxSourcePush` is
+therefore accepted for any sandbox still owed its source that has never run —
+`pending` as well as `awaiting_source` — and a sandbox whose delivery is
+reported before it is provisioned never parks. Any other state is refused: a
+completion there would restart a sandbox out from under whatever runs in it.
 
 The push transport is the sandbox Git proxy
 (`internal/server/sandbox_git_proxy.go` → `pool-agent/githttp`); delivery adds
-no transport of its own. Each source has its own repository there, addressed by
-its slug.
+no transport of its own. Each source has its own origin there, addressed by
+its slug: a namespace of a cache, or a repository of its own.
 The commit is fixed at create in `Checkout.Commit`; `complete-source-push` only
 confirms it, and a mismatch is refused.
 
 Completion is one report for the whole sandbox, not one per source: the client
-pushes every push-delivered source and then names them all, keyed by slug, in a
+delivers every client-delivered source and then names them all, keyed by slug, in a
 single `complete-source-push`. Resuming per source would start the harness
 against a workspace still missing the sources not yet pushed, so the report is
 refused unless it covers every one of them — a missing source, an unknown slug,

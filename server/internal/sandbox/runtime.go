@@ -95,6 +95,12 @@ type Provider interface {
 type SandboxRef struct {
 	SandboxID string
 	ProjectID string
+	// PoolID is the pool the control plane placed the sandbox in. It is how a
+	// sandbox is reached before its provider holds any state for it: a
+	// client delivers a new sandbox's source to its pool while the sandbox is
+	// still being made (ADR 26-10-10-545 §3). Empty when the caller does not
+	// know it, and then only the provider's own state says.
+	PoolID string
 }
 
 // Sandbox is the runtime provider's view of a sandbox instance.

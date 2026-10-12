@@ -107,37 +107,22 @@ The guest sees exactly one host directory: `/Users`, exported as a read-only
 virtiofs share tagged `discobox-users` and mounted in the guest at `/Users` —
 the same absolute path it has on the Mac.
 
-That equality is the mechanism, not a convenience. A local source is delivered
-one of two ways (`server/internal/resources/sandboxes`, `sourceNeedsPush`): the
-client pushes the repository in, or the sandbox clones it from a path the pool
-can already reach. The provider publishes `/Users` as a `LocalSourceRoots`
-entry, so a checkout under it takes the clone path, and every spelling of that
-checkout downstream is the same string under one prefix — the host path the
-client reported, and the `/host/Users/...` path the pool agent opens it at
-through the engine's host mount of the guest's `/Users`, to serve it as the
-source's live origin over its git-origins route (ADR 0126 §4). Mounting the
-share anywhere else in the guest would break that: the prefix is the only
-translation applied.
+No source delivery reads the share. Every source is delivered by a client into
+the pool's cache of Git, and the pool agent serves a sandbox its namespace of
+that cache
+([ADR 26-10-10-545](../../../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)):
+nothing clones from, or serves, a path on the Mac. The share, the engine's host
+mount of it at `/host/Users`, and the guest's mount point are still made.
 
-Read-only is the whole of the write policy. A sandbox clones from the
-developer's checkout and works in its own copy on the pool's data disk; nothing
-in a sandbox may write to files on the Mac. The host enforces it — the guest's
-`ro` in `vm-image/fstab` is a second statement of the same thing, not the one that
+Read-only is the whole of the write policy: nothing in a pool or a sandbox may
+write to files on the Mac. The host enforces it — the guest's `ro` in
+`vm-image/fstab` is a second statement of the same thing, not the one that
 counts.
 
 The share stops at the pool. The guest and the pool-agent container see all of
-`/Users`; a sandbox sees none of it — nothing is bound into a sandbox, and it
-fetches only what the git-origins route serves of that source's `.git`: the
-allowed refs, fetch-only. Widening the share therefore widens what the pool
-agent can read, not what a sandbox can, and the reason to keep it to `/Users` rather
-than `/` is exactly that: a developer's files are the point, the rest of the
-Mac is not.
-
-`hostShares` is the single list. The virtiofs devices the driver attaches, the
-engine's host mounts, and the published source roots are all derived from it, so
-a directory the guest is given and one a sandbox may clone from cannot drift
-apart. A Mac with no `/Users` exports nothing and publishes no roots, which
-costs a source push rather than a pool.
+`/Users`; a sandbox sees none of it — nothing is bound into a sandbox. Widening
+the share therefore widens what the pool agent can read, not what a sandbox
+can.
 
 ## Clock
 

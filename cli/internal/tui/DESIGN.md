@@ -752,11 +752,14 @@ here since it was created into the origin that discobox fetches from
 ([ADR 26-09-05-008](../../../docs/adr/26-09-05-008-an-attached-client-pushes-the-commits-made-where-it-runs.md)).
 Nobody presses anything. See `push.go`.
 
-**It is safe to do unasked because of what the target is.** The origin of a
-push-delivered source is a bare repository belonging to one discobox, bound
-read-only into it, written by one client
-([ADR 0058](../../../docs/adr/0058-a-push-delivered-source-has-a-pool-side-origin.md)
-§§1–2). A push moves `origin/<branch>` and stops: nothing in the discobox is
+**It is safe to do unasked because of what the target is.** The origin a
+client pushes a source into belongs to one discobox — its namespace of the
+pool's cache, or for a discobox created earlier a bare repository of its own —
+which the discobox only ever fetches
+([ADR 0058](../../../docs/adr/0058-a-push-delivered-source-has-a-pool-side-origin.md),
+[ADR 26-10-10-545](../../../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)).
+A push moves `discobox/<branch>` (`origin/<branch>` in an earlier discobox;
+`SourcePush.Remote` says which) and stops: nothing in the discobox is
 checked out, rebased or interrupted, and uncommitted work in it cannot be
 touched. Apply is the opposite — it writes the developer's own working tree —
 which is why apply waits for its key and this is not offered at all.

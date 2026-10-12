@@ -108,8 +108,9 @@ Decision records: [ADR 0025](../docs/adr/0025-the-sandbox-user-is-one-contract-r
 ## Reading the working tree at boot
 
 - **Anything at boot that reads the sandbox's sources goes behind
-  `agentRuntime.awaitSources`.** In a push-delivered sandbox the container is
-  running before its working tree exists (ADR 0001), so boot code that reads it
+  `agentRuntime.awaitSources`.** A sandbox's container can be running before
+  its client has delivered its source, and so before its working tree exists
+  (ADR 0001), so boot code that reads it
   is racing the delivery — and the race is silent, because an empty tree is
   indistinguishable from a repository that declares nothing. That is exactly how
   `.discobox/services` came to start on no sandbox at all: discovery ran ~3

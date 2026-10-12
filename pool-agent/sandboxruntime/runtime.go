@@ -3128,30 +3128,6 @@ func slugifySource(value string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func cleanAbsPath(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" || !filepath.IsAbs(value) {
-		return ""
-	}
-	parts := make([]string, 0, strings.Count(value, string(filepath.Separator))+1)
-	for _, part := range strings.Split(value, string(filepath.Separator)) {
-		switch part {
-		case "", ".":
-			continue
-		case "..":
-			if len(parts) > 0 {
-				parts = parts[:len(parts)-1]
-			}
-		default:
-			parts = append(parts, part)
-		}
-	}
-	if len(parts) == 0 {
-		return string(filepath.Separator)
-	}
-	return string(filepath.Separator) + filepath.Join(parts...)
-}
-
 // daemonPath converts a path under the runtime's root into the path this pool's
 // Docker daemon sees. Every mount source handed to the daemon goes through it;
 // nothing else needs to, because everything else is read and written here.

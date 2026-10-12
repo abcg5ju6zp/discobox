@@ -389,6 +389,29 @@ func TestPoolProviderMintsBootstrapOnlyWhenRuntimeIsCreated(t *testing.T) {
 	})
 }
 
+// A sandbox the provider has not created yet has no state to name its pool,
+// and is reached at the pool the control plane placed it in: a client delivers
+// its source there while it is still being made (ADR 26-10-10-545 §3). With no
+// pool named either, there is nowhere to reach it.
+func TestPoolProviderReachesANewSandboxAtThePoolItWasPlacedIn(t *testing.T) {
+	runtimeProvider := newTestRuntimeProvider(t, "project-1", "pool-1")
+	runtimeProvider.staticToken = true
+	provider := New(runtimeProvider, sandbox.ProviderDefinition{Name: "test"}, &fakePoolManager{pool: activePool("pool-1")})
+
+	lease, err := provider.AcquireHTTPClient(context.Background(),
+		sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1", PoolID: "pool-1"}, nil, []string{poolagentauth.ScopeSandboxWrite})
+	if err != nil {
+		t.Fatalf("acquire a client for a sandbox with no provider state: %v", err)
+	}
+	lease.Release()
+
+	_, err = provider.AcquireHTTPClient(context.Background(),
+		sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, nil, []string{poolagentauth.ScopeSandboxWrite})
+	if !errors.Is(err, sandbox.ErrNotFound) {
+		t.Fatalf("a sandbox with no state and no pool = %v, want ErrNotFound", err)
+	}
+}
+
 func TestPoolProviderAcquireHTTPClientReconcilesPoolAndRetries(t *testing.T) {
 	oldTimeout := poolCapacityWaitTimeout
 	oldInterval := poolCapacityPollInterval

@@ -20,6 +20,7 @@ import (
 	"github.com/discobox-ai/discobox/server/internal/service"
 	services "github.com/discobox-ai/discobox/server/internal/services"
 	"github.com/discobox-ai/discobox/server/internal/transport"
+	"github.com/discobox-ai/discobox/sourcecache"
 	"github.com/discobox-ai/x/gormdb"
 	"github.com/discobox-ai/x/id"
 	"github.com/go-chi/chi/v5"
@@ -262,6 +263,106 @@ func TestSandboxGitOriginRouteProxiesReceivePackToPool(t *testing.T) {
 	}
 	if !slices.Equal(stubs.sandboxScopes, []string{poolagentauth.ScopeSandboxWrite}) {
 		t.Fatalf("sandbox HTTP scopes = %#v", stubs.sandboxScopes)
+	}
+}
+
+// A cache-delivered source's origin is its namespace of the pool's Git cache,
+// which the control plane names when it forwards: the pool's cache route, the
+// cache's key, and — for a discobox delivering to one it created — the caller.
+// None of that is ever the client's word (ADR 26-10-10-545 §§3, 7).
+func TestSandboxGitOriginRouteNamesTheCacheOfACacheDeliveredSource(t *testing.T) {
+	ctx := context.Background()
+	stubs := newRouterTestServices()
+	slug, key := "primary", "remote/github.com/acme/widget"
+	stubs.sandboxes["sandbox-1"] = model.Sandbox{
+		ID:              "sandbox-1",
+		ProjectID:       testDefaultProjectID,
+		CreatedByUserID: service.DefaultUserID,
+		Name:            "sandbox",
+		PoolID:          "pool-1",
+		SandboxManifest: model.SandboxManifest{
+			Source: &model.GitSource{Kind: "git", Slug: &slug, Delivery: model.GitSourceDeliveryCache, CacheKey: &key},
+		},
+	}
+	projectID := testDefaultProjectID
+	type seen struct{ path, key, caller string }
+	var got seen
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = seen{path: r.URL.Path, key: r.Header.Get(sourcecache.KeyHeader), caller: r.Header.Get(sourcecache.CallerHeader)}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(upstream.Close)
+	stubs.sandboxLease = transport.NewHTTPClientLeaseWithBaseURLAndAuth(upstream.Client(), upstream.URL, "worker-token", func() {})
+	router, err := NewRouter(services.Services{
+		Projects:       stubs,
+		HarnessConfigs: stubs,
+		Sandboxes:      stubs,
+		Providers:      stubs,
+		Pools:          stubs,
+		Jobs:           stubs,
+	})
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+	base := "/projects/" + projectID + "/sandboxes/sandbox-1/"
+	poolBase := "/api/project/" + projectID + "/pool/pool-1/sandboxes/sandbox-1/"
+	for name, tc := range map[string]struct {
+		method, path, scope string
+		want                seen
+	}{
+		"a push": {
+			http.MethodPost, "git-origins/primary.git/git-receive-pack", poolagentauth.ScopeSandboxWrite,
+			seen{path: poolBase + "git-cache-origins/primary.git/git-receive-pack", key: key},
+		},
+		"a pin": {
+			http.MethodPost, "git-origins/primary.git/pin", poolagentauth.ScopeSandboxWrite,
+			seen{path: poolBase + "git-cache-origins/primary.git/pin", key: key},
+		},
+		"a fetch of what the cache remembers of the remote": {
+			http.MethodGet, "git-caches/primary.git/info/refs", poolagentauth.ScopeSandboxRead,
+			seen{path: poolBase + "git-cache-remotes/primary.git/info/refs", key: key},
+		},
+	} {
+		got = seen{}
+		stubs.sandboxScopes = nil
+		resp := httptest.NewRecorder()
+		req := scopedUserRequest(ctx, tc.method, base+tc.path, nil, tc.scope)
+		req.Header.Set("Authorization", "Bearer user-token")
+		// A client that names a cache or a caller of its own is not believed.
+		req.Header.Set(sourcecache.KeyHeader, "remote/github.com/someone/else")
+		req.Header.Set(sourcecache.CallerHeader, "sbx-forged")
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, body = %s", name, resp.Code, resp.Body.String())
+		}
+		if got != tc.want {
+			t.Errorf("%s: the pool was asked %+v, want %+v", name, got, tc.want)
+		}
+		if !slices.Equal(stubs.sandboxScopes, []string{tc.scope}) {
+			t.Errorf("%s: scopes = %v, want %s", name, stubs.sandboxScopes, tc.scope)
+		}
+	}
+
+	// A discobox delivering to one it created is named to the pool, which
+	// holds it to what it sends and what its own sources hold.
+	got = seen{}
+	asSandbox := httptest.NewRequestWithContext(ctx, http.MethodPost, base+"git-origins/primary.git/git-receive-pack", nil)
+	asSandbox = asSandbox.WithContext(auth.WithPrincipal(asSandbox.Context(), auth.Principal{
+		Type: auth.PrincipalTypeSandbox, SandboxID: "sbx-lead", ProjectID: projectID, UserID: service.DefaultUserID,
+		Scopes: []string{poolagentauth.ScopeSandboxWrite},
+	}))
+	asSandbox.Header.Set(sourcecache.CallerHeader, "sbx-forged")
+	router.ServeHTTP(httptest.NewRecorder(), asSandbox)
+	if want := (seen{path: poolBase + "git-cache-origins/primary.git/git-receive-pack", key: key, caller: "sbx-lead"}); got != want {
+		t.Errorf("a sandbox's push: the pool was asked %+v, want %+v", got, want)
+	}
+
+	// A source that is not cache-delivered has nothing on the cache route.
+	resp := httptest.NewRecorder()
+	req := scopedUserRequest(ctx, http.MethodGet, base+"git-caches/other.git/info/refs", nil, poolagentauth.ScopeSandboxRead)
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("the cache route for a source with no cache = %d, want 404", resp.Code)
 	}
 }
 

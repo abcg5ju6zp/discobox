@@ -31,7 +31,15 @@ control plane's resolved harness config.
   pool cannot know them), the `BaseCommit`/`UpstreamRef` the agent's diff stat
   measures from, `AwaitsDelivery` (see Readiness), and how the sandbox agent
   checks it out when it clones it (ADR 0126 §4): `RefName`/`RefType`,
-  `UpstreamURL`, and a dirty `Workspace` snapshot. `SourceMaterializedMarker`
+  `UpstreamURL`, `PoolRemote`, and a dirty `Workspace` snapshot. `PoolRemote`
+  names the remote the checkout reaches its pool under, for a source delivered
+  into the pool's cache
+  ([ADR 26-10-10-545](../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md) §6):
+  `discobox`, with `origin` the source's own remote, `UpstreamURL`. Absent is
+  a source delivered before that, whose `origin` is the pool and whose
+  `UpstreamURL` is a remote named `upstream`. `UpstreamRef` is the pool's copy
+  of the source's branch either way — `refs/remotes/discobox/<branch>` or
+  `refs/remotes/origin/<branch>` — which a client's push moves. `SourceMaterializedMarker`
   is the file inside a checkout's `.git` that says it has been materialized
   once; the sandbox agent, which materializes every source, reads it first and
   writes it last (a pool wrote an empty one, before the sandbox cloned its own). `Git` is authorship,
@@ -134,7 +142,7 @@ the `runcca` runc wrapper).
 ## Readiness
 
 `Source.AwaitsDelivery` marks a source whose content is not in place when the
-container is created — a push-delivered one, still being sent by the client.
+container is created — one a client delivers, which may not have landed yet.
 The file `SourcesReadyFileName` (`ready`, seen in the sandbox as
 `SourcesReadyPath`, `/etc/discobox/ready`) is the signal that every source is
 materialized *and* the bootstrap beside it is final; the sandbox agent writes

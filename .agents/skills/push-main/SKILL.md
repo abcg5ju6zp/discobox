@@ -22,9 +22,10 @@ secrets, or a CI failure whose right remediation is genuinely ambiguous.
 `upstream` is GitHub (`ibuildthecloud/discobox`, redirecting to
 `discobox-ai/discobox`); `origin` is a Depot mirror. CI, `gh`, and "main" all
 mean **upstream**. Do not assume the names — confirm with `git remote -v` and
-pick the remote whose URL is the GitHub one. Inside a discobox, `origin` is the
-sandbox's own mirror and `upstream` is whatever the host's branch tracks — the
-Depot mirror as readily as GitHub — so the name proves nothing there.
+pick the remote whose URL is the GitHub one. Inside a discobox the names prove
+nothing: `origin` is the host checkout's own remote — the Depot mirror as
+readily as GitHub — and `discobox` is the pool. In a discobox created before
+ADR 26-10-10-545, `origin` is the pool and `upstream` is that remote.
 
 `gh` does not infer the repo from `upstream`, so pass
 `--repo discobox-ai/discobox` to every `gh` call.

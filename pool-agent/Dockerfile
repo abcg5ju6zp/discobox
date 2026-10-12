@@ -30,6 +30,7 @@ COPY sandboxpath ./sandboxpath
 COPY sandboxtree ./sandboxtree
 COPY sandboxuser ./sandboxuser
 COPY secretformat ./secretformat
+COPY sourcecache ./sourcecache
 COPY tarsums ./tarsums
 COPY vsock ./vsock
 COPY wellknown ./wellknown

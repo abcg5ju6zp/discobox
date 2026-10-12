@@ -331,14 +331,17 @@ Drive it from `-H shell` boxes of the dev pool (see the console section for
   pool-agent image rebuilds, which resets every bridge connection; a long
   transfer that breaks then is the rebuild (`docker inspect -f
   '{{.State.StartedAt}}'` on the pool container), not the change.
-- **A live origin needs the server's host ID.** A source is clone-delivered,
-  and its origin served live from the developer's `.git`, only when the
-  client's host ID (`~/.config/discobox/host-id`) is the server's and the
-  repository is somewhere the dev pool sees (`/home`, through
-  `DISCOBOX_POOL_HOST_MOUNT_PREFIX=/host`; not `/tmp`). A CLI run with another
-  `HOME` gets push delivery and a bare origin that new commits never reach;
-  pass `DISCOBOX_HOST_ID` to keep it. Check with
-  `d admin box get <id> -o json | jq .config.source.delivery`.
+- **Every source is delivered by the client, into the pool's Git cache** (ADR
+  26-10-10-545), wherever the server runs and wherever the repository is
+  (`/tmp` included). A box sees new commits only after a push — `d push`, or
+  an attached client's — as `discobox/<branch>`. Check with
+  `d admin box get <id> -o json | jq '.config.source | {delivery, cacheKey}'`:
+  `cache`, and a key of `remote/<host>/<path>` for a checkout with a remote,
+  `directory/…` for one without. A CLI run with another `HOME` has another
+  host ID, which changes only a `directory/…` key; pass `DISCOBOX_HOST_ID` to
+  keep it. The caches are bare repositories under the dev pool's
+  `…/pools/<pool>/git-cache/`, one namespace per box source
+  (`git for-each-ref refs/namespaces/`).
 - Sources: the pool's own record of a box's delivery is the `delivered` flags
   in its `runtime-config.json`; flipping them to `false` on a stopped box and
   starting it drives the start-time settle (`settleConverged`), which reopens

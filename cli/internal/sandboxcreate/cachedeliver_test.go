@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/cgi"
+	"net/http/cgi" //nolint:gosec // a test double for a pool's git backend, on a current Go
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -116,7 +116,8 @@ func (p *fakePool) pin(w http.ResponseWriter, r *http.Request, namespace string)
 	}{Pinned: []string{}, Missing: []string{}}
 	var held []string
 	for ref, object := range request.Refs {
-		if exec.Command("git", "--git-dir", p.cache, "cat-file", "-e", object).Run() == nil {
+		//nolint:gosec // the test's own repository and an object id it sent itself
+		if exec.CommandContext(r.Context(), "git", "--git-dir", p.cache, "cat-file", "-e", object).Run() == nil {
 			held = append(held, ref)
 		} else {
 			result.Missing = append(result.Missing, ref)
@@ -132,7 +133,9 @@ func (p *fakePool) pin(w http.ResponseWriter, r *http.Request, namespace string)
 	}
 	p.recordRemote(namespace)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		p.t.Error(err)
+	}
 }
 
 // recordRemote copies a namespace's remote branches to refs/cache, which is
@@ -184,7 +187,7 @@ func (p *fakePool) CompleteSandboxSourcePush(_ context.Context, body *apimodel.C
 
 func deliverGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")

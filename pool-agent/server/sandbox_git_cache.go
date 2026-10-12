@@ -14,9 +14,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/discobox-ai/discobox/gitbackend"
-	"github.com/discobox-ai/discobox/internal/sourcecache"
 	"github.com/discobox-ai/discobox/pool-agent/gitcache"
 	"github.com/discobox-ai/discobox/pool-agent/githttp"
+	"github.com/discobox-ai/discobox/sourcecache"
 )
 
 const (

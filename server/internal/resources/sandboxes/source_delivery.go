@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/discobox-ai/discobox/internal/originkey"
-	"github.com/discobox-ai/discobox/internal/sourcecache"
 	"github.com/discobox-ai/discobox/server/internal/apperrors"
 	"github.com/discobox-ai/discobox/server/internal/model"
 	"github.com/discobox-ai/discobox/server/internal/reconcile"
+	"github.com/discobox-ai/discobox/sourcecache"
 )
 
 // sourceDataKey identifies the durable pool-local data shared by every sandbox

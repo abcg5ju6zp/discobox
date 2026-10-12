@@ -3,7 +3,7 @@ package proxyagent
 import (
 	"net/url"
 
-	"github.com/discobox-ai/discobox/internal/sourcecache"
+	"github.com/discobox-ai/discobox/sourcecache"
 )
 
 // The origins host: where a sandbox fetches its sources' origins, which the
