@@ -165,7 +165,8 @@ type Issue struct {
 	// Timeline is everything that happened after it was opened, oldest first:
 	// the comments and the events between them.
 	Timeline []Event
-	// Truncated is set when the timeline was longer than was read.
+	// Truncated is set when the timeline was longer than was read, or a pull
+	// request's review comments were: the threads past there are not here.
 	Truncated bool
 }
 
@@ -279,9 +280,12 @@ func (c *Client) Issue(ctx context.Context, owner, name string, number int, full
 		if cached.issue.checksMove() && !anonymous {
 			// A copy: the read handed out before still points at the old one.
 			pull := *cached.issue.Pull
-			// A read of them that failed leaves the ones known.
+			// A read of them that failed leaves the ones known, and says
+			// they are not the list as it now stands.
 			if checks, partial, ok := c.checks(ctx, repoPath(owner, name), pull.HeadSHA); ok {
 				pull.Checks, pull.ChecksPartial = checks, partial
+			} else {
+				pull.ChecksPartial = true
 			}
 			// Whether it can merge moves the same way.
 			c.mergeState(ctx, owner, name, number, &pull)

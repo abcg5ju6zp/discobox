@@ -224,6 +224,11 @@ func (c *Client) readPull(ctx context.Context, owner, name string, issue *Issue,
 			comments = append(comments, items...)
 			next = nextPage(link)
 		}
+		// More review comments than are read: the threads past here, and a
+		// review that only said something in one of them, are not on the page.
+		if next != "" {
+			issue.Truncated = true
+		}
 		for review, threads := range reviewThreads(comments) {
 			if at, ok := reviews[review]; ok {
 				issue.Timeline[at].Threads = threads

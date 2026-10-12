@@ -93,7 +93,7 @@ func TestAnIssueKeepsWhatAPageIsWrittenWith(t *testing.T) {
 			Files: []github.File{{Path: "a/\u200bb.go", Patch: "+a\u200db\r\n+c\u200bd"}},
 		},
 		Timeline: []github.Event{{
-			Kind: "reviewed", Body: path,
+			Kind: "reviewed", Body: path, Subject: "bo\u200bb",
 			Threads: []github.Thread{{Path: "a/\u200bb.go", Hunk: "+x\u200by", Comments: []github.ThreadComment{{Body: path}}}},
 		}},
 	})
@@ -122,6 +122,7 @@ func TestAnIssueKeepsWhatAPageIsWrittenWith(t *testing.T) {
 		"branch":      {issue.Pull.Head, `fix\u200b/x`},
 		"thread path": {thread.Path, `a/\u200bb.go`},
 		"thread hunk": {thread.Hunk, `+x\u200by`},
+		"subject":     {issue.Timeline[0].Subject, `bo\u200bb`},
 	} {
 		if got[0] != got[1] {
 			t.Errorf("the %s hides what is invisible in it: %q, want %q", name, got[0], got[1])

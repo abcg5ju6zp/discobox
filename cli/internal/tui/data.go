@@ -1725,7 +1725,8 @@ type Issue struct {
 	SubIssuesDone  int
 	// Timeline is everything that happened after it was opened, oldest first.
 	Timeline []IssueEvent
-	// Truncated is set when the timeline was longer than was read.
+	// Truncated is set when the timeline was longer than was read, or a pull
+	// request's review comments were: the threads past there are not here.
 	Truncated bool
 }
 
