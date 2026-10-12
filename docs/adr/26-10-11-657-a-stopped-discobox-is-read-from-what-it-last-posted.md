@@ -73,6 +73,11 @@ forward. Its answer names the sandboxes whose digest it does not hold, and the
 pool agent sends those in full on its next tick. A pool agent records a digest
 as delivered only on an answer that does not name the sandbox.
 
+A report is bounded: one inventory is at most 4 MiB, a report carries at most
+8 MiB of them, and a pool with more to send makes further reports in the same
+tick. The control plane reads no more than 16 MiB of a report, and refuses
+one that is larger.
+
 Configure sandboxes are not asked: they are polled every second
 (ADR 26-10-09-867) and nobody reads one that has stopped.
 

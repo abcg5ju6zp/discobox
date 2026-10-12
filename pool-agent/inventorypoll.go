@@ -20,6 +20,14 @@ import (
 // must stay a thing it can afford to keep for every sandbox.
 const maxSandboxInventoryBytes = 4 << 20
 
+// maxInventoryReportBytes bounds the inventories one report carries. A pool
+// has no bound on its sandboxes, and on its first tick, or after a control
+// plane restart loses nothing but still asks, every one of them is sent in
+// full: one request for all of them would be as large as the pool, and the
+// control plane holds a request body in memory to decode it. An entry sent by
+// digest alone weighs nothing here.
+const maxInventoryReportBytes = 8 << 20
+
 // reportInventories reads the inventory of each of running — what its list
 // reads answer — and posts them to the control plane, which answers those
 // reads from the last one while the sandbox is not running (ADR 26-10-11-657).
@@ -85,31 +93,55 @@ func (p *sandboxAgentStatusPoller) reportInventories(ctx context.Context, runnin
 	if len(entries) == 0 {
 		return
 	}
-	resp, err := p.client.ReportSandboxInventories(ctx, SandboxInventoryReportRequest{
-		ControlPlaneURL: p.bootstrap.ControlPlaneURL,
-		ProjectID:       p.bootstrap.ProjectID,
-		PoolID:          p.bootstrap.PoolID,
-		PrivateKey:      p.registration.PrivateKey,
-		Sandboxes:       entries,
-	})
-	if err != nil {
-		// Nothing is recorded as taken, so everything changed is sent again.
-		p.logger.Warn("push sandbox inventories", "error", err)
-		return
-	}
-	wanted := make(map[string]bool, len(resp.Wanted))
-	for _, id := range resp.Wanted {
-		wanted[id] = true
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, entry := range entries {
-		if wanted[entry.SandboxID] {
-			delete(p.inventories, entry.SandboxID)
+	for _, batch := range inventoryReportBatches(entries) {
+		resp, err := p.client.ReportSandboxInventories(ctx, SandboxInventoryReportRequest{
+			ControlPlaneURL: p.bootstrap.ControlPlaneURL,
+			ProjectID:       p.bootstrap.ProjectID,
+			PoolID:          p.bootstrap.PoolID,
+			PrivateKey:      p.registration.PrivateKey,
+			Sandboxes:       batch,
+		})
+		if err != nil {
+			// Nothing in this report is recorded as taken, so what changed
+			// is sent again. The reports after it are still made.
+			p.logger.Warn("push sandbox inventories", "error", err)
 			continue
 		}
-		p.inventories[entry.SandboxID] = entry.Digest
+		wanted := make(map[string]bool, len(resp.Wanted))
+		for _, id := range resp.Wanted {
+			wanted[id] = true
+		}
+		p.mu.Lock()
+		for _, entry := range batch {
+			if wanted[entry.SandboxID] {
+				delete(p.inventories, entry.SandboxID)
+				continue
+			}
+			p.inventories[entry.SandboxID] = entry.Digest
+		}
+		p.mu.Unlock()
 	}
+}
+
+// inventoryReportBatches splits a tick's entries into reports that each carry
+// at most maxInventoryReportBytes of inventory. One inventory is never split,
+// and is never larger than a report may be.
+func inventoryReportBatches(entries []SandboxInventoryEntry) [][]SandboxInventoryEntry {
+	var batches [][]SandboxInventoryEntry
+	var batch []SandboxInventoryEntry
+	size := 0
+	for _, entry := range entries {
+		if len(batch) > 0 && size+len(entry.Inventory) > maxInventoryReportBytes {
+			batches = append(batches, batch)
+			batch, size = nil, 0
+		}
+		batch = append(batch, entry)
+		size += len(entry.Inventory)
+	}
+	if len(batch) > 0 {
+		batches = append(batches, batch)
+	}
+	return batches
 }
 
 // pollInventory reads one sandbox's inventory, naming the digest already

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -219,3 +220,42 @@ func TestActionsAndUnboundedReadsStillReachAStoppedSandbox(t *testing.T) {
 		})
 	}
 }
+
+// An inventory report is refused past its bound before the generated server
+// buffers it: a pool agent keeps its reports well under this, so a larger one
+// is not a report.
+func TestAnOversizedInventoryReportIsRefusedBeforeItIsBuffered(t *testing.T) {
+	read := 0
+	body := readerFunc(func(p []byte) (int, error) {
+		for i := range p {
+			p[i] = ' '
+		}
+		read += len(p)
+		return len(p), nil
+	})
+	reached := false
+	handler := boundInventoryReports(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		if _, err := io.ReadAll(r.Body); err == nil {
+			t.Error("an endless body was read whole")
+		}
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	}))
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/pools/pool-1/sandbox-inventories", body))
+	if !reached || read > maxInventoryReportBodyBytes+(1<<20) {
+		t.Fatalf("reached = %v, read %d bytes; want the body cut off near %d", reached, read, maxInventoryReportBodyBytes)
+	}
+
+	// Every other route's body is left alone.
+	other := boundInventoryReports(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if data, err := io.ReadAll(r.Body); err != nil || len(data) != 5 {
+			t.Errorf("another route's body: %q, %v", data, err)
+		}
+	}))
+	other.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/pools/pool-1/sandbox-agent-status", strings.NewReader("hello")))
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }

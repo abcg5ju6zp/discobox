@@ -182,3 +182,35 @@ func TestInventoryIsNotReadOnTheConfigureTick(t *testing.T) {
 		t.Fatalf("status entries = %d, inventory reports = %d; want 1 and 0", len(client.reported), len(client.inventories))
 	}
 }
+
+// A pool's inventories do not all go in one request: a report is bounded,
+// whatever the pool's size, and nothing is dropped or split to keep it so.
+func TestInventoryReportsAreBoundedInSize(t *testing.T) {
+	full := json.RawMessage(strings.Repeat("x", 3<<20))
+	var entries []SandboxInventoryEntry
+	for i := 0; i < 7; i++ {
+		entries = append(entries, SandboxInventoryEntry{SandboxID: "full", Inventory: full})
+		entries = append(entries, SandboxInventoryEntry{SandboxID: "digest-only"})
+	}
+	batches := inventoryReportBatches(entries)
+	if len(batches) < 3 {
+		t.Fatalf("%d reports for 21 MiB of inventories, want them split", len(batches))
+	}
+	total := 0
+	for _, batch := range batches {
+		size := 0
+		for _, entry := range batch {
+			size += len(entry.Inventory)
+		}
+		if size > maxInventoryReportBytes {
+			t.Fatalf("a report carries %d bytes, more than %d", size, maxInventoryReportBytes)
+		}
+		total += len(batch)
+	}
+	if total != len(entries) {
+		t.Fatalf("%d entries reported, want all %d", total, len(entries))
+	}
+	if got := inventoryReportBatches(nil); len(got) != 0 {
+		t.Fatalf("no entries made %d reports", len(got))
+	}
+}
