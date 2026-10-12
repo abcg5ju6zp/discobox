@@ -34,10 +34,10 @@ func refreshClientConfigExample() {
 // --user-skills as given, and for either one that was not — nil — what
 // client.yaml's new section says. A flag given replaces the setting rather
 // than adding to it, so a command line always says exactly what it means.
+//
+// The file is read even when both are given: one that does not parse stops
+// every create, not only the ones that happen to need a setting from it.
 func newSkills(dirs []string, user *bool) ([]string, bool, error) {
-	if dirs != nil && user != nil {
-		return dirs, *user, nil
-	}
 	cfg, err := loadClientConfig()
 	if err != nil {
 		return nil, false, err
