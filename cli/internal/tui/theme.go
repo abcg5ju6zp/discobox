@@ -64,6 +64,18 @@ const (
 	colErr  = "196"
 	colOK   = "83"
 	colInfo = "111"
+	// A block of code in a comment's markdown is drawn in discobox-review's
+	// syntax colors (its syntaxPalette). They are hexes because the highlighter
+	// takes nothing else; each is the value of the index beside it, so it comes
+	// back out as that index.
+	colSynKeyword = "#af87ff" // 141
+	colSynFunc    = "#87afff" // 111, colInfo
+	colSynType    = "#87d7ff" // 117
+	colSynNumber  = "#87d7d7" // 116
+	colSynString  = "#d7af87" // 180
+	colSynComment = "#8a8a8a" // 245, colGrey
+	colSynAdd     = "#87ff87" // 120, colGreen
+	colSynDel     = "#ffaf87" // 216, colSalmon
 )
 
 // detectColor reports whether the terminal will show color at all. NO_COLOR is
