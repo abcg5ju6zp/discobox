@@ -772,19 +772,49 @@ func (a *App) waitForSandboxCtx(ctx context.Context, client *apiclientgen.Client
 // A failure the server classified as an image the pool cannot obtain also says
 // what to do about it, because the message alone reads like something a retry
 // might get past and it is not.
+//
+// A failure that is an automatic repair's own says that too, with the failure
+// the repair was answering and the command that tries again: there is one
+// automatic repair per failure (ADR 26-10-12-711 §4), so nothing else will.
 func sandboxFailureReason(sandbox *apimodel.Sandbox) string {
 	message, ok := sandbox.Runtime.ErrorMessage.Get()
 	if !ok || strings.TrimSpace(message) == "" {
-		return fmt.Sprintf("state=%s", sandbox.Runtime.State)
+		return fmt.Sprintf("state=%s", sandbox.Runtime.State) + failedAutomaticRepairHint(sandbox, "")
 	}
 	message = strings.TrimSpace(message)
 	if sandbox.Runtime.ErrorReason.Or("") != apiclientgen.SandboxRuntimeErrorReasonImageUnavailable {
-		return message
+		return message + failedAutomaticRepairHint(sandbox, message)
 	}
 	if upgrade, ok := sandbox.Runtime.Upgrade.Get(); ok && upgrade.Available {
 		return fmt.Sprintf("%s\nIts harness has a newer image: run `discobox admin box upgrade %s` to move it there, keeping its work.", message, sandbox.ID)
 	}
 	return message + "\nIts harness has no newer image to upgrade it to."
+}
+
+// failedAutomaticRepairHint is the line under a failure that is an automatic
+// repair's own, or "" when it is not one or message already names the command —
+// the server's refusal of an action on such a sandbox does.
+//
+// The record says so: a sandbox settled on the generation its automatic repair
+// was recorded as, with that repair never having landed, failed in it. A
+// repair that landed is not this failure's: the sandbox failed again later.
+func failedAutomaticRepairHint(sandbox *apimodel.Sandbox, message string) string {
+	repair, ok := sandbox.Runtime.AutomaticRepair.Get()
+	if !ok || repair.Generation != sandbox.Runtime.Generation || sandbox.Runtime.Generation != sandbox.Runtime.ObservedGeneration {
+		return ""
+	}
+	if _, landed := repair.LandedAt.Get(); landed {
+		return ""
+	}
+	command := "discobox admin box repair " + sandbox.ID
+	if strings.Contains(message, command) {
+		return ""
+	}
+	hint := "\nThat is the one automatic repair of it failing"
+	if failure := strings.TrimSpace(repair.Failure.Or("")); failure != "" {
+		hint += "; it had already failed with: " + failure
+	}
+	return hint + "\nRun `" + command + "` to repair it again."
 }
 
 func sourceCodeReferences(value string) (apiclientgen.SandboxCreateConfigSourceCodeReferences, error) {

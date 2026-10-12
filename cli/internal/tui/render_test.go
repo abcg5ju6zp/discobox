@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -222,6 +223,64 @@ func TestWithoutColorTheStateIsSpelledOut(t *testing.T) {
 	// The cursor still reads: it is a chevron, and only the row highlight goes.
 	if !strings.Contains(text, "❯") {
 		t.Error("the cursor chevron should survive without color")
+	}
+}
+
+// A repair in flight is drawn as work under way, not as the failure it is
+// answering, and under the cursor it says what it answers: recording the repair
+// cleared the error the row would otherwise have shown (ADR 26-10-12-711 §8).
+func TestARepairingBoxSaysWhatItIsAnswering(t *testing.T) {
+	t.Parallel()
+	boxes := testSandboxes()
+	boxes[0].State = StateRepairing
+	boxes[0].HasRuntime = false
+	boxes[0].Message = "exec attach found it failed with no container (EOF)"
+
+	if got := stateDot(boxes[0]); got != stateDot(Sandbox{State: StateStarting}) {
+		t.Fatalf("glyph = %q, want the one a starting box has", got)
+	}
+
+	m := newTestModel(t, newFakeSource(boxes...))
+	send(t, m, keyPress("tab"))
+	text := frameText(m)
+	// Without color the state is a word, and the word has to fit its column.
+	if !strings.Contains(text, "repairing ") {
+		t.Errorf("frame = %q, want the state spelled out whole", text)
+	}
+	if !strings.Contains(text, "exec attach found") {
+		t.Errorf("frame = %q, want what the repair answers on the row under the cursor", text)
+	}
+}
+
+// A repair that worked leaves nothing on the row — it cleared the failure —
+// so the identity says it happened, and when, and what it answered. One that
+// did not work says that instead of claiming a repair.
+func TestStatusSaysABoxWasRepairedAutomatically(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	repair := AutomaticRepair{At: now.Add(-5 * time.Minute), Trigger: "ssh", Failure: "create container: EOF"}
+	if got, want := repair.note(now), "repaired automatically 5m ago; it had failed with: create container: EOF"; got != want {
+		t.Fatalf("note = %q, want %q", got, want)
+	}
+	repair.Failed = true
+	if got, want := repair.note(now), "automatic repair failed 5m ago; it had failed with: create container: EOF"; got != want {
+		t.Fatalf("note = %q, want %q", got, want)
+	}
+	if got := (AutomaticRepair{}).note(now); got != "" {
+		t.Fatalf("note = %q, want none for a box never repaired", got)
+	}
+
+	boxes := testSandboxes()
+	boxes[0].Repaired = AutomaticRepair{At: now.Add(-5 * time.Minute), Failure: "EOF"}
+	m := newTestModel(t, newFakeSource(boxes...))
+	m.now = func() time.Time { return now }
+	send(t, m, keyPress("tab"))
+	if status := statusRow(m); !strings.Contains(status, "repaired automatically 5m ago; it had failed with: EOF") {
+		t.Fatalf("status = %q, want the repair named on the box under the cursor", status)
+	}
+	send(t, m, keyPress("down"))
+	if status := statusRow(m); strings.Contains(status, "repaired automatically") {
+		t.Fatalf("status = %q, want nothing said about a box that was never repaired", status)
 	}
 }
 

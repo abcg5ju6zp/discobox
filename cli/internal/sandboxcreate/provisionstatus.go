@@ -46,6 +46,20 @@ func ProvisionStatus(sandbox *apimodel.Sandbox) Step {
 		return ""
 	}
 	runtime := sandbox.Runtime
+	if Repairing(sandbox) {
+		// Ahead of the state, which a repair leaves reading `failed` until it
+		// lands: the failure it names is the one being repaired, and its
+		// message went when the repair was recorded. The phase is the rebuild's
+		// own and the more current of the two things to say, so it takes the
+		// line once there is one.
+		if phase := recordedPhase(runtime); phase != "" {
+			return StepRepairing + ": " + phase
+		}
+		if cause := AutomaticRepairCause(sandbox); cause != "" {
+			return StepRepairing + ": " + Step(cause)
+		}
+		return StepRepairing
+	}
 	switch runtime.State {
 	case apiclientgen.SandboxRuntimeStateFailed:
 		if message := strings.TrimSpace(runtime.ErrorMessage.Or("")); message != "" {
@@ -78,6 +92,52 @@ func ProvisionStatus(sandbox *apimodel.Sandbox) Step {
 		return "starting the discobox"
 	}
 	return "preparing the discobox"
+}
+
+// StepRepairing is what a discobox says while a repair of it has been recorded
+// and has not landed (ADR 26-10-12-711 §8).
+const StepRepairing Step = "repairing the discobox"
+
+// Repairing reports whether a repair of the sandbox, typed or automatic, is in
+// flight.
+//
+// It is the server's displayState and nothing derived from it. A repair leaves
+// the existence state reading `failed` until it lands, so every wait that takes
+// `failed` for an answer asks this first: that failure is the one being
+// repaired, not the wait's result.
+func Repairing(sandbox *apimodel.Sandbox) bool {
+	return sandbox != nil && sandbox.Runtime.DisplayState.Or("") == apiclientgen.SandboxRuntimeDisplayStateRepairing
+}
+
+// AutomaticRepairCause says why a repair nobody typed is running: what was
+// being done to the discobox when it was found failed with no container, and
+// the failure the repair answers. It is "" for a typed repair, and for a
+// sandbox no repair is in flight on.
+//
+// The record outlives the repair (it is replaced by the next one), so its
+// generation is what says the repair in flight is the one it describes.
+func AutomaticRepairCause(sandbox *apimodel.Sandbox) string {
+	if !Repairing(sandbox) {
+		return ""
+	}
+	repair, ok := sandbox.Runtime.AutomaticRepair.Get()
+	if !ok || repair.Generation != sandbox.Runtime.Generation {
+		return ""
+	}
+	cause := "it had failed with no container"
+	if trigger := oneLine(repair.Trigger); trigger != "" {
+		cause = trigger + " found it failed with no container"
+	}
+	if failure := oneLine(repair.Failure.Or("")); failure != "" {
+		cause += " (" + failure + ")"
+	}
+	return cause
+}
+
+// oneLine folds a recorded message onto one line: a status has one, and a
+// failure is whatever the thing that failed printed.
+func oneLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 // provisioned reports whether the sandbox has nothing left to provision: the

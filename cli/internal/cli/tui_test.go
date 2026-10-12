@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -21,7 +22,7 @@ import (
 	"github.com/discobox-ai/discobox/cli/internal/tui"
 )
 
-// The launcher draws five states, so the server's fuller set has to land on one
+// The launcher draws six states, so the server's fuller set has to land on one
 // of them — and a transitional state has to land on the one that answers "can I
 // act on this", which is where it is heading, not where it came from.
 func TestToTUISandboxNarrowsDisplayState(t *testing.T) {
@@ -33,6 +34,9 @@ func TestToTUISandboxNarrowsDisplayState(t *testing.T) {
 		{"starting", tui.StateStarting},
 		{"stopping", tui.StateRunning},
 		{"stopped", tui.StateStopped},
+		// A repair is heading for a box that works and came from one that had
+		// failed, and is drawn as neither.
+		{"repairing", tui.StateRepairing},
 		{"archiving", tui.StateArchived},
 		{"archived", tui.StateArchived},
 		{"error", tui.StateError},
@@ -302,6 +306,71 @@ func TestToTUISandboxCarriesTheRuntimeAxis(t *testing.T) {
 
 	if errored("").HasRuntime {
 		t.Fatal("an unreported container should leave HasRuntime false")
+	}
+}
+
+// A repair nobody typed is on the row in the two places it can be: while it
+// runs, as the row's state and what it is answering; once it is over, as the
+// record of it — which is all that is left after a repair that worked cleared
+// the failure, and what says a box in error has already had its one
+// (ADR 26-10-12-711 §§4, 8).
+func TestToTUISandboxCarriesTheAutomaticRepair(t *testing.T) {
+	started := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	landedAt := started.Add(time.Minute)
+	row := func(display, errorMessage string, generation, repairGeneration int64, repairLanded bool) tui.Sandbox {
+		runtime := apimodel.SandboxRuntime{
+			State:        "failed",
+			DesiredState: "present",
+			DisplayState: apiclientgen.NewOptSandboxRuntimeDisplayState(apiclientgen.SandboxRuntimeDisplayState(display)),
+			Generation:   generation,
+			AutomaticRepair: apiclientgen.NewOptSandboxAutomaticRepair(apimodel.SandboxAutomaticRepair{
+				Generation: repairGeneration,
+				StartedAt:  started,
+				Trigger:    "exec attach",
+				Failure:    apiclientgen.NewOptString("create container: EOF"),
+			}),
+		}
+		if errorMessage != "" {
+			runtime.ErrorMessage = apiclientgen.NewOptString(errorMessage)
+		}
+		if repairLanded {
+			repair := runtime.AutomaticRepair.Value
+			repair.LandedAt = apiclientgen.NewOptDateTime(landedAt)
+			runtime.AutomaticRepair = apiclientgen.NewOptSandboxAutomaticRepair(repair)
+		}
+		return toTUISandbox(apimodel.Sandbox{Runtime: runtime}, "host_1")
+	}
+
+	running := row("repairing", "", 5, 5, false)
+	if running.State != tui.StateRepairing || running.Message != "exec attach found it failed with no container (create container: EOF)" {
+		t.Fatalf("in flight: state = %q, message = %q, want the repair and what it answers", running.State, running.Message)
+	}
+	if !running.Repaired.At.IsZero() {
+		t.Fatalf("in flight: repaired = %+v, want no record of a repair that is not over", running.Repaired)
+	}
+
+	landed := row("running", "", 5, 5, true)
+	want := tui.AutomaticRepair{At: landedAt, Trigger: "exec attach", Failure: "create container: EOF"}
+	if landed.Repaired != want || landed.Message != "" {
+		t.Fatalf("landed: repaired = %+v, message = %q, want the record kept and nothing else", landed.Repaired, landed.Message)
+	}
+
+	failed := row("error", "pull image: not found", 5, 5, false)
+	if !failed.Repaired.Failed || failed.Message != "pull image: not found" {
+		t.Fatalf("failed: repaired = %+v, message = %q, want the repair marked as the failure", failed.Repaired, failed.Message)
+	}
+
+	// An error on a later generation is not that repair's, and neither is one
+	// on its own generation after it landed: the box failed again later.
+	if later := row("error", "pull image: not found", 6, 5, true); later.Repaired.Failed || later.Repaired.At != landedAt {
+		t.Fatalf("a later failure: repaired = %+v, want the earlier repair left as one that worked", later.Repaired)
+	}
+	if again := row("error", "no space left on device", 5, 5, true); again.Repaired.Failed {
+		t.Fatalf("a failure after the repair landed: repaired = %+v, want it not blamed on the repair", again.Repaired)
+	}
+	// A repair overtaken by newer intent before it finished is not worth a line.
+	if overtaken := row("running", "", 6, 5, false); !overtaken.Repaired.At.IsZero() {
+		t.Fatalf("an overtaken repair: repaired = %+v, want no record shown", overtaken.Repaired)
 	}
 }
 

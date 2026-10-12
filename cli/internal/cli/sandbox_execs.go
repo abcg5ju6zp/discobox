@@ -26,6 +26,7 @@ import (
 
 	apiclientgen "github.com/discobox-ai/discobox/api/gen"
 	apimodel "github.com/discobox-ai/discobox/api/model"
+	"github.com/discobox-ai/discobox/cli/internal/sandboxcreate"
 	"github.com/discobox-ai/discobox/sandboxshell"
 )
 
@@ -726,10 +727,17 @@ func (a *App) sandboxExecAttachDone(ctx context.Context, projectID, sandboxID, e
 // sandboxStoppedAttachDone reports whether the sandbox itself has stopped (or is
 // stopping or failed), which ends an attach: the terminal cannot outlive its
 // sandbox, and reconnecting would loop against a runtime that is gone. A read
-// that cannot establish this returns not-done, leaving the failure retriable.
+// that cannot establish this returns not-done, leaving the failure retriable,
+// and so does a sandbox being repaired.
 func (a *App) sandboxStoppedAttachDone(ctx context.Context, projectID, sandboxID string) (bool, error) {
 	sandbox, ok := a.sandboxSnapshot(ctx, projectID, sandboxID)
 	if !ok {
+		return false, nil
+	}
+	// A repair in flight reads failed, with its container down or gone, until
+	// it lands (ADR 26-10-12-711 §8). That is a rebuild to reconnect across,
+	// not a runtime that is gone for good.
+	if sandboxcreate.Repairing(sandbox) {
 		return false, nil
 	}
 	switch sandbox.Runtime.RuntimeState.Or("") {

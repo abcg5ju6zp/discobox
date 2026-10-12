@@ -12,20 +12,41 @@ import (
 	"github.com/discobox-ai/x/id"
 )
 
-// State is a sandbox's user-facing lifecycle state, narrowed to the five the
+// State is a sandbox's user-facing lifecycle state, narrowed to the six the
 // launcher draws. The server reports more of them — stopping, archiving,
 // deleting — but a picker only has to answer "can I act on this", and the
 // transitional states answer that the same way the state they are heading for
 // does.
+//
+// Repairing is kept apart from starting, which it is drawn like: a repair
+// recorded and not yet landed, typed or automatic (ADR 26-10-12-711 §8). The
+// box had failed, and the row says it is being rebuilt rather than that it is
+// coming up for the first time.
 type State string
 
 const (
-	StateRunning  State = "running"
-	StateStarting State = "starting"
-	StateStopped  State = "stopped"
-	StateArchived State = "archived"
-	StateError    State = "error"
+	StateRunning   State = "running"
+	StateStarting  State = "starting"
+	StateRepairing State = "repairing"
+	StateStopped   State = "stopped"
+	StateArchived  State = "archived"
+	StateError     State = "error"
 )
+
+// AutomaticRepair is the last repair of a discobox that nobody typed: something
+// was done to it, it was found failed with no container, and it was rebuilt
+// once (ADR 26-10-12-711). The zero value is a discobox with no such record.
+//
+// It is the record of a repair that is over. One still running is the row's
+// state (StateRepairing) and its Message.
+type AutomaticRepair struct {
+	At      time.Time // when the repair landed, or was recorded if it failed
+	Trigger string    // what was being done to the discobox: "exec attach", "ssh"
+	Failure string    // the failure the repair answered, on one line
+	// Failed is a repair that did not work: the discobox is in error on it,
+	// and is not repaired automatically again.
+	Failed bool
+}
 
 // Usage is what a sandbox is costing while it runs: cpu and memory as shares of
 // the host it runs on, and the disk as bytes.
@@ -318,7 +339,15 @@ type Sandbox struct {
 	Diff    DiffStat
 	Created time.Time // when the sandbox was created
 	Upgrade bool      // running an image older than its harness config resolves to
-	Message string    // error detail, shown when the row is under the cursor
+	// Message is the detail behind the state, shown when the row is under the
+	// cursor: the error a box settled on, or what a repair nobody typed is
+	// answering while it runs.
+	Message string
+
+	// Repaired is the last automatic repair of this box, once it is over. It is
+	// carried because a repair that works clears the failure it answered, and
+	// this is then the only thing saying the box was rebuilt.
+	Repaired AutomaticRepair
 
 	// ImageUnavailable is a box that failed because its pool cannot obtain the
 	// image it is pinned to, as the server classified the failure. Attaching
@@ -681,7 +710,8 @@ func (s Sandbox) hasDiff() bool { return s.Diff.Known && s.Diff.Files > 0 }
 // Archived has no container by intent, whatever a stale report last said
 // (ADR 0022 §5). Starting is a sandbox mid-create whose agent has not reported
 // yet, and the attach waits for it rather than being refused by it (ADR 0039
-// tier 1).
+// tier 1). Repairing is the same answer for a rebuild: the server holds an
+// action until a repair in flight lands (ADR 26-10-12-711 §6).
 //
 // Error is deliberately not on that list. A settled failure latches on the row
 // and nothing clears it without new intent (ADR 0017 §4), so an errored box may
@@ -698,7 +728,7 @@ func (s Sandbox) attachable() bool {
 	if s.State == StateArchived {
 		return false
 	}
-	return s.HasRuntime || s.State == StateStarting
+	return s.HasRuntime || s.State == StateStarting || s.State == StateRepairing
 }
 
 // repairable reports whether repair is offered for this box.
@@ -709,15 +739,15 @@ func (s Sandbox) attachable() bool {
 // broken behind a container that looks fine, the second never got one built.
 // Everything else is working, and repair is a rebuild, not a refresh.
 //
-// Two states answer for themselves, as they do in attachable. Archived has no
+// Three states answer for themselves, as they do in attachable. Archived has no
 // container by intent, and unarchive is what brings it back; the server refuses
 // repair on it with the same reasoning (ADR 0035). Starting is a create still
 // in flight whose agent has not reported yet — its missing container is the
 // operation running, not a wedge, and tearing it down is the opposite of
-// waiting for it (ADR 0039 tier 1).
+// waiting for it (ADR 0039 tier 1). Repairing is a repair already running.
 func (s Sandbox) repairable() bool {
 	switch s.State {
-	case StateArchived, StateStarting:
+	case StateArchived, StateStarting, StateRepairing:
 		return false
 	}
 	return s.State == StateError || !s.HasRuntime

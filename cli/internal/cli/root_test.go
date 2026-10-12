@@ -1045,6 +1045,45 @@ func TestWriteSandboxesTableIncludesErrorMessage(t *testing.T) {
 	}
 }
 
+// A repair in flight lists as `repairing`, and one nobody typed says beside it
+// what set it off and the failure it answers: recording the repair cleared the
+// error the row had (ADR 26-10-12-711 §8).
+func TestWriteSandboxesTableShowsARepairAndWhatItAnswers(t *testing.T) {
+	app := &App{output: "table"}
+	cmd := &cobra.Command{}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	err := app.writeSandboxes(cmd, []apimodel.Sandbox{{
+		ID:        "sandbox-1",
+		Config:    apimodel.SandboxConfig{Name: "alpha"},
+		CreatedAt: time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC),
+		Runtime: apimodel.SandboxRuntime{
+			State:              "failed",
+			DesiredState:       "present",
+			DisplayState:       apiclientgen.NewOptSandboxRuntimeDisplayState(apiclientgen.SandboxRuntimeDisplayStateRepairing),
+			Generation:         2,
+			ObservedGeneration: 1,
+			AutomaticRepair: apiclientgen.NewOptSandboxAutomaticRepair(apimodel.SandboxAutomaticRepair{
+				Generation: 2,
+				StartedAt:  time.Date(2026, 6, 17, 0, 0, 1, 0, time.UTC),
+				Trigger:    "ssh",
+				Failure:    apiclientgen.NewOptString("create container: EOF"),
+			}),
+		},
+	}}, false, nil)
+	if err != nil {
+		t.Fatalf("writeSandboxes: %v", err)
+	}
+
+	output := out.String()
+	for _, want := range []string{"repairing", "ssh found it failed with no container (create container: EOF)"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("sandboxes output = %q, want %q", output, want)
+		}
+	}
+}
+
 func TestJobsCommandListsProjectJobs(t *testing.T) {
 	const jobID = "job_9qk5n25t2hh2rv00"
 	const resourceID = "sbx_hqnk550g3821ck00"

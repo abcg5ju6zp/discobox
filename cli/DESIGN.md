@@ -2318,6 +2318,22 @@ then is the harness install and the terminal launch, which no channel reports
 upward. A phase this build does not know is spelled out rather than dropped,
 because a CLI is routinely older than the control plane it talks to.
 
+A repair in flight (`displayState: repairing`, ADR 26-10-12-711 §8) is read
+ahead of the state, which stays `failed` until the repair lands: the line is
+`repairing the discobox`, followed by the rebuild's phase once there is a fresh
+one, and otherwise — for a repair nobody typed — by what set it off and the
+failure it answers (`sandboxcreate.AutomaticRepairCause`). Every wait that takes
+`failed` for its answer asks `sandboxcreate.Repairing` first, or reads
+`displayState`, where `repairing` is neither `running` nor `error` and is
+waited through: `awaitSourceRequested`, `waitForSandboxCtx`,
+`waitForProvisionedSandbox`, and the attach's reconnect decision
+(`sandboxStoppedAttachDone`), which reconnects across the rebuild. `discobox ls`
+shows the state as `repairing` and that cause in its ERROR column
+(`sandboxMessage`), since recording the repair cleared the error the row had.
+A sandbox that settles failed on its automatic repair's generation, with that
+repair never having landed (`landedAt` absent), has had its one: `sandboxFailureReason` adds the failure that repair was answering and
+`discobox admin box repair <id>`, unless the message already names it.
+
 Every narrated wait calls `sandboxcreate.Status` rather than `ProvisionStatus`
 directly: when the discobox's own answer is `StepWaitingForPool` — the longest
 stretch of a cold start — it reads the pool (`PoolReader`) and says what the

@@ -110,6 +110,24 @@ func TestAwaitSourceRequestedNarratesTheProvisioningItWaitsOn(t *testing.T) {
 	}
 }
 
+// A repair in flight reads failed until it lands, and the wait goes on through
+// it: that failure is the one being repaired, not the wait's answer.
+func TestAwaitSourceRequestedWaitsThroughARepair(t *testing.T) {
+	client := &awaitClient{runtimes: []apimodel.SandboxRuntime{
+		repairing(automaticRepair(5, "EOF")),
+		{State: apiclientgen.SandboxRuntimeStateAwaitingSource},
+	}}
+
+	var reported []Step
+	report := Report(func(step Step) { reported = append(reported, step) })
+	if _, err := awaitSourceRequested(t.Context(), client, "project-1", "sbx_1", report); err != nil {
+		t.Fatalf("await: %v, want the repair waited on", err)
+	}
+	if len(reported) != 1 || reported[0] != "repairing the discobox: exec attach found it failed with no container (EOF)" {
+		t.Fatalf("reported %q, want the repair", reported)
+	}
+}
+
 // A discobox that is already parked reports nothing: the step the caller put on
 // the line before this was called is still what is happening, and replacing it
 // with a phase read off the record would say the same thing in other words.
