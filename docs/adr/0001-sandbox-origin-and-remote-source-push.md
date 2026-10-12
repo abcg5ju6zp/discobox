@@ -4,6 +4,7 @@
   superseded by
   [ADR 0111](0111-the-origin-is-the-client-and-its-key-names-where-the-source-came-from.md);
   the rest stands)
+- **§3's local bind and §4's push after provisioning superseded by**: [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
 - **Date**: 2026-07-16
 
 ## Context

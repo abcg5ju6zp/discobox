@@ -1,6 +1,6 @@
 # 0128 — A private remote source is fetched with a credential the client lends
 
-- **Status**: Proposed
+- **Status**: Rejected by [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md), which delivers a private remote from the client and never lends the pool a credential
 - **Date**: 2026-09-18
 - **Relates to**: [0001](0001-sandbox-origin-and-remote-source-push.md),
   [0031](0031-agent-credentials-are-a-portable-protocol-with-ephemeral-sentinels.md),

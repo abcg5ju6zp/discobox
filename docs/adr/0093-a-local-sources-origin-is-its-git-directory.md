@@ -1,6 +1,7 @@
 # 0093 — A local source's origin is its git directory, not its working tree
 
 - **Status**: Accepted
+- **§§1–3 superseded by**: [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
 - **Date**: 2026-09-03
 
 ## Context

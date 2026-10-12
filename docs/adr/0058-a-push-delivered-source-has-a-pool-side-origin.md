@@ -6,6 +6,7 @@
 - **§8 superseded by**: [26-09-05-008](26-09-05-008-an-attached-client-pushes-the-commits-made-where-it-runs.md)
   — an attached client pushes on its own, so the launcher has no push key.
   §§1–7 stand.
+- **§1's repository per sandbox, §5's mirror rule and `UpstreamRef` superseded by**: [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
 - **Date**: 2026-08-19
 
 ## Context

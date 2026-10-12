@@ -1,6 +1,7 @@
 # 26-09-24-630 — A discobox delivers the source of the discoboxes it creates
 
 - **Status**: Accepted
+- **§3 superseded by**: [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
 - **Date**: 2026-09-24
 - **Supersedes**: [0140](0140-a-discobox-reaches-the-discobox-api-through-its-pool-with-a-fixed-role.md)'s
   rejection of "Authorize by who created a discobox", for source delivery

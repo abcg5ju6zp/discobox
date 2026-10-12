@@ -4,6 +4,7 @@
 - **§2's parked-discobox rule superseded by**: [26-09-24-005](26-09-24-005-attaching-to-a-discobox-awaiting-its-source-delivers-it.md)
   — an attach delivers a discobox still awaiting its source; the beat still
   never does. Everything else stands.
+- **§2's push-delivered-only condition superseded by**: [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
 - **Date**: 2026-09-05
 - **§1 amended**: 2026-09-09 — the trigger is a terminal attach, not the
   launcher's workspace. Nothing else changes.

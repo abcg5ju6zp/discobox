@@ -5,6 +5,7 @@
   the consequence that apply fails back into the directory superseded by
   [0139](0139-the-first-apply-into-a-directory-with-no-repository-makes-one.md);
   everything else stands)
+- **§3 superseded by**: [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)
 - **Date**: 2026-08-08
 
 ## Context
