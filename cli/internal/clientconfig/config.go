@@ -27,8 +27,8 @@ import (
 const (
 	FileVar         = "DISCOBOX_CLIENT_CONFIG_FILE"
 	DefaultFileName = "client.yaml"
-	// ExampleFileName is the reference written beside the file when there is
-	// none.
+	// ExampleFileName is the reference written beside the default path when
+	// no client.yaml is there (MissingDefault).
 	ExampleFileName = "client.example.yaml"
 )
 
@@ -138,9 +138,10 @@ const exampleHeader = `# yaml-language-server: $schema=` + SchemaID + `
 # YAML, at any depth. A nested setting needs its parent uncommented too. A
 # client with no file at all behaves exactly as one always has.
 #
-# A client that looks for this file and finds none rewrites this reference
-# beside where that file belongs, so it always matches the client that wrote
-# it. Copy it rather than editing it in place.
+# A client that reads the default path and finds no client.yaml there rewrites
+# this reference beside it, so it always matches the client that wrote it.
+# Nothing is written beside a path DISCOBOX_CLIENT_CONFIG_FILE names. Copy
+# this file rather than editing it in place.
 #
 # A flag given on the command line wins over the setting it defaults. A key
 # this client does not define is an error naming the key.
@@ -177,11 +178,11 @@ func MissingDefault() (string, bool) {
 	return path, true
 }
 
-// RefreshExample writes the reference file beside configFile, the path the
-// client looked for its configuration at and found nothing, and returns where
-// it wrote it. It is rewritten on every such look rather than written once,
-// because a reference left by an older client is missing whatever was added
-// since; an unchanged one is left alone.
+// RefreshExample writes the reference file beside configFile — the default
+// path, when no client.yaml is there, which is what MissingDefault returns —
+// and returns where it wrote it. It is rewritten every time rather than
+// written once, because a reference left by an older client is missing
+// whatever was added since; an unchanged one is left alone.
 func RefreshExample(configFile string) (string, error) {
 	body, err := ExampleYAML()
 	if err != nil {

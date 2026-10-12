@@ -10,9 +10,10 @@
 # YAML, at any depth. A nested setting needs its parent uncommented too. A
 # client with no file at all behaves exactly as one always has.
 #
-# A client that looks for this file and finds none rewrites this reference
-# beside where that file belongs, so it always matches the client that wrote
-# it. Copy it rather than editing it in place.
+# A client that reads the default path and finds no client.yaml there rewrites
+# this reference beside it, so it always matches the client that wrote it.
+# Nothing is written beside a path DISCOBOX_CLIENT_CONFIG_FILE names. Copy
+# this file rather than editing it in place.
 #
 # A flag given on the command line wins over the setting it defaults. A key
 # this client does not define is an error naming the key.
