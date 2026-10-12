@@ -647,10 +647,9 @@ func TestSandboxAgentRoutesNameTheirUse(t *testing.T) {
 		ID: "sandbox-1", ProjectID: testDefaultProjectID,
 		CreatedByUserID: service.DefaultUserID, PoolID: "pool-1",
 	}
+	var upstreamQuery string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.RawQuery != "" {
-			t.Errorf("upstream query = %q, want control-plane wait option removed", r.URL.RawQuery)
-		}
+		upstreamQuery = r.URL.RawQuery
 		w.WriteHeader(http.StatusCreated)
 	}))
 	t.Cleanup(upstream.Close)
@@ -715,6 +714,18 @@ func TestSandboxAgentRoutesNameTheirUse(t *testing.T) {
 		if len(stubs.sandboxUses) != 1 || stubs.sandboxUses[0] != tc.want {
 			t.Errorf("%s %s: acquired as %+v, want %+v", tc.method, tc.path, stubs.sandboxUses, tc.want)
 		}
+		if upstreamQuery != "" {
+			t.Errorf("%s %s: upstream query = %q, want this server's wait option taken and not forwarded", tc.method, tc.path, upstreamQuery)
+		}
+	}
+
+	// `wait=ready` is the one value of the option this server takes. Any
+	// other is not its to accept, and reaches the sandbox agent to be refused
+	// there rather than being dropped on the way.
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, scopedUserRequest(context.Background(), http.MethodPost, base+"/execs?wait=bogus", nil, poolagentauth.ScopeExecWrite))
+	if upstreamQuery != "wait=bogus" {
+		t.Errorf("POST /execs?wait=bogus: upstream query = %q, want the unknown value forwarded", upstreamQuery)
 	}
 }
 
