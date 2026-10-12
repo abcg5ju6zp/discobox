@@ -432,6 +432,14 @@ func (r *DockerSandboxRuntime) awaitBoot(ctx context.Context, sandboxID string) 
 	}
 }
 
+// AwaitSandboxBoot waits out a boot of the sandbox under way, for a caller
+// that must not start it (requireRunning). How the boot ended is its
+// starter's to report.
+func (r *DockerSandboxRuntime) AwaitSandboxBoot(ctx context.Context, sandboxID string) error {
+	_, err := r.awaitBoot(ctx, sandboxID)
+	return err
+}
+
 // SandboxBooting reports whether the sandbox's container is up but its sandbox
 // agent has not answered yet.
 func (r *DockerSandboxRuntime) SandboxBooting(sandboxID string) bool {

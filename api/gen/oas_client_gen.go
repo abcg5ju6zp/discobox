@@ -337,6 +337,14 @@ type Invoker interface {
 	//
 	// GET /projects/{projectId}/sandboxes/{sandboxId}
 	GetSandbox(ctx context.Context, params GetSandboxParams) (GetSandboxRes, error)
+	// GetSandboxAgentInventory invokes get-sandbox-agent-inventory operation.
+	//
+	// What the sandbox's exec, service and tool lists and its terminals' screens answer right now, in
+	// one document, so the control plane can answer those reads while the sandbox is not running (ADR
+	// 26-10-11-657). Only a token carrying the inventory scope may read it.
+	//
+	// GET /api/projects/{projectId}/sandboxes/{sandboxId}/inventory
+	GetSandboxAgentInventory(ctx context.Context, params GetSandboxAgentInventoryParams) (GetSandboxAgentInventoryRes, error)
 	// GetSandboxAgentStatus invokes get-sandbox-agent-status operation.
 	//
 	// Get sandbox-agent-reported status (git status, harness session state, active connections).
@@ -365,7 +373,8 @@ type Invoker interface {
 	//
 	// The terminal's screen as text, rendered from the terminal emulator its shim keeps, with recent
 	// scrollback on request. Reading it does not attach, resize the terminal, or count as activity. 409
-	// for an exec with no terminal.
+	// for an exec with no terminal. A discobox that is not running is answered from the screen it last
+	// posted, which has no scrollback.
 	//
 	// GET /api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/screen
 	GetSandboxExecScreen(ctx context.Context, params GetSandboxExecScreenParams) (GetSandboxExecScreenRes, error)
@@ -782,6 +791,13 @@ type Invoker interface {
 	//
 	// POST /api/pools/{poolId}/sandbox-agent-status
 	ReportSandboxAgentStatus(ctx context.Context, request *ReportSandboxAgentStatusBody, params ReportSandboxAgentStatusParams) (ReportSandboxAgentStatusRes, error)
+	// ReportSandboxInventories invokes report-sandbox-inventories operation.
+	//
+	// Report the inventory of one or more hosted sandboxes, in full when it changed and by digest when
+	// it did not.
+	//
+	// POST /api/pools/{poolId}/sandbox-inventories
+	ReportSandboxInventories(ctx context.Context, request *ReportSandboxInventoriesBody, params ReportSandboxInventoriesParams) (ReportSandboxInventoriesRes, error)
 	// ReportSandboxSecretRejection invokes report-sandbox-secret-rejection operation.
 	//
 	// Report what an upstream made of a swapped credential.
@@ -6039,6 +6055,141 @@ func (c *Client) sendGetSandbox(ctx context.Context, params GetSandboxParams) (r
 	return result, nil
 }
 
+// GetSandboxAgentInventory invokes get-sandbox-agent-inventory operation.
+//
+// What the sandbox's exec, service and tool lists and its terminals' screens answer right now, in
+// one document, so the control plane can answer those reads while the sandbox is not running (ADR
+// 26-10-11-657). Only a token carrying the inventory scope may read it.
+//
+// GET /api/projects/{projectId}/sandboxes/{sandboxId}/inventory
+func (c *Client) GetSandboxAgentInventory(ctx context.Context, params GetSandboxAgentInventoryParams) (GetSandboxAgentInventoryRes, error) {
+	res, err := c.sendGetSandboxAgentInventory(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetSandboxAgentInventory(ctx context.Context, params GetSandboxAgentInventoryParams) (res GetSandboxAgentInventoryRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("get-sandbox-agent-inventory"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/projects/{projectId}/sandboxes/{sandboxId}/inventory"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetSandboxAgentInventoryOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [5]string
+	pathParts[0] = "/api/projects/"
+	{
+		// Encode "projectId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "projectId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.StringToString(params.ProjectId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/sandboxes/"
+	{
+		// Encode "sandboxId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "sandboxId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.StringToString(params.SandboxId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[3] = encoded
+	}
+	pathParts[4] = "/inventory"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "known" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "known",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Known.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetSandboxAgentInventoryResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // GetSandboxAgentStatus invokes get-sandbox-agent-status operation.
 //
 // Get sandbox-agent-reported status (git status, harness session state, active connections).
@@ -6545,7 +6696,8 @@ func (c *Client) sendGetSandboxExecResources(ctx context.Context, params GetSand
 //
 // The terminal's screen as text, rendered from the terminal emulator its shim keeps, with recent
 // scrollback on request. Reading it does not attach, resize the terminal, or count as activity. 409
-// for an exec with no terminal.
+// for an exec with no terminal. A discobox that is not running is answered from the screen it last
+// posted, which has no scrollback.
 //
 // GET /api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/screen
 func (c *Client) GetSandboxExecScreen(ctx context.Context, params GetSandboxExecScreenParams) (GetSandboxExecScreenRes, error) {
@@ -13987,6 +14139,103 @@ func (c *Client) sendReportSandboxAgentStatus(ctx context.Context, request *Repo
 
 	stage = "DecodeResponse"
 	result, err := decodeReportSandboxAgentStatusResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ReportSandboxInventories invokes report-sandbox-inventories operation.
+//
+// Report the inventory of one or more hosted sandboxes, in full when it changed and by digest when
+// it did not.
+//
+// POST /api/pools/{poolId}/sandbox-inventories
+func (c *Client) ReportSandboxInventories(ctx context.Context, request *ReportSandboxInventoriesBody, params ReportSandboxInventoriesParams) (ReportSandboxInventoriesRes, error) {
+	res, err := c.sendReportSandboxInventories(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendReportSandboxInventories(ctx context.Context, request *ReportSandboxInventoriesBody, params ReportSandboxInventoriesParams) (res ReportSandboxInventoriesRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("report-sandbox-inventories"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/pools/{poolId}/sandbox-inventories"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ReportSandboxInventoriesOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/pools/"
+	{
+		// Encode "poolId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "poolId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.StringToString(params.PoolId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/sandbox-inventories"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeReportSandboxInventoriesRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeReportSandboxInventoriesResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

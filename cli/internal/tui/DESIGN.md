@@ -1264,7 +1264,12 @@ which is also what folds the leader-`s` optimistic tab and its listing entry
 into one. It is a poll rather than a subscription because the control plane has
 no exec event stream: exec state lives on the sandbox-agent and `/execs` is a
 raw proxy, so there is nothing server-side to subscribe to. The seam is a
-snapshot, so the tick loop is the only thing a stream would have to replace. The poll only ever *adds*: the attach streams deliver their own
+snapshot, so the tick loop is the only thing a stream would have to replace.
+`Execs` and `Services` answer `ErrNotRunning` for a discobox that is not
+running: the server answers those reads from what the discobox last posted
+rather than start it (ADR 26-10-11-657), and a tab opened from that would
+attach to a session that went down with the box, and start it. So the poll
+never restarts a discobox stopped under an open workspace. The poll only ever *adds*: the attach streams deliver their own
 exits (`termpane.ClosedMsg` is the sole driver of the exited transition), so
 each tab transition has exactly one writer. Detach (`leader d`) leaves the
 whole workspace — every stream closed at once, every session still running —

@@ -267,7 +267,7 @@ flowchart LR
   before any of the document is sent, whatever its size. Upgrades
   (exec attach, tunnels) carry on over the dialed connection.
 - The connection is never an authority. The sandbox agent validates its own
-  token on every request — the status poll's `status:read` token (ADR 0030),
+  token on every request — the status poll's `status:read` and `inventory:read` token (ADR 0030),
   the proxy's downstream `Authorization`, the pool-signed runtime-config
   token — and a lost connection is not a
   power-state signal: power state comes from the runtime's own channel below.
@@ -573,11 +573,22 @@ error, and the no-container 409 carries `ErrorTypeSandboxNoContainer` so the
 control plane can tell it from "already exists" (see [Pool Agent API
 Model](api/model/DESIGN.md)).
 
-**Audit reads never start a sandbox** (`requireRunning`). The harness-hooks and
+**Reads never start a sandbox** (`requireRunning`). The harness-hooks and
 exec-events reads are what the sandbox recorded about itself (ADR 0130), and
 starting a stopped sandbox to read them would undo the stop they may be read to
-explain — ADR 0108's idle stop above all. A sandbox that is not running answers
-409 saying so; one the runtime does not know passes through to the proxy.
+explain — ADR 0108's idle stop above all. The same holds for a terminal's
+screen and a wait on it (ADR 0137), and for listing execs, services or tools
+and reading one exec or service ([ADR 26-10-11-657](../docs/adr/26-10-11-657-a-stopped-discobox-is-read-from-what-it-last-posted.md) §4). A sandbox that is not running answers
+409 saying so, with the state it was found in in
+`X-Discobox-Sandbox-Not-Running` (`model.SandboxNotRunningHeader`): that
+header is how the control plane knows to answer the screen and the lists from
+the sandbox's last inventory. One still booting is refused the same way by
+the audit reads, the screen and the wait, which an orchestrator polls; the
+lists wait the boot out (`waitOutBoot`), which starts nothing, because a
+client that has just created or started a sandbox lists it next. One the
+runtime does not know passes through to the proxy. The reads left on
+`autoStart` are the unbounded ones, which have no last value to answer with:
+exec and service logs, exec events, and exec resource samples.
 
 Archived sandboxes are exempt from that latch and fail those routes with 409.
 `archive` and `delete` take the same per-sandbox mutex, and both answer only once
@@ -706,6 +717,20 @@ no key sandbox-agent trusts on its own, so this indirection is what lets the
 poll loop reach sandbox-agent's authenticated status route without discobox-
 server ever originating a request into a sandbox itself. See
 [ADR 0030](../docs/adr/0030-pool-agent-polls-and-pushes-sandbox-agent-status.md).
+
+The standing tick also reads each sandbox's **inventory** (`inventorypoll.go`,
+[ADR 26-10-11-657](../docs/adr/26-10-11-657-a-stopped-discobox-is-read-from-what-it-last-posted.md) §2) — what its exec, service and tool lists and its terminals' screens
+answer — with the same token, which carries `inventory:read` beside
+`status:read`, and posts what it read to
+`/api/pools/{pool_id}/sandbox-inventories`. An inventory is sent in full only
+when it changed: the sandbox agent is asked with the digest the control plane
+last took (`?known=`) and answers "unchanged" to it, and the entry then
+carries the digest alone, which moves the stored inventory's observation time
+forward. A digest counts as taken only once the control plane's answer does
+not name the sandbox as wanted, so an inventory it does not hold is sent in
+full on the next tick. Configure sandboxes are not asked, an inventory over
+4 MiB is not posted, and a sandbox agent without the route — or a token
+without the scope, from a control plane older than this — is skipped quietly.
 
 `pool-sync` (scope `pool:sync`) is how a shared host daemon reclaims *whole*
 orphaned pools, which no single pool agent can do alone (it dies with its pool).

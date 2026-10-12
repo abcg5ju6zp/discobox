@@ -235,7 +235,7 @@ func (a *App) listJobCompletions(ctx context.Context, client *apiclientgen.Clien
 }
 
 func (a *App) listTerminalCompletions(ctx context.Context, _ *apiclientgen.Client, projectID, sandboxID string) ([]string, error) {
-	terminals, err := a.listSandboxTerminals(ctx, projectID, sandboxID)
+	terminals, _, err := a.listSandboxTerminals(ctx, projectID, sandboxID)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +251,7 @@ func (a *App) listTerminalCompletions(ctx context.Context, _ *apiclientgen.Clien
 }
 
 func (a *App) listExecCompletions(ctx context.Context, _ *apiclientgen.Client, projectID, sandboxID string) ([]string, error) {
-	execs, err := a.listSandboxExecs(ctx, projectID, sandboxID)
+	execs, _, err := a.listSandboxExecs(ctx, projectID, sandboxID)
 	if err != nil {
 		return nil, err
 	}

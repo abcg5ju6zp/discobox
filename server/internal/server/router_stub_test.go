@@ -39,12 +39,22 @@ type routerTestServices struct {
 	sandboxLease      *services.HTTPClientLease
 	sandboxScopes     []string
 	sandboxAwaitCalls int
-	console           *stubPoolConsole
-	consoleErr        error
-	poolLog           *stubPoolLog
-	importResult      *services.SandboxImportResult
-	exportStream      io.ReadCloser
-	poolLogErr        error
+	// sandboxLeases counts the clients leased onto a sandbox; inventoryReads
+	// is every read answered from an inventory, and inventory what answers
+	// it (inventoryErr instead, when set).
+	sandboxLeases  int
+	inventoryReads []services.InventoryRead
+	inventory      []byte
+	inventoryErr   error
+	// poolUnreachable makes the acquire for an inventory read refuse a
+	// stopped sandbox, as it does when the pool cannot be asked.
+	poolUnreachable bool
+	console         *stubPoolConsole
+	consoleErr      error
+	poolLog         *stubPoolLog
+	importResult    *services.SandboxImportResult
+	exportStream    io.ReadCloser
+	poolLogErr      error
 
 	guestImageBuild    *sandbox.GuestImageBuild
 	guestImageBuildErr error
@@ -240,7 +250,36 @@ func (s *routerTestServices) AcquireSandboxHTTPClient(_ context.Context, project
 		return nil, nil, err
 	}
 	s.sandboxScopes = append([]string(nil), scopes...)
+	s.sandboxLeases++
 	return s.sandboxLease, &sandbox, nil
+}
+
+// AcquireRunningSandboxHTTPClient leases like AcquireSandboxHTTPClient, and
+// refuses with sandbox.ErrNotRunning when the test says the pool is
+// unreachable under a stopped sandbox, as the service does.
+func (s *routerTestServices) AcquireRunningSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
+	s.mu.Lock()
+	sandboxModel, err := s.getSandbox(projectID, sandboxID)
+	unreachable := s.poolUnreachable
+	s.mu.Unlock()
+	if err != nil {
+		return nil, nil, err
+	}
+	if unreachable && sandboxModel.RuntimeState == model.SandboxRuntimeStateStopped {
+		return nil, &sandboxModel, apperrors.StatusError{Status: http.StatusConflict, Message: "discobox is stopped, and its pool is not reachable", Cause: sandbox.ErrNotRunning}
+	}
+	return s.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
+}
+
+func (s *routerTestServices) ReadSandboxInventory(_ context.Context, _, _ string, scopes []string, read services.InventoryRead) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sandboxScopes = append([]string(nil), scopes...)
+	s.inventoryReads = append(s.inventoryReads, read)
+	if s.inventoryErr != nil {
+		return nil, s.inventoryErr
+	}
+	return s.inventory, nil
 }
 
 // AwaitSandboxHTTPClient is the waiting acquire. The stub's sandboxes are
@@ -874,6 +913,10 @@ func (s *routerTestServices) ReportPoolResources(context.Context, string, servic
 
 func (s *routerTestServices) ListPoolHeldSandboxes(context.Context, string) ([]string, error) {
 	return nil, nil
+}
+
+func (s *routerTestServices) ReportSandboxInventories(context.Context, string, services.ReportSandboxInventoriesBody) (*services.ReportSandboxInventoriesResponseBody, error) {
+	return &services.ReportSandboxInventoriesResponseBody{Wanted: []string{}}, nil
 }
 
 func (s *routerTestServices) ReportSandboxAgentStatus(context.Context, string, services.ReportSandboxAgentStatusBody) error {

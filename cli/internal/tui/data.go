@@ -1862,6 +1862,16 @@ type ReviewComment struct {
 	Reactions IssueReactions
 }
 
+// ErrNotRunning is what Execs and Services answer for a discobox that is not
+// running. The server answers those reads from what the discobox last posted
+// rather than start it (ADR 26-10-11-657), and the workspace must not take
+// that for what is in the discobox now: it opens a tab for every live session
+// a listing reports, and a session the discobox last reported running went
+// down with it. Attaching would also start the discobox, and the poll must
+// never be what does that — a discobox stopped under an open workspace stays
+// stopped.
+var ErrNotRunning = errors.New("the discobox is not running")
+
 type DataSource interface {
 	// Session is read once at startup, and is what the header and the run
 	// options panel are drawn from.
@@ -2040,6 +2050,9 @@ type DataSource interface {
 	// control plane has no exec event stream yet — exec state lives on the
 	// sandbox, proxied through — and the seam is shaped so a stream can
 	// replace the poll without moving anything else.
+	//
+	// It answers ErrNotRunning for a sandbox that is not running, and so does
+	// Services: see there.
 	Execs(ctx context.Context, sandboxID string) ([]Exec, error)
 
 	// OpenExec attaches to one existing exec session, sized for the pane it

@@ -7033,6 +7033,159 @@ func (s *Server) handleGetSandboxRequest(args [2]string, argsEscaped bool, w htt
 	}
 }
 
+// handleGetSandboxAgentInventoryRequest handles get-sandbox-agent-inventory operation.
+//
+// What the sandbox's exec, service and tool lists and its terminals' screens answer right now, in
+// one document, so the control plane can answer those reads while the sandbox is not running (ADR
+// 26-10-11-657). Only a token carrying the inventory scope may read it.
+//
+// GET /api/projects/{projectId}/sandboxes/{sandboxId}/inventory
+func (s *Server) handleGetSandboxAgentInventoryRequest(args [2]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
+	statusWriter := &codeRecorder{ResponseWriter: w}
+	w = statusWriter
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("get-sandbox-agent-inventory"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.HTTPRouteKey.String("/api/projects/{projectId}/sandboxes/{sandboxId}/inventory"),
+	}
+	// Add attributes from config.
+	otelAttrs = append(otelAttrs, s.cfg.Attributes...)
+
+	// Start a span for this request.
+	ctx, span := s.cfg.Tracer.Start(r.Context(), GetSandboxAgentInventoryOperation,
+		trace.WithAttributes(otelAttrs...),
+		serverSpanKind,
+	)
+	defer span.End()
+
+	// Add Labeler to context.
+	labeler := &Labeler{attrs: otelAttrs}
+	ctx = contextWithLabeler(ctx, labeler)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		elapsedDuration := time.Since(startTime)
+
+		attrSet := labeler.AttributeSet()
+		attrs := attrSet.ToSlice()
+		code := statusWriter.status
+		if code != 0 {
+			codeAttr := semconv.HTTPResponseStatusCode(code)
+			attrs = append(attrs, codeAttr)
+			span.SetAttributes(codeAttr)
+		}
+		attrOpt := metric.WithAttributes(attrs...)
+
+		// Increment request counter.
+		s.requests.Add(ctx, 1, attrOpt)
+
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		s.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), attrOpt)
+	}()
+
+	var (
+		recordError = func(stage string, err error) {
+			span.RecordError(err)
+
+			// https://opentelemetry.io/docs/specs/semconv/http/http-spans/#status
+			// Span Status MUST be left unset if HTTP status code was in the 1xx, 2xx or 3xx ranges,
+			// unless there was another error (e.g., network error receiving the response body; or 3xx codes with
+			// max redirects exceeded), in which case status MUST be set to Error.
+			code := statusWriter.status
+			if code < 100 || code >= 500 {
+				span.SetStatus(codes.Error, stage)
+			}
+
+			attrSet := labeler.AttributeSet()
+			attrs := attrSet.ToSlice()
+			if code != 0 {
+				attrs = append(attrs, semconv.HTTPResponseStatusCode(code))
+			}
+
+			s.errors.Add(ctx, 1, metric.WithAttributes(attrs...))
+		}
+		err          error
+		opErrContext = ogenerrors.OperationContext{
+			Name: GetSandboxAgentInventoryOperation,
+			ID:   "get-sandbox-agent-inventory",
+		}
+	)
+	params, err := decodeGetSandboxAgentInventoryParams(args, argsEscaped, r)
+	if err != nil {
+		err = &ogenerrors.DecodeParamsError{
+			OperationContext: opErrContext,
+			Err:              err,
+		}
+		defer recordError("DecodeParams", err)
+		s.cfg.ErrorHandler(ctx, w, r, err)
+		return
+	}
+
+	var rawBody []byte
+
+	var response GetSandboxAgentInventoryRes
+	if m := s.cfg.Middleware; m != nil {
+		mreq := middleware.Request{
+			Context:          ctx,
+			OperationName:    GetSandboxAgentInventoryOperation,
+			OperationSummary: "Get what the sandbox's list reads answer, for the control plane to keep.",
+			OperationID:      "get-sandbox-agent-inventory",
+			Body:             nil,
+			RawBody:          rawBody,
+			Params: middleware.Parameters{
+				{
+					Name: "projectId",
+					In:   "path",
+				}: params.ProjectId,
+				{
+					Name: "sandboxId",
+					In:   "path",
+				}: params.SandboxId,
+				{
+					Name: "known",
+					In:   "query",
+				}: params.Known,
+			},
+			Raw: r,
+		}
+
+		type (
+			Request  = struct{}
+			Params   = GetSandboxAgentInventoryParams
+			Response = GetSandboxAgentInventoryRes
+		)
+		response, err = middleware.HookMiddleware[
+			Request,
+			Params,
+			Response,
+		](
+			m,
+			mreq,
+			unpackGetSandboxAgentInventoryParams,
+			func(ctx context.Context, request Request, params Params) (response Response, err error) {
+				response, err = s.h.GetSandboxAgentInventory(ctx, params)
+				return response, err
+			},
+		)
+	} else {
+		response, err = s.h.GetSandboxAgentInventory(ctx, params)
+	}
+	if err != nil {
+		defer recordError("Internal", err)
+		s.cfg.ErrorHandler(ctx, w, r, err)
+		return
+	}
+
+	if err := encodeGetSandboxAgentInventoryResponse(response, w, span); err != nil {
+		defer recordError("EncodeResponse", err)
+		if !errors.Is(err, ht.ErrInternalServerErrorResponse) {
+			s.cfg.ErrorHandler(ctx, w, r, err)
+		}
+		return
+	}
+}
+
 // handleGetSandboxAgentStatusRequest handles get-sandbox-agent-status operation.
 //
 // Get sandbox-agent-reported status (git status, harness session state, active connections).
@@ -7637,7 +7790,8 @@ func (s *Server) handleGetSandboxExecResourcesRequest(args [3]string, argsEscape
 //
 // The terminal's screen as text, rendered from the terminal emulator its shim keeps, with recent
 // scrollback on request. Reading it does not attach, resize the terminal, or count as activity. 409
-// for an exec with no terminal.
+// for an exec with no terminal. A discobox that is not running is answered from the screen it last
+// posted, which has no scrollback.
 //
 // GET /api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/screen
 func (s *Server) handleGetSandboxExecScreenRequest(args [3]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -16716,6 +16870,165 @@ func (s *Server) handleReportSandboxAgentStatusRequest(args [1]string, argsEscap
 	}
 
 	if err := encodeReportSandboxAgentStatusResponse(response, w, span); err != nil {
+		defer recordError("EncodeResponse", err)
+		if !errors.Is(err, ht.ErrInternalServerErrorResponse) {
+			s.cfg.ErrorHandler(ctx, w, r, err)
+		}
+		return
+	}
+}
+
+// handleReportSandboxInventoriesRequest handles report-sandbox-inventories operation.
+//
+// Report the inventory of one or more hosted sandboxes, in full when it changed and by digest when
+// it did not.
+//
+// POST /api/pools/{poolId}/sandbox-inventories
+func (s *Server) handleReportSandboxInventoriesRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
+	statusWriter := &codeRecorder{ResponseWriter: w}
+	w = statusWriter
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("report-sandbox-inventories"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.HTTPRouteKey.String("/api/pools/{poolId}/sandbox-inventories"),
+	}
+	// Add attributes from config.
+	otelAttrs = append(otelAttrs, s.cfg.Attributes...)
+
+	// Start a span for this request.
+	ctx, span := s.cfg.Tracer.Start(r.Context(), ReportSandboxInventoriesOperation,
+		trace.WithAttributes(otelAttrs...),
+		serverSpanKind,
+	)
+	defer span.End()
+
+	// Add Labeler to context.
+	labeler := &Labeler{attrs: otelAttrs}
+	ctx = contextWithLabeler(ctx, labeler)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		elapsedDuration := time.Since(startTime)
+
+		attrSet := labeler.AttributeSet()
+		attrs := attrSet.ToSlice()
+		code := statusWriter.status
+		if code != 0 {
+			codeAttr := semconv.HTTPResponseStatusCode(code)
+			attrs = append(attrs, codeAttr)
+			span.SetAttributes(codeAttr)
+		}
+		attrOpt := metric.WithAttributes(attrs...)
+
+		// Increment request counter.
+		s.requests.Add(ctx, 1, attrOpt)
+
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		s.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), attrOpt)
+	}()
+
+	var (
+		recordError = func(stage string, err error) {
+			span.RecordError(err)
+
+			// https://opentelemetry.io/docs/specs/semconv/http/http-spans/#status
+			// Span Status MUST be left unset if HTTP status code was in the 1xx, 2xx or 3xx ranges,
+			// unless there was another error (e.g., network error receiving the response body; or 3xx codes with
+			// max redirects exceeded), in which case status MUST be set to Error.
+			code := statusWriter.status
+			if code < 100 || code >= 500 {
+				span.SetStatus(codes.Error, stage)
+			}
+
+			attrSet := labeler.AttributeSet()
+			attrs := attrSet.ToSlice()
+			if code != 0 {
+				attrs = append(attrs, semconv.HTTPResponseStatusCode(code))
+			}
+
+			s.errors.Add(ctx, 1, metric.WithAttributes(attrs...))
+		}
+		err          error
+		opErrContext = ogenerrors.OperationContext{
+			Name: ReportSandboxInventoriesOperation,
+			ID:   "report-sandbox-inventories",
+		}
+	)
+	params, err := decodeReportSandboxInventoriesParams(args, argsEscaped, r)
+	if err != nil {
+		err = &ogenerrors.DecodeParamsError{
+			OperationContext: opErrContext,
+			Err:              err,
+		}
+		defer recordError("DecodeParams", err)
+		s.cfg.ErrorHandler(ctx, w, r, err)
+		return
+	}
+
+	var rawBody []byte
+	request, rawBody, close, err := s.decodeReportSandboxInventoriesRequest(r)
+	if err != nil {
+		err = &ogenerrors.DecodeRequestError{
+			OperationContext: opErrContext,
+			Err:              err,
+		}
+		defer recordError("DecodeRequest", err)
+		s.cfg.ErrorHandler(ctx, w, r, err)
+		return
+	}
+	defer func() {
+		if err := close(); err != nil {
+			recordError("CloseRequest", err)
+		}
+	}()
+
+	var response ReportSandboxInventoriesRes
+	if m := s.cfg.Middleware; m != nil {
+		mreq := middleware.Request{
+			Context:          ctx,
+			OperationName:    ReportSandboxInventoriesOperation,
+			OperationSummary: "Report the inventory of one or more hosted sandboxes, in full when it changed and by digest when it did not",
+			OperationID:      "report-sandbox-inventories",
+			Body:             request,
+			RawBody:          rawBody,
+			Params: middleware.Parameters{
+				{
+					Name: "poolId",
+					In:   "path",
+				}: params.PoolId,
+			},
+			Raw: r,
+		}
+
+		type (
+			Request  = *ReportSandboxInventoriesBody
+			Params   = ReportSandboxInventoriesParams
+			Response = ReportSandboxInventoriesRes
+		)
+		response, err = middleware.HookMiddleware[
+			Request,
+			Params,
+			Response,
+		](
+			m,
+			mreq,
+			unpackReportSandboxInventoriesParams,
+			func(ctx context.Context, request Request, params Params) (response Response, err error) {
+				response, err = s.h.ReportSandboxInventories(ctx, request, params)
+				return response, err
+			},
+		)
+	} else {
+		response, err = s.h.ReportSandboxInventories(ctx, request, params)
+	}
+	if err != nil {
+		defer recordError("Internal", err)
+		s.cfg.ErrorHandler(ctx, w, r, err)
+		return
+	}
+
+	if err := encodeReportSandboxInventoriesResponse(response, w, span); err != nil {
 		defer recordError("EncodeResponse", err)
 		if !errors.Is(err, ht.ErrInternalServerErrorResponse) {
 			s.cfg.ErrorHandler(ctx, w, r, err)

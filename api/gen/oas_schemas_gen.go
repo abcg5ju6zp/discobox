@@ -3141,6 +3141,7 @@ func (*ErrorModelStatusCode) repairSandboxRes()                    {}
 func (*ErrorModelStatusCode) reportPoolResourcesRes()              {}
 func (*ErrorModelStatusCode) reportPoolSandboxStatesRes()          {}
 func (*ErrorModelStatusCode) reportSandboxAgentStatusRes()         {}
+func (*ErrorModelStatusCode) reportSandboxInventoriesRes()         {}
 func (*ErrorModelStatusCode) reportSandboxSecretRejectionRes()     {}
 func (*ErrorModelStatusCode) resolveSandboxSecretRes()             {}
 func (*ErrorModelStatusCode) restartSandboxRes()                   {}
@@ -3210,6 +3211,7 @@ func (*ErrorResponseStatusCode) attachSandboxExecOnceRes()          {}
 func (*ErrorResponseStatusCode) attachSandboxExecRes()              {}
 func (*ErrorResponseStatusCode) createSandboxExecRes()              {}
 func (*ErrorResponseStatusCode) deleteSandboxExecRes()              {}
+func (*ErrorResponseStatusCode) getSandboxAgentInventoryRes()       {}
 func (*ErrorResponseStatusCode) getSandboxAgentStatusRes()          {}
 func (*ErrorResponseStatusCode) getSandboxExecRes()                 {}
 func (*ErrorResponseStatusCode) getSandboxExecResourcesRes()        {}
@@ -12224,6 +12226,52 @@ func (o OptSandboxAgentCloneProgress) Or(d SandboxAgentCloneProgress) SandboxAge
 	return d
 }
 
+// NewOptSandboxAgentInventoryScreens returns new OptSandboxAgentInventoryScreens with value set to v.
+func NewOptSandboxAgentInventoryScreens(v SandboxAgentInventoryScreens) OptSandboxAgentInventoryScreens {
+	return OptSandboxAgentInventoryScreens{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptSandboxAgentInventoryScreens is optional SandboxAgentInventoryScreens.
+type OptSandboxAgentInventoryScreens struct {
+	Value SandboxAgentInventoryScreens
+	Set   bool
+}
+
+// IsSet returns true if OptSandboxAgentInventoryScreens was set.
+func (o OptSandboxAgentInventoryScreens) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptSandboxAgentInventoryScreens) Reset() {
+	var v SandboxAgentInventoryScreens
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptSandboxAgentInventoryScreens) SetTo(v SandboxAgentInventoryScreens) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptSandboxAgentInventoryScreens) Get() (v SandboxAgentInventoryScreens, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptSandboxAgentInventoryScreens) Or(d SandboxAgentInventoryScreens) SandboxAgentInventoryScreens {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptSandboxAgentResourceUsage returns new OptSandboxAgentResourceUsage with value set to v.
 func NewOptSandboxAgentResourceUsage(v SandboxAgentResourceUsage) OptSandboxAgentResourceUsage {
 	return OptSandboxAgentResourceUsage{
@@ -12816,6 +12864,52 @@ func (o OptSandboxGitIdentity) Get() (v SandboxGitIdentity, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptSandboxGitIdentity) Or(d SandboxGitIdentity) SandboxGitIdentity {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptSandboxInventoryEntryInventory returns new OptSandboxInventoryEntryInventory with value set to v.
+func NewOptSandboxInventoryEntryInventory(v SandboxInventoryEntryInventory) OptSandboxInventoryEntryInventory {
+	return OptSandboxInventoryEntryInventory{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptSandboxInventoryEntryInventory is optional SandboxInventoryEntryInventory.
+type OptSandboxInventoryEntryInventory struct {
+	Value SandboxInventoryEntryInventory
+	Set   bool
+}
+
+// IsSet returns true if OptSandboxInventoryEntryInventory was set.
+func (o OptSandboxInventoryEntryInventory) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptSandboxInventoryEntryInventory) Reset() {
+	var v SandboxInventoryEntryInventory
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptSandboxInventoryEntryInventory) SetTo(v SandboxInventoryEntryInventory) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptSandboxInventoryEntryInventory) Get() (v SandboxInventoryEntryInventory, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptSandboxInventoryEntryInventory) Or(d SandboxInventoryEntryInventory) SandboxInventoryEntryInventory {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -17566,6 +17660,41 @@ type ReportSandboxAgentStatusNoContent struct{}
 
 func (*ReportSandboxAgentStatusNoContent) reportSandboxAgentStatusRes() {}
 
+// Ref: #/components/schemas/ReportSandboxInventoriesBody
+type ReportSandboxInventoriesBody struct {
+	// One entry for each sandbox whose inventory this pool agent read this tick.
+	Sandboxes []SandboxInventoryEntry `json:"sandboxes"`
+}
+
+// GetSandboxes returns the value of Sandboxes.
+func (s *ReportSandboxInventoriesBody) GetSandboxes() []SandboxInventoryEntry {
+	return s.Sandboxes
+}
+
+// SetSandboxes sets the value of Sandboxes.
+func (s *ReportSandboxInventoriesBody) SetSandboxes(val []SandboxInventoryEntry) {
+	s.Sandboxes = val
+}
+
+// Ref: #/components/schemas/ReportSandboxInventoriesResponseBody
+type ReportSandboxInventoriesResponseBody struct {
+	// Sandboxes reported by digest alone whose inventory the control plane does not hold under that
+	// digest. The pool agent sends each in full on its next report.
+	Wanted []string `json:"wanted"`
+}
+
+// GetWanted returns the value of Wanted.
+func (s *ReportSandboxInventoriesResponseBody) GetWanted() []string {
+	return s.Wanted
+}
+
+// SetWanted sets the value of Wanted.
+func (s *ReportSandboxInventoriesResponseBody) SetWanted(val []string) {
+	s.Wanted = val
+}
+
+func (*ReportSandboxInventoriesResponseBody) reportSandboxInventoriesRes() {}
+
 // What an upstream made of a credential the pool's proxy swapped in, reported after the proxy's own
 // retry has had its chance. It names the sentinel, never the value.
 // Ref: #/components/schemas/ReportSandboxSecretRejectionBody
@@ -18756,6 +18885,111 @@ func (s *SandboxAgentGitSourceStatus) SetError(val OptString) {
 // SetObservedAt sets the value of ObservedAt.
 func (s *SandboxAgentGitSourceStatus) SetObservedAt(val time.Time) {
 	s.ObservedAt = val
+}
+
+// What a sandbox's list reads answer, posted so that they can be answered while it is not running
+// (ADR 26-10-11-657). A part the sandbox cannot answer is absent, not empty.
+// Ref: #/components/schemas/SandboxAgentInventory
+type SandboxAgentInventory struct {
+	// When the sandbox agent took this inventory, on the sandbox's clock.
+	ObservedAt time.Time `json:"observedAt"`
+	// Hash of execs, services, tools and screens, and of nothing else. Two inventories with one digest
+	// answer every read alike.
+	Digest string `json:"digest"`
+	// True when the digest is the one the caller named as known. The parts are then omitted.
+	Unchanged OptBool `json:"unchanged"`
+	// What listing the sandbox's execs answers.
+	Execs []SandboxExec `json:"execs"`
+	// What listing the sandbox's services answers.
+	Services []SandboxService `json:"services"`
+	// What listing the sandbox's tools answers.
+	Tools []SandboxTool `json:"tools"`
+	// The visible screen of every exec that has one, by exec ID, with no scrollback.
+	Screens OptSandboxAgentInventoryScreens `json:"screens"`
+}
+
+// GetObservedAt returns the value of ObservedAt.
+func (s *SandboxAgentInventory) GetObservedAt() time.Time {
+	return s.ObservedAt
+}
+
+// GetDigest returns the value of Digest.
+func (s *SandboxAgentInventory) GetDigest() string {
+	return s.Digest
+}
+
+// GetUnchanged returns the value of Unchanged.
+func (s *SandboxAgentInventory) GetUnchanged() OptBool {
+	return s.Unchanged
+}
+
+// GetExecs returns the value of Execs.
+func (s *SandboxAgentInventory) GetExecs() []SandboxExec {
+	return s.Execs
+}
+
+// GetServices returns the value of Services.
+func (s *SandboxAgentInventory) GetServices() []SandboxService {
+	return s.Services
+}
+
+// GetTools returns the value of Tools.
+func (s *SandboxAgentInventory) GetTools() []SandboxTool {
+	return s.Tools
+}
+
+// GetScreens returns the value of Screens.
+func (s *SandboxAgentInventory) GetScreens() OptSandboxAgentInventoryScreens {
+	return s.Screens
+}
+
+// SetObservedAt sets the value of ObservedAt.
+func (s *SandboxAgentInventory) SetObservedAt(val time.Time) {
+	s.ObservedAt = val
+}
+
+// SetDigest sets the value of Digest.
+func (s *SandboxAgentInventory) SetDigest(val string) {
+	s.Digest = val
+}
+
+// SetUnchanged sets the value of Unchanged.
+func (s *SandboxAgentInventory) SetUnchanged(val OptBool) {
+	s.Unchanged = val
+}
+
+// SetExecs sets the value of Execs.
+func (s *SandboxAgentInventory) SetExecs(val []SandboxExec) {
+	s.Execs = val
+}
+
+// SetServices sets the value of Services.
+func (s *SandboxAgentInventory) SetServices(val []SandboxService) {
+	s.Services = val
+}
+
+// SetTools sets the value of Tools.
+func (s *SandboxAgentInventory) SetTools(val []SandboxTool) {
+	s.Tools = val
+}
+
+// SetScreens sets the value of Screens.
+func (s *SandboxAgentInventory) SetScreens(val OptSandboxAgentInventoryScreens) {
+	s.Screens = val
+}
+
+func (*SandboxAgentInventory) getSandboxAgentInventoryRes() {}
+
+// The visible screen of every exec that has one, by exec ID, with no scrollback.
+type SandboxAgentInventoryScreens map[string]SandboxExecScreen
+
+func (s *SandboxAgentInventoryScreens) init() SandboxAgentInventoryScreens {
+	m := *s
+	if m == nil {
+		m = map[string]SandboxExecScreen{}
+		*s = m
+	}
+	return m
 }
 
 // Ref: #/components/schemas/SandboxAgentListeningPort
@@ -20766,6 +21000,9 @@ func (s *SandboxCredentialRequestStatusStatus) UnmarshalText(data []byte) error 
 
 // Ref: #/components/schemas/SandboxExec
 type SandboxExec struct {
+	// Set only when this was answered from the discobox's last inventory rather than by the discobox,
+	// which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+	ObservedAt OptDateTime `json:"observedAt"`
 	// Sandbox exec runtime ID.
 	ID string `json:"id"`
 	// Current observed exec runtime status. installing is a terminal-layer
@@ -20810,6 +21047,11 @@ type SandboxExec struct {
 	HarnessId OptString `json:"harnessId"`
 	// Whether this is the sandbox's primary harness terminal.
 	Primary OptBool `json:"primary"`
+}
+
+// GetObservedAt returns the value of ObservedAt.
+func (s *SandboxExec) GetObservedAt() OptDateTime {
+	return s.ObservedAt
 }
 
 // GetID returns the value of ID.
@@ -20905,6 +21147,11 @@ func (s *SandboxExec) GetHarnessId() OptString {
 // GetPrimary returns the value of Primary.
 func (s *SandboxExec) GetPrimary() OptBool {
 	return s.Primary
+}
+
+// SetObservedAt sets the value of ObservedAt.
+func (s *SandboxExec) SetObservedAt(val OptDateTime) {
+	s.ObservedAt = val
 }
 
 // SetID sets the value of ID.
@@ -21295,8 +21542,11 @@ func (s *SandboxExecMetadata) init() SandboxExecMetadata {
 // A terminal's screen as a person looking at it would read it.
 // Ref: #/components/schemas/SandboxExecScreen
 type SandboxExecScreen struct {
-	Rows int64 `json:"rows"`
-	Cols int64 `json:"cols"`
+	// Set only when this was answered from the discobox's last inventory rather than by the discobox,
+	// which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+	ObservedAt OptDateTime `json:"observedAt"`
+	Rows       int64       `json:"rows"`
+	Cols       int64       `json:"cols"`
 	// Zero-based cursor row.
 	CursorRow int64 `json:"cursorRow"`
 	// Zero-based cursor column.
@@ -21315,6 +21565,11 @@ type SandboxExecScreen struct {
 	// Whether the program has exited. Its last screen stays readable while the terminal lingers after
 	// exit.
 	Exited bool `json:"exited"`
+}
+
+// GetObservedAt returns the value of ObservedAt.
+func (s *SandboxExecScreen) GetObservedAt() OptDateTime {
+	return s.ObservedAt
 }
 
 // GetRows returns the value of Rows.
@@ -21370,6 +21625,11 @@ func (s *SandboxExecScreen) GetOutputAt() OptDateTime {
 // GetExited returns the value of Exited.
 func (s *SandboxExecScreen) GetExited() bool {
 	return s.Exited
+}
+
+// SetObservedAt sets the value of ObservedAt.
+func (s *SandboxExecScreen) SetObservedAt(val OptDateTime) {
+	s.ObservedAt = val
 }
 
 // SetRows sets the value of Rows.
@@ -21697,12 +21957,25 @@ func (s *SandboxExecWaitUntil) SetExit(val OptBool) {
 
 // Ref: #/components/schemas/SandboxExecsResponse
 type SandboxExecsResponse struct {
-	Execs []SandboxExec `json:"execs"`
+	// Set only when this was answered from the discobox's last inventory rather than by the discobox,
+	// which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+	ObservedAt OptDateTime   `json:"observedAt"`
+	Execs      []SandboxExec `json:"execs"`
+}
+
+// GetObservedAt returns the value of ObservedAt.
+func (s *SandboxExecsResponse) GetObservedAt() OptDateTime {
+	return s.ObservedAt
 }
 
 // GetExecs returns the value of Execs.
 func (s *SandboxExecsResponse) GetExecs() []SandboxExec {
 	return s.Execs
+}
+
+// SetObservedAt sets the value of ObservedAt.
+func (s *SandboxExecsResponse) SetObservedAt(val OptDateTime) {
+	s.ObservedAt = val
 }
 
 // SetExecs sets the value of Execs.
@@ -21872,6 +22145,70 @@ func (s *SandboxHarnessSecretsResponseSecrets) init() SandboxHarnessSecretsRespo
 	m := *s
 	if m == nil {
 		m = map[string]string{}
+		*s = m
+	}
+	return m
+}
+
+// Ref: #/components/schemas/SandboxInventoryEntry
+type SandboxInventoryEntry struct {
+	SandboxId string `json:"sandboxId"`
+	// Digest of the sandbox's inventory at observedAt.
+	Digest     string    `json:"digest"`
+	ObservedAt time.Time `json:"observedAt"`
+	// Opaque sandbox-agent inventory (see SandboxAgentInventory), relayed unmodified by pool-agent.
+	// Omitted when the pool agent has already delivered the inventory with this digest.
+	Inventory OptSandboxInventoryEntryInventory `json:"inventory"`
+}
+
+// GetSandboxId returns the value of SandboxId.
+func (s *SandboxInventoryEntry) GetSandboxId() string {
+	return s.SandboxId
+}
+
+// GetDigest returns the value of Digest.
+func (s *SandboxInventoryEntry) GetDigest() string {
+	return s.Digest
+}
+
+// GetObservedAt returns the value of ObservedAt.
+func (s *SandboxInventoryEntry) GetObservedAt() time.Time {
+	return s.ObservedAt
+}
+
+// GetInventory returns the value of Inventory.
+func (s *SandboxInventoryEntry) GetInventory() OptSandboxInventoryEntryInventory {
+	return s.Inventory
+}
+
+// SetSandboxId sets the value of SandboxId.
+func (s *SandboxInventoryEntry) SetSandboxId(val string) {
+	s.SandboxId = val
+}
+
+// SetDigest sets the value of Digest.
+func (s *SandboxInventoryEntry) SetDigest(val string) {
+	s.Digest = val
+}
+
+// SetObservedAt sets the value of ObservedAt.
+func (s *SandboxInventoryEntry) SetObservedAt(val time.Time) {
+	s.ObservedAt = val
+}
+
+// SetInventory sets the value of Inventory.
+func (s *SandboxInventoryEntry) SetInventory(val OptSandboxInventoryEntryInventory) {
+	s.Inventory = val
+}
+
+// Opaque sandbox-agent inventory (see SandboxAgentInventory), relayed unmodified by pool-agent.
+// Omitted when the pool agent has already delivered the inventory with this digest.
+type SandboxInventoryEntryInventory map[string]jx.Raw
+
+func (s *SandboxInventoryEntryInventory) init() SandboxInventoryEntryInventory {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
 		*s = m
 	}
 	return m
@@ -23527,6 +23864,9 @@ func (s *SandboxSecretInput) SetValue(val OptString) {
 // of the exec running it.
 // Ref: #/components/schemas/SandboxService
 type SandboxService struct {
+	// Set only when this was answered from the discobox's last inventory rather than by the discobox,
+	// which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+	ObservedAt OptDateTime `json:"observedAt"`
 	// Stable filename-derived service ID, with any numeric ordering prefix and known extension removed -
 	// 10-discobox-api.sh is discobox-api.
 	ID string `json:"id"`
@@ -23565,6 +23905,11 @@ type SandboxService struct {
 	ExitedAt  OptDateTime `json:"exitedAt"`
 	// Why the last run failed, when it did.
 	Error OptString `json:"error"`
+}
+
+// GetObservedAt returns the value of ObservedAt.
+func (s *SandboxService) GetObservedAt() OptDateTime {
+	return s.ObservedAt
 }
 
 // GetID returns the value of ID.
@@ -23635,6 +23980,11 @@ func (s *SandboxService) GetExitedAt() OptDateTime {
 // GetError returns the value of Error.
 func (s *SandboxService) GetError() OptString {
 	return s.Error
+}
+
+// SetObservedAt sets the value of ObservedAt.
+func (s *SandboxService) SetObservedAt(val OptDateTime) {
+	s.ObservedAt = val
 }
 
 // SetID sets the value of ID.
@@ -23780,12 +24130,25 @@ func (s *SandboxServiceStatus) UnmarshalText(data []byte) error {
 
 // Ref: #/components/schemas/SandboxServicesResponse
 type SandboxServicesResponse struct {
-	Services []SandboxService `json:"services"`
+	// Set only when this was answered from the discobox's last inventory rather than by the discobox,
+	// which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+	ObservedAt OptDateTime      `json:"observedAt"`
+	Services   []SandboxService `json:"services"`
+}
+
+// GetObservedAt returns the value of ObservedAt.
+func (s *SandboxServicesResponse) GetObservedAt() OptDateTime {
+	return s.ObservedAt
 }
 
 // GetServices returns the value of Services.
 func (s *SandboxServicesResponse) GetServices() []SandboxService {
 	return s.Services
+}
+
+// SetObservedAt sets the value of ObservedAt.
+func (s *SandboxServicesResponse) SetObservedAt(val OptDateTime) {
+	s.ObservedAt = val
 }
 
 // SetServices sets the value of Services.
@@ -24357,12 +24720,25 @@ func (s *SandboxToolRuns) UnmarshalText(data []byte) error {
 
 // Ref: #/components/schemas/SandboxToolsResponse
 type SandboxToolsResponse struct {
-	Tools []SandboxTool `json:"tools"`
+	// Set only when this was answered from the discobox's last inventory rather than by the discobox,
+	// which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+	ObservedAt OptDateTime   `json:"observedAt"`
+	Tools      []SandboxTool `json:"tools"`
+}
+
+// GetObservedAt returns the value of ObservedAt.
+func (s *SandboxToolsResponse) GetObservedAt() OptDateTime {
+	return s.ObservedAt
 }
 
 // GetTools returns the value of Tools.
 func (s *SandboxToolsResponse) GetTools() []SandboxTool {
 	return s.Tools
+}
+
+// SetObservedAt sets the value of ObservedAt.
+func (s *SandboxToolsResponse) SetObservedAt(val OptDateTime) {
+	s.ObservedAt = val
 }
 
 // SetTools sets the value of Tools.

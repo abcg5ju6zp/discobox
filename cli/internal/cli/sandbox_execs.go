@@ -124,11 +124,11 @@ func (a *App) newSandboxExecListCommand(sandboxID *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			execs, err := a.listSandboxExecs(cmd.Context(), projectID, resolvedSandboxID)
+			execs, observedAt, err := a.listSandboxExecs(cmd.Context(), projectID, resolvedSandboxID)
 			if err != nil {
 				return err
 			}
-			return a.writeSandboxExecs(cmd, execs)
+			return a.writeSandboxExecs(cmd, execs, observedAt)
 		},
 	}
 	a.addQuietFlag(cmd)
@@ -392,7 +392,9 @@ func (a *App) resolveSandboxExecID(ctx context.Context, projectID, sandboxID, va
 	if id == primaryExecID {
 		return id, nil
 	}
-	execs, err := a.listSandboxExecs(ctx, projectID, sandboxID)
+	// A stored listing resolves a short id as well as a live one: an exec's
+	// id does not change when its discobox stops.
+	execs, _, err := a.listSandboxExecs(ctx, projectID, sandboxID)
 	if err != nil {
 		return "", err
 	}
@@ -410,17 +412,18 @@ func (a *App) writeSandboxExec(cmd *cobra.Command, exec *apimodel.SandboxExec) e
 	if a.output == "json" {
 		return writeJSON(cmd.OutOrStdout(), exec)
 	}
-	return a.writeSandboxExecs(cmd, []apimodel.SandboxExec{*exec})
+	return a.writeSandboxExecs(cmd, []apimodel.SandboxExec{*exec}, exec.ObservedAt.Or(time.Time{}))
 }
 
-func (a *App) writeSandboxExecs(cmd *cobra.Command, execs []apimodel.SandboxExec) error {
+func (a *App) writeSandboxExecs(cmd *cobra.Command, execs []apimodel.SandboxExec, observedAt time.Time) error {
 	execs = sortedByRecency(execs, func(exec apimodel.SandboxExec) time.Time { return exec.CreatedAt })
 	if a.quiet {
 		return writeResourceIDs(cmd.OutOrStdout(), execs, func(exec apimodel.SandboxExec) string { return exec.ID })
 	}
 	if a.output == "json" {
-		return writeJSON(cmd.OutOrStdout(), map[string]any{"execs": execs})
+		return writeJSON(cmd.OutOrStdout(), storedAnswerJSON("execs", execs, observedAt))
 	}
+	defer noteStoredAnswer(cmd, observedAt)
 	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSTATUS\tPID\tEXIT\tTTY\tWORKDIR\tCOMMAND\tCREATED")
 	for _, exec := range execs {
@@ -687,6 +690,16 @@ func (a *App) sandboxExecAttachDone(ctx context.Context, projectID, sandboxID, e
 		}
 		return false, err
 	}
+	if _, stored := exec.ObservedAt.Get(); stored {
+		// The discobox is not running, and this is the record it last posted:
+		// it says what the exec was, not what it is, and may well say running.
+		// A stopped discobox took the terminal with it, as above. One that is
+		// on its way up has not answered yet, so ask again.
+		if done, stopErr := a.sandboxStoppedAttachDone(ctx, projectID, sandboxID); done {
+			return true, stopErr
+		}
+		return false, nil
+	}
 	switch exec.Status {
 	case apiclientgen.SandboxExecStatusExited:
 		if code, ok := exec.ExitCode.Get(); ok && code != 0 {
@@ -807,6 +820,9 @@ type sandboxExecRecordResponse struct {
 
 type sandboxExecRecordsResponse struct {
 	Execs []sandboxExecRecord `json:"execs"`
+	// ObservedAt is set when the discobox was not running and the server
+	// answered from what it last posted (ADR 26-10-11-657 §4).
+	ObservedAt *time.Time `json:"observedAt"`
 }
 
 type sandboxExecRecord struct {
@@ -827,6 +843,9 @@ type sandboxExecRecord struct {
 	Metadata  map[string]string              `json:"metadata"`
 	HarnessID *string                        `json:"harnessId"`
 	Primary   *bool                          `json:"primary"`
+	// ObservedAt is set on a record read while the discobox was not running:
+	// it is what the discobox last posted, and when (ADR 26-10-11-657 §4).
+	ObservedAt *time.Time `json:"observedAt"`
 }
 
 type sandboxExecUser struct {
@@ -883,6 +902,12 @@ func (a *App) waitSandboxExecExit(ctx context.Context, projectID, sandboxID, exe
 		switch exec.Status {
 		case apiclientgen.SandboxExecStatusExited, apiclientgen.SandboxExecStatusFailed, apiclientgen.SandboxExecStatusLost:
 			return *exec, nil
+		}
+		if observedAt, stored := exec.ObservedAt.Get(); stored {
+			// The discobox stopped under the exec. What is read now is the
+			// record it last posted, which will say this forever: polling it
+			// would never end.
+			return apimodel.SandboxExec{}, fmt.Errorf("discobox %s stopped before exec %s finished: it was last seen %s, %s", sandboxID, exec.ID, exec.Status, formatAge(observedAt))
 		}
 		select {
 		case <-ctx.Done():
@@ -947,16 +972,48 @@ func (a *App) deleteSandboxExec(ctx context.Context, projectID, sandboxID, execI
 	return a.execJSON(ctx, http.MethodDelete, projectID, sandboxID, "/"+url.PathEscape(execID), nil, nil)
 }
 
-func (a *App) listSandboxExecs(ctx context.Context, projectID, sandboxID string) ([]apimodel.SandboxExec, error) {
+// listSandboxExecs lists a discobox's execs. A discobox that is not running
+// is not started to answer: the server answers with what it last posted, and
+// observedAt is then when it posted it (ADR 26-10-11-657 §4). It is zero for
+// a live answer. A caller that acts on a record — attaches to it, waits on it
+// — has to look: a stored record can say running for a discobox that is down.
+func (a *App) listSandboxExecs(ctx context.Context, projectID, sandboxID string) (execs []apimodel.SandboxExec, observedAt time.Time, err error) {
 	var response sandboxExecRecordsResponse
 	if err := a.execJSON(ctx, http.MethodGet, projectID, sandboxID, "", nil, &response); err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	execs := make([]apimodel.SandboxExec, 0, len(response.Execs))
+	execs = make([]apimodel.SandboxExec, 0, len(response.Execs))
 	for _, exec := range response.Execs {
 		execs = append(execs, exec.model())
 	}
-	return execs, nil
+	if response.ObservedAt != nil {
+		observedAt = *response.ObservedAt
+	}
+	return execs, observedAt, nil
+}
+
+// storedAnswerNote is what a listing says under itself when the discobox was
+// not running and the server answered with what it last posted.
+func storedAnswerNote(observedAt time.Time) string {
+	return fmt.Sprintf("The discobox is not running: this is what it last reported, %s.", formatAge(observedAt))
+}
+
+// noteStoredAnswer tells a person reading a listing that it is not live. It
+// goes to stderr, so what is piped on is still only the listing.
+func noteStoredAnswer(cmd *cobra.Command, observedAt time.Time) {
+	if !observedAt.IsZero() {
+		fmt.Fprintln(cmd.ErrOrStderr(), storedAnswerNote(observedAt))
+	}
+}
+
+// storedAnswerJSON is a listing's JSON document: the list under its own name,
+// and observedAt beside it when the answer was not live.
+func storedAnswerJSON(name string, list any, observedAt time.Time) map[string]any {
+	out := map[string]any{name: list}
+	if !observedAt.IsZero() {
+		out["observedAt"] = observedAt
+	}
+	return out
 }
 
 func (a *App) startSandboxExec(ctx context.Context, projectID, sandboxID, execID string) (apimodel.SandboxExec, error) {
@@ -1065,6 +1122,9 @@ func (r sandboxExecRecord) model() apimodel.SandboxExec {
 	if r.Primary != nil {
 		exec.SetPrimary(apiclientgen.NewOptBool(*r.Primary))
 	}
+	if r.ObservedAt != nil {
+		exec.SetObservedAt(apiclientgen.NewOptDateTime(*r.ObservedAt))
+	}
 	return exec
 }
 
@@ -1119,6 +1179,13 @@ func (a *App) returnSandboxExecStatus(ctx context.Context, projectID, sandboxID,
 	}
 	if code, ok := exec.ExitCode.Get(); ok && code != 0 {
 		return client.ExitError{Code: int(code)}
+	}
+	if observedAt, stored := exec.ObservedAt.Get(); stored && !exec.ExitCode.Set &&
+		exec.Status != apiclientgen.SandboxExecStatusFailed && exec.Status != apiclientgen.SandboxExecStatusLost {
+		// The discobox is down, and the record it last posted has no result
+		// in it: how the command ended is not known, and saying nothing
+		// would report it as a success.
+		return fmt.Errorf("discobox %s stopped before exec %s reported a result: it was last seen %s, %s", sandboxID, exec.ID, exec.Status, formatAge(observedAt))
 	}
 	if exec.Status == apiclientgen.SandboxExecStatusFailed {
 		return fmt.Errorf("exec %s failed: %s", exec.ID, exec.Error.Or(""))

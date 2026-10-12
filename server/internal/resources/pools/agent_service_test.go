@@ -78,9 +78,10 @@ func newAgentServiceTestFixture(t *testing.T) (*Service, *poolagentauth.Manager)
 
 // TestMintSandboxAgentStatusTokensScopeIsAlwaysStatusRead is the load-bearing
 // test for this endpoint's whole reason to exist: no matter what a caller
-// requests, the minted token must carry exactly the status:read scope and
+// requests, the minted token must carry exactly the two scopes of the pool
+// agent's poll, status:read and inventory:read (ADR 26-10-11-657 §1), and
 // nothing else, since a pool agent is meant to be able to read a sandbox's
-// status and nothing more.
+// status and inventory and nothing more.
 func TestMintSandboxAgentStatusTokensScopeIsAlwaysStatusRead(t *testing.T) {
 	svc, agentAuth := newAgentServiceTestFixture(t)
 	ctx := auth.WithPrincipal(context.Background(), auth.Principal{
@@ -117,8 +118,98 @@ func TestMintSandboxAgentStatusTokensScopeIsAlwaysStatusRead(t *testing.T) {
 	if err := parsed.Get("scopes", &scopes); err != nil {
 		t.Fatalf("read scopes claim: %v", err)
 	}
-	if len(scopes) != 1 || scopes[0] != poolagentauth.ScopeStatusRead {
-		t.Fatalf("scopes = %v, want exactly [%q]", scopes, poolagentauth.ScopeStatusRead)
+	if want := []string{poolagentauth.ScopeStatusRead, poolagentauth.ScopeInventoryRead}; !reflect.DeepEqual(scopes, want) {
+		t.Fatalf("scopes = %v, want exactly %v", scopes, want)
+	}
+}
+
+func inventoryEntry(sandboxID, digest string, observedAt time.Time, inventory map[string]string) serverapi.SandboxInventoryEntry {
+	entry := serverapi.SandboxInventoryEntry{SandboxId: sandboxID, Digest: digest, ObservedAt: observedAt}
+	if inventory != nil {
+		document := serverapi.SandboxInventoryEntryInventory{}
+		for key, value := range inventory {
+			document[key] = jx.Raw(value)
+		}
+		entry.Inventory = serverapi.NewOptSandboxInventoryEntryInventory(document)
+	}
+	return entry
+}
+
+// A pool's inventory report stores an inventory sent in full, moves a held one
+// forward when sent by digest, and names what it does not hold so the pool
+// agent sends it in full (ADR 26-10-11-657 §2).
+func TestReportSandboxInventoriesStoresConfirmsAndAsksForWhatItLacks(t *testing.T) {
+	svc, _ := newAgentServiceTestFixture(t)
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{Type: auth.PrincipalTypePool, PoolID: "pool-a"})
+	at := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
+	report := func(entries ...serverapi.SandboxInventoryEntry) []string {
+		t.Helper()
+		resp, err := svc.ReportSandboxInventories(ctx, "pool-a", services.ReportSandboxInventoriesBody{Sandboxes: entries})
+		if err != nil {
+			t.Fatalf("report: %v", err)
+		}
+		if resp.Wanted == nil {
+			t.Fatal("wanted is nil: the answer must encode it as a list")
+		}
+		return resp.Wanted
+	}
+
+	// By digest alone, before anything is held: asked for.
+	if wanted := report(inventoryEntry("sandbox-a", "sha256:one", at, nil)); !reflect.DeepEqual(wanted, []string{"sandbox-a"}) {
+		t.Fatalf("wanted = %v, want sandbox-a: nothing is held for it", wanted)
+	}
+	if wanted := report(inventoryEntry("sandbox-a", "sha256:one", at, map[string]string{"execs": `[{"id":"exec-1"}]`, "digest": `"sha256:one"`})); len(wanted) != 0 {
+		t.Fatalf("wanted = %v after a full inventory", wanted)
+	}
+	if wanted := report(inventoryEntry("sandbox-a", "sha256:one", at.Add(15*time.Second), nil)); len(wanted) != 0 {
+		t.Fatalf("wanted = %v for the digest that is held", wanted)
+	}
+	held, err := svc.store.GetSandboxInventory(ctx, "project-1", "sandbox-a")
+	if err != nil {
+		t.Fatalf("get inventory: %v", err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(held.Document, &document); err != nil {
+		t.Fatalf("stored document %q: %v", held.Document, err)
+	}
+	if string(document["execs"]) != `[{"id":"exec-1"}]` || held.Digest != "sha256:one" || !held.ObservedAt.Equal(at.Add(15*time.Second)) {
+		t.Fatalf("held = %+v (%s), want the posted inventory observed at +15s", held, held.Document)
+	}
+	// A digest other than the one held: asked for, and the held one untouched.
+	if wanted := report(inventoryEntry("sandbox-a", "sha256:two", at.Add(30*time.Second), nil)); !reflect.DeepEqual(wanted, []string{"sandbox-a"}) {
+		t.Fatalf("wanted = %v, want sandbox-a: a different inventory is held", wanted)
+	}
+}
+
+// A pool cannot write an inventory onto a sandbox it does not host, nor learn
+// from the answer that such a sandbox exists; and only a pool may report.
+func TestReportSandboxInventoriesIsLimitedToThePoolsOwnSandboxes(t *testing.T) {
+	svc, _ := newAgentServiceTestFixture(t)
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{Type: auth.PrincipalTypePool, PoolID: "pool-a"})
+	at := time.Now().UTC()
+
+	resp, err := svc.ReportSandboxInventories(ctx, "pool-a", services.ReportSandboxInventoriesBody{Sandboxes: []serverapi.SandboxInventoryEntry{
+		inventoryEntry("sandbox-b", "sha256:one", at, map[string]string{"execs": `[]`}),
+		inventoryEntry("sandbox-b", "sha256:one", at, nil),
+		inventoryEntry("does-not-exist", "sha256:one", at, nil),
+	}})
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if len(resp.Wanted) != 0 {
+		t.Fatalf("wanted = %v, want nothing named for sandboxes the pool does not host", resp.Wanted)
+	}
+	if _, err := svc.store.GetSandboxInventory(ctx, "project-1", "sandbox-b"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("sandbox-b inventory: %v, want none written by another pool", err)
+	}
+
+	for name, caller := range map[string]context.Context{
+		"another pool": auth.WithPrincipal(context.Background(), auth.Principal{Type: auth.PrincipalTypePool, PoolID: "pool-b"}),
+		"a user":       auth.WithPrincipal(context.Background(), auth.Principal{Type: auth.PrincipalTypeUser, UserID: "user-1", Scopes: []string{auth.ScopeAll}}),
+	} {
+		if _, err := svc.ReportSandboxInventories(caller, "pool-a", services.ReportSandboxInventoriesBody{}); err == nil {
+			t.Errorf("%s reported inventories for pool-a", name)
+		}
 	}
 }
 

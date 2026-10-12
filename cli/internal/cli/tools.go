@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"text/tabwriter"
 
@@ -133,6 +134,15 @@ func (a *App) runTool(cmd *cobra.Command, id, sandboxArg, source, program string
 	}
 	ctx := cmd.Context()
 	catalog, err := target.app.toolCatalog(ctx, target.client, target.projectID, target.sandboxID)
+	if errors.Is(err, errSandboxToolsNotReadable) {
+		// Reading the tools does not start a discobox, and this one is down
+		// with none posted. Running a tool is use, though, and use starts it:
+		// run nothing in it, which waits for it to come up, then ask it.
+		if _, _, _, startErr := target.app.sandboxCommandOutput(ctx, target.projectID, target.sandboxID, "", []string{"true"}); startErr != nil {
+			return fmt.Errorf("%w; starting the discobox to read them: %w", err, startErr)
+		}
+		catalog, err = target.app.toolCatalog(ctx, target.client, target.projectID, target.sandboxID)
+	}
 	if err != nil {
 		return err
 	}

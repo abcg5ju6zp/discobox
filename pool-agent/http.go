@@ -20,6 +20,7 @@ const (
 	defaultStatesPath                   = "/api/pools/{poolId}/sandbox-states"
 	defaultSandboxAgentStatusTokensPath = "/api/pools/{poolId}/sandbox-agent-status-tokens" //nolint:gosec // Route path, not a credential value.
 	defaultSandboxAgentStatusPath       = "/api/pools/{poolId}/sandbox-agent-status"
+	defaultSandboxInventoriesPath       = "/api/pools/{poolId}/sandbox-inventories"
 	defaultPoolResourcesPath            = "/api/pools/{poolId}/resources"
 	defaultHeldSandboxesPath            = "/api/pools/{poolId}/sandboxes"
 )
@@ -202,8 +203,8 @@ func (c *HTTPClient) UpdatePoolStatus(ctx context.Context, req StatusRequest) er
 	return nil
 }
 
-// MintSandboxAgentStatusTokens fetches short-lived, status:read-only
-// sandbox-agent tokens for the requested sandboxes.
+// MintSandboxAgentStatusTokens fetches short-lived sandbox-agent tokens for
+// the requested sandboxes, good for the status and inventory poll only.
 func (c *HTTPClient) MintSandboxAgentStatusTokens(ctx context.Context, req MintSandboxAgentStatusTokensRequest) (*MintSandboxAgentStatusTokensResponse, error) {
 	baseURL := strings.TrimRight(firstNonEmpty(req.ControlPlaneURL, c.baseURL), "/")
 	if baseURL == "" {
@@ -291,6 +292,53 @@ func (c *HTTPClient) ReportSandboxAgentStatus(ctx context.Context, req SandboxAg
 		return fmt.Errorf("report sandbox-agent status failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	return nil
+}
+
+// ReportSandboxInventories pushes the inventories this tick read to the
+// control plane, and answers which of those sent by digest alone it wants in
+// full (ADR 26-10-11-657 §2).
+func (c *HTTPClient) ReportSandboxInventories(ctx context.Context, req SandboxInventoryReportRequest) (*SandboxInventoryReportResponse, error) {
+	baseURL := strings.TrimRight(firstNonEmpty(req.ControlPlaneURL, c.baseURL), "/")
+	if baseURL == "" {
+		return nil, fmt.Errorf("control plane URL is required")
+	}
+	poolID := strings.TrimSpace(req.PoolID)
+	if poolID == "" {
+		return nil, fmt.Errorf("pool ID is required")
+	}
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID == "" {
+		return nil, fmt.Errorf("project ID is required")
+	}
+	token, err := poolauth.CreateToken(req.PrivateKey, poolauth.Claims{ProjectID: projectID, PoolID: poolID})
+	if err != nil {
+		return nil, fmt.Errorf("create pool assertion: %w", err)
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	path := strings.ReplaceAll(defaultSandboxInventoriesPath, "{poolId}", url.PathEscape(poolID))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("report sandbox inventories failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var out SandboxInventoryReportResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // ReportPoolResources pushes this report's pool-wide and per-sandbox resource

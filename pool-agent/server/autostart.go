@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	workerapimodel "github.com/discobox-ai/discobox/pool-agent/api/model"
 	"github.com/discobox-ai/discobox/pool-agent/sandboxruntime"
 )
 
@@ -78,25 +79,41 @@ func (s *sandboxService) autoStart(wait containerWait, need sandboxNeed, next ht
 // requireRunning serves a read of what is inside a sandbox only while the
 // sandbox is running, and never starts it.
 //
-// It is autoStart's opposite, for the routes that read the sandbox's own audit
-// data (ADR 0130) — its harness hooks and exec events — and its terminals'
-// screens and waits (ADR 0137 §2). autoStart is right where a request is a use
-// of the sandbox. A read is not one, and starting a stopped sandbox to read it
-// would undo the stop it may be reading about — the idle stop of ADR 0108 above
-// all — or, for an orchestrator polling its workers, keep that stop from ever
-// holding. A sandbox that is not running answers 409
-// saying so, and so does one still booting — Docker calls its container
-// running, but the agent this would read from is not answering yet. One this
-// runtime does not know passes through, so the proxy fails on its own terms.
-func (s *sandboxService) requireRunning(next http.Handler) http.Handler {
+// It is autoStart's opposite, for every read that is not itself a use of the
+// sandbox: its audit data (ADR 0130) — harness hooks and exec events — its
+// terminals' screens and waits (ADR 0137 §2), and the lists the control plane
+// answers from the sandbox's last inventory while it is down — execs,
+// services, tools (ADR 26-10-11-657 §4). autoStart is right where a request
+// is a use of the sandbox. A read is not one, and starting a stopped sandbox
+// to read it would undo the stop it may be reading about — the idle stop of
+// ADR 0108 above all — or, for an orchestrator polling its workers, keep that
+// stop from ever holding. A sandbox that is not running answers 409 saying
+// so, marked with model.SandboxNotRunningHeader. One this runtime does not
+// know passes through, so the proxy fails on its own terms.
+//
+// boot is what a sandbox still booting gets — Docker calls its container
+// running, but the agent this would read from is not answering yet. A route
+// that refuseBooting answers 409 like a stopped one. A route that
+// waitOutBoot waits for the boot something else began, which starts nothing,
+// and then looks again: a boot can end without the sandbox up.
+func (s *sandboxService) requireRunning(boot bootWait, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sandboxID := chi.URLParam(r, "sandboxId")
-		if sb, err := s.runtime.GetSandbox(r.Context(), sandboxID); err == nil {
+		sb, err := s.runtime.GetSandbox(r.Context(), sandboxID)
+		// Whatever the container's status reads: a boot is marked before its
+		// container is started, so one caught in between still reads stopped.
+		if err == nil && boot == waitOutBoot && s.runtime.SandboxBooting(sandboxID) {
+			if waitErr := s.runtime.AwaitSandboxBoot(r.Context(), sandboxID); waitErr == nil {
+				sb, err = s.runtime.GetSandbox(r.Context(), sandboxID)
+			}
+		}
+		if err == nil {
 			status := string(sb.Status)
 			if sb.Status == sandboxruntime.StatusRunning && s.runtime.SandboxBooting(sandboxID) {
 				status = "starting"
 			}
 			if status != string(sandboxruntime.StatusRunning) {
+				w.Header().Set(workerapimodel.SandboxNotRunningHeader, status)
 				http.Error(w, fmt.Sprintf("discobox %s is %s: what is read here is inside it, and reading it does not start it", sandboxID, status), http.StatusConflict)
 				return
 			}
@@ -104,6 +121,19 @@ func (s *sandboxService) requireRunning(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// bootWait is whether a read waits out a boot under way. See requireRunning.
+type bootWait bool
+
+const (
+	// waitOutBoot is for the reads a client makes of a sandbox it is
+	// starting: the lists, which answered once the sandbox was up when they
+	// were what started it, and still do.
+	waitOutBoot bootWait = true
+	// refuseBooting is for the reads an orchestrator polls, which want an
+	// answer now.
+	refuseBooting bootWait = false
+)
 
 // containerWait is whether a route waits for a sandbox's container to be
 // rebuilt. See autoStart.

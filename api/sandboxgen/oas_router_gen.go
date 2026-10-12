@@ -17,19 +17,19 @@ var (
 	rn7AllowedHeaders = map[string]string{
 		"POST": "Content-Type",
 	}
-	rn34AllowedHeaders = map[string]string{
+	rn35AllowedHeaders = map[string]string{
+		"POST": "Content-Type",
+	}
+	rn44AllowedHeaders = map[string]string{
+		"POST": "Content-Type",
+	}
+	rn23AllowedHeaders = map[string]string{
 		"POST": "Content-Type",
 	}
 	rn43AllowedHeaders = map[string]string{
-		"POST": "Content-Type",
-	}
-	rn22AllowedHeaders = map[string]string{
-		"POST": "Content-Type",
-	}
-	rn42AllowedHeaders = map[string]string{
 		"PATCH": "Content-Type",
 	}
-	rn14AllowedHeaders = map[string]string{
+	rn15AllowedHeaders = map[string]string{
 		"PUT": "Content-Type",
 	}
 )
@@ -338,7 +338,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 											default:
 												s.notAllowed(w, r, notAllowedParams{
 													allowedMethods: "POST",
-													allowedHeaders: rn34AllowedHeaders,
+													allowedHeaders: rn35AllowedHeaders,
 													acceptPost:     "application/json",
 													acceptPatch:    "",
 												})
@@ -570,7 +570,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 											default:
 												s.notAllowed(w, r, notAllowedParams{
 													allowedMethods: "POST",
-													allowedHeaders: rn43AllowedHeaders,
+													allowedHeaders: rn44AllowedHeaders,
 													acceptPost:     "application/json",
 													acceptPatch:    "",
 												})
@@ -615,6 +615,34 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							return
 						}
 
+					case 'i': // Prefix: "inventory"
+
+						if l := len("inventory"); len(elem) >= l && elem[0:l] == "inventory" {
+							elem = elem[l:]
+						} else {
+							break
+						}
+
+						if len(elem) == 0 {
+							// Leaf node.
+							switch r.Method {
+							case "GET":
+								s.handleGetSandboxAgentInventoryRequest([2]string{
+									args[0],
+									args[1],
+								}, elemIsEscaped, w, r)
+							default:
+								s.notAllowed(w, r, notAllowedParams{
+									allowedMethods: "GET",
+									allowedHeaders: nil,
+									acceptPost:     "",
+									acceptPatch:    "",
+								})
+							}
+
+							return
+						}
+
 					case 'j': // Prefix: "judge"
 
 						if l := len("judge"); len(elem) >= l && elem[0:l] == "judge" {
@@ -634,7 +662,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							default:
 								s.notAllowed(w, r, notAllowedParams{
 									allowedMethods: "POST",
-									allowedHeaders: rn22AllowedHeaders,
+									allowedHeaders: rn23AllowedHeaders,
 									acceptPost:     "application/json",
 									acceptPatch:    "",
 								})
@@ -662,7 +690,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							default:
 								s.notAllowed(w, r, notAllowedParams{
 									allowedMethods: "PATCH",
-									allowedHeaders: rn42AllowedHeaders,
+									allowedHeaders: rn43AllowedHeaders,
 									acceptPost:     "",
 									acceptPatch:    "application/json",
 								})
@@ -695,7 +723,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							default:
 								s.notAllowed(w, r, notAllowedParams{
 									allowedMethods: "GET,PUT",
-									allowedHeaders: rn14AllowedHeaders,
+									allowedHeaders: rn15AllowedHeaders,
 									acceptPost:     "",
 									acceptPatch:    "",
 								})
@@ -1650,6 +1678,31 @@ func (s *Server) FindPath(method string, u *url.URL) (r Route, _ bool) {
 								r.operationID = "list-harness-hooks"
 								r.operationGroup = ""
 								r.pathPattern = "/api/projects/{projectId}/sandboxes/{sandboxId}/harness-hooks"
+								r.args = args
+								r.count = 2
+								return r, true
+							default:
+								return
+							}
+						}
+
+					case 'i': // Prefix: "inventory"
+
+						if l := len("inventory"); len(elem) >= l && elem[0:l] == "inventory" {
+							elem = elem[l:]
+						} else {
+							break
+						}
+
+						if len(elem) == 0 {
+							// Leaf node.
+							switch method {
+							case "GET":
+								r.name = GetSandboxAgentInventoryOperation
+								r.summary = "Get what the sandbox's list reads answer, for the control plane to keep."
+								r.operationID = "get-sandbox-agent-inventory"
+								r.operationGroup = ""
+								r.pathPattern = "/api/projects/{projectId}/sandboxes/{sandboxId}/inventory"
 								r.args = args
 								r.count = 2
 								return r, true

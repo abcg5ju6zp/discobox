@@ -459,6 +459,15 @@ flowchart LR
   poll loop, per ADR 0030 — with one exception, `ports`. Sandbox-agent never
   pushes status anywhere on its own initiative, consistent with the boundary
   rule above.
+- The inventory endpoint (`GET .../inventory`, `inventory:read` scope,
+  `server/inventory.go`) answers, in one document, what the exec, service and
+  tool lists and each terminal's visible screen answer right now, by calling
+  the handlers that serve them ([ADR 26-10-11-657](../docs/adr/26-10-11-657-a-stopped-discobox-is-read-from-what-it-last-posted.md) §1). The control plane keeps the last one and
+  answers those reads from it while the sandbox is not running. A part whose
+  route fails is absent, not empty. `digest` hashes the parts in a canonical
+  encoding and nothing else, and a caller that names it (`?known=`) is
+  answered `unchanged` with no parts. The scope is told by the whole route,
+  not a suffix, so it reads no exec or service named `inventory`.
 - `ports` is that exception, and the reason is specific to it
   ([ADR 0046](../docs/adr/0046-listening-ports-are-polled-and-probed-in-the-background.md)):
   what a listening port speaks can only be learned by connecting to a user's
@@ -915,7 +924,9 @@ development images without a registry.
   wait ended on, or the point it counted from, or just before the input was
   delivered. A caller waiting longer passes it back as `after`, so nothing
   between two calls is missed. The pool serves a screen or a wait only while
-  the sandbox runs (`requireRunning`); reading never starts it. A wait is also the one route that outlasts the shim server's own
+  the sandbox runs (`requireRunning`); reading never starts it. A screen read
+  of a sandbox that is not running is answered by the control plane from the
+  last inventory; a wait is refused. A wait is also the one route that outlasts the shim server's own
   write timeout, so it sets a deadline of its own: without it a wait that holds
   longer answers nothing and the caller reads the closed connection as an
   unexpected EOF.

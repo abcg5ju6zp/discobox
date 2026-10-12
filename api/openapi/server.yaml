@@ -578,6 +578,10 @@ components:
             additionalProperties: false
             description: A terminal's screen as a person looking at it would read it.
             properties:
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 rows:
                     format: int64
                     type: integer
@@ -1477,6 +1481,44 @@ components:
                 - attacherCount
                 - execStatus
             type: object
+        SandboxAgentInventory:
+            additionalProperties: false
+            description: What a sandbox's list reads answer, posted so that they can be answered while it is not running (ADR 26-10-11-657). A part the sandbox cannot answer is absent, not empty.
+            properties:
+                observedAt:
+                    description: When the sandbox agent took this inventory, on the sandbox's clock.
+                    format: date-time
+                    type: string
+                digest:
+                    description: Hash of execs, services, tools and screens, and of nothing else. Two inventories with one digest answer every read alike.
+                    type: string
+                unchanged:
+                    description: True when the digest is the one the caller named as known. The parts are then omitted.
+                    type: boolean
+                execs:
+                    description: What listing the sandbox's execs answers.
+                    items:
+                        $ref: '#/components/schemas/SandboxExec'
+                    type: array
+                services:
+                    description: What listing the sandbox's services answers.
+                    items:
+                        $ref: '#/components/schemas/SandboxService'
+                    type: array
+                tools:
+                    description: What listing the sandbox's tools answers.
+                    items:
+                        $ref: '#/components/schemas/SandboxTool'
+                    type: array
+                screens:
+                    additionalProperties:
+                        $ref: '#/components/schemas/SandboxExecScreen'
+                    description: The visible screen of every exec that has one, by exec ID, with no scrollback.
+                    type: object
+            required:
+                - observedAt
+                - digest
+            type: object
         SandboxAgentStatusResponse:
             additionalProperties: false
             properties:
@@ -1761,6 +1803,10 @@ components:
         SandboxExec:
             additionalProperties: false
             properties:
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 id:
                     description: Sandbox exec runtime ID.
                     type: string
@@ -1918,6 +1964,10 @@ components:
         SandboxExecsResponse:
             additionalProperties: false
             properties:
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 execs:
                     items:
                         $ref: '#/components/schemas/SandboxExec'
@@ -1929,6 +1979,10 @@ components:
             additionalProperties: false
             description: A service the sandbox's primary source declares under .discobox/services, together with the state of the exec running it.
             properties:
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 id:
                     description: Stable filename-derived service ID, with any numeric ordering prefix and known extension removed - 10-discobox-api.sh is discobox-api.
                     type: string
@@ -1994,6 +2048,10 @@ components:
         SandboxServicesResponse:
             additionalProperties: false
             properties:
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 services:
                     items:
                         $ref: '#/components/schemas/SandboxService'
@@ -2089,6 +2147,10 @@ components:
         SandboxToolsResponse:
             additionalProperties: false
             properties:
+                observedAt:
+                    description: Set only when this was answered from the discobox's last inventory rather than by the discobox, which was not running - when the discobox posted it (ADR 26-10-11-657). Absent from a live answer.
+                    format: date-time
+                    type: string
                 tools:
                     items:
                         $ref: '#/components/schemas/SandboxTool'
@@ -6087,6 +6149,48 @@ components:
                 - sandboxId
                 - state
             type: object
+        SandboxInventoryEntry:
+            additionalProperties: false
+            properties:
+                sandboxId:
+                    type: string
+                digest:
+                    description: Digest of the sandbox's inventory at observedAt.
+                    type: string
+                observedAt:
+                    format: date-time
+                    type: string
+                inventory:
+                    additionalProperties: true
+                    description: Opaque sandbox-agent inventory (see SandboxAgentInventory), relayed unmodified by pool-agent. Omitted when the pool agent has already delivered the inventory with this digest.
+                    type: object
+            required:
+                - sandboxId
+                - digest
+                - observedAt
+            type: object
+        ReportSandboxInventoriesBody:
+            additionalProperties: false
+            properties:
+                sandboxes:
+                    description: One entry for each sandbox whose inventory this pool agent read this tick.
+                    items:
+                        $ref: '#/components/schemas/SandboxInventoryEntry'
+                    type: array
+            required:
+                - sandboxes
+            type: object
+        ReportSandboxInventoriesResponseBody:
+            additionalProperties: false
+            properties:
+                wanted:
+                    description: Sandboxes reported by digest alone whose inventory the control plane does not hold under that digest. The pool agent sends each in full on its next report.
+                    items:
+                        type: string
+                    type: array
+            required:
+                - wanted
+            type: object
         SandboxAgentStatusEntry:
             additionalProperties: false
             properties:
@@ -7034,6 +7138,45 @@ paths:
                                 $ref: '#/components/schemas/ErrorModel'
                     description: Error
             summary: Report what this pool and each sandbox on it are consuming
+            tags:
+                - Pools
+    /api/pools/{poolId}/sandbox-inventories:
+        post:
+            operationId: report-sandbox-inventories
+            parameters:
+                - description: Pool ID
+                  in: path
+                  name: poolId
+                  required: true
+                  schema:
+                    description: Pool ID
+                    type: string
+                - description: Bearer pool agent assertion signed with the registered pool agent private key
+                  in: header
+                  name: Authorization
+                  schema:
+                    description: Bearer pool agent assertion signed with the registered pool agent private key
+                    type: string
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/ReportSandboxInventoriesBody'
+                required: true
+            responses:
+                200:
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ReportSandboxInventoriesResponseBody'
+                    description: Inventories recorded (entries for sandboxes this pool does not host are silently skipped)
+                default:
+                    content:
+                        application/problem+json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorModel'
+                    description: Error
+            summary: Report the inventory of one or more hosted sandboxes, in full when it changed and by digest when it did not
             tags:
                 - Pools
     /api/pools/{poolId}/sandbox-agent-status:
@@ -9480,6 +9623,45 @@ paths:
             tags:
                 - Sandbox Status
             x-sandbox-agent: true
+    /api/projects/{projectId}/sandboxes/{sandboxId}/inventory:
+        get:
+            description: What the sandbox's exec, service and tool lists and its terminals' screens answer right now, in one document, so the control plane can answer those reads while the sandbox is not running (ADR 26-10-11-657). Only a token carrying the inventory scope may read it.
+            operationId: get-sandbox-agent-inventory
+            parameters:
+                - description: Project that owns the sandbox.
+                  in: path
+                  name: projectId
+                  required: true
+                  schema:
+                    type: string
+                - description: Sandbox resource ID.
+                  in: path
+                  name: sandboxId
+                  required: true
+                  schema:
+                    type: string
+                - description: Digest of the inventory the caller already holds. When the inventory still has it, the answer is marked unchanged and carries no parts.
+                  in: query
+                  name: known
+                  schema:
+                    type: string
+            responses:
+                200:
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/SandboxAgentInventory'
+                    description: The sandbox's inventory.
+                default:
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                    description: Error response.
+            summary: Get what the sandbox's list reads answer, for the control plane to keep.
+            tags:
+                - Sandbox Status
+            x-sandbox-agent: true
     /api/projects/{projectId}/sandboxes/{sandboxId}/runtime-config:
         get:
             description: Returns the runtime-config document the sandbox last applied - what the pool has told it it is (ADR 0126 §3). Only a token carrying the pool-only runtime-config scope may read it.
@@ -10167,7 +10349,7 @@ paths:
             x-sandbox-agent: true
     /api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/screen:
         get:
-            description: The terminal's screen as text, rendered from the terminal emulator its shim keeps, with recent scrollback on request. Reading it does not attach, resize the terminal, or count as activity. 409 for an exec with no terminal.
+            description: The terminal's screen as text, rendered from the terminal emulator its shim keeps, with recent scrollback on request. Reading it does not attach, resize the terminal, or count as activity. 409 for an exec with no terminal. A discobox that is not running is answered from the screen it last posted, which has no scrollback.
             operationId: get-sandbox-exec-screen
             parameters:
                 - description: Project that owns the sandbox.

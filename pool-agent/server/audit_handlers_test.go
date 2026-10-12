@@ -290,14 +290,22 @@ func TestPoolHTTPAuditArtifactAuthorization(t *testing.T) {
 }
 
 // A discobox's own audit data is read only while it runs, and so is its
-// terminal's screen or a wait on it (ADR 0137 §2). Reading must not start a
-// stopped one — that would undo the stop being read about.
+// terminal's screen or a wait on it (ADR 0137 §2), and so are the lists the
+// control plane answers from its last inventory while it is down
+// (ADR 26-10-11-657 §4). Reading must not start a stopped one — that would
+// undo the stop being read about — and the refusal names the state in the
+// header the control plane tells it by.
 func TestSandboxReadsNeverStartAStoppedSandbox(t *testing.T) {
 	for _, tc := range []struct{ method, route string }{
 		{http.MethodGet, "/harness-hooks"},
 		{http.MethodGet, "/exec-events"},
 		{http.MethodGet, "/execs/exec-1/screen"},
 		{http.MethodPost, "/execs/exec-1/wait"},
+		{http.MethodGet, "/execs"},
+		{http.MethodGet, "/execs/exec-1"},
+		{http.MethodGet, "/services"},
+		{http.MethodGet, "/services/web"},
+		{http.MethodGet, "/tools"},
 	} {
 		route := tc.route
 		t.Run(route, func(t *testing.T) {
@@ -343,6 +351,9 @@ func TestSandboxReadsNeverStartAStoppedSandbox(t *testing.T) {
 			resp := call()
 			if resp.Code != http.StatusConflict || !strings.Contains(resp.Body.String(), "stopped") {
 				t.Fatalf("stopped sandbox: status = %d body = %q, want 409 saying it is stopped", resp.Code, resp.Body.String())
+			}
+			if got := resp.Header().Get(workerapimodel.SandboxNotRunningHeader); got != "stopped" {
+				t.Fatalf("stopped sandbox: %s = %q, want the state it was found in", workerapimodel.SandboxNotRunningHeader, got)
 			}
 			sb, err := runtime.GetSandbox(ctx, "sandbox-1")
 			if err != nil || sb.Status != sandboxruntime.StatusStopped {

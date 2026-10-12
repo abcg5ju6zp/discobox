@@ -129,10 +129,12 @@ type SandboxStateClient interface {
 }
 
 // SandboxAgentStatusClient mints scoped sandbox-agent tokens and pushes
-// polled sandbox-agent status batches to the control plane (ADR 0030).
+// polled sandbox-agent status batches (ADR 0030) and inventories
+// (ADR 26-10-11-657) to the control plane.
 type SandboxAgentStatusClient interface {
 	MintSandboxAgentStatusTokens(ctx context.Context, req MintSandboxAgentStatusTokensRequest) (*MintSandboxAgentStatusTokensResponse, error)
 	ReportSandboxAgentStatus(ctx context.Context, req SandboxAgentStatusReportRequest) error
+	ReportSandboxInventories(ctx context.Context, req SandboxInventoryReportRequest) (*SandboxInventoryReportResponse, error)
 }
 
 // RegisterRequest is sent by the pool after generating its keypair.
@@ -264,10 +266,10 @@ type HeldSandboxesRequest struct {
 	PrivateKey      ed25519.PrivateKey
 }
 
-// MintSandboxAgentStatusTokensRequest asks the control plane for short-lived,
-// status:read-only sandbox-agent tokens for the sandboxes this pool hosts.
-// It carries no scope: the control plane always mints status:read only,
-// regardless of what is requested.
+// MintSandboxAgentStatusTokensRequest asks the control plane for short-lived
+// sandbox-agent tokens for the sandboxes this pool hosts, good for reading
+// their status and their inventory and nothing else. It carries no scope: the
+// control plane always mints those two, regardless of what is requested.
 type MintSandboxAgentStatusTokensRequest struct {
 	ControlPlaneURL string             `json:"-"`
 	ProjectID       string             `json:"-"`
@@ -276,8 +278,7 @@ type MintSandboxAgentStatusTokensRequest struct {
 	SandboxIDs      []string           `json:"sandboxIds"`
 }
 
-// SandboxAgentStatusToken is one minted, status:read-only sandbox-agent
-// token.
+// SandboxAgentStatusToken is one minted sandbox-agent token for the poll.
 type SandboxAgentStatusToken struct {
 	SandboxID string    `json:"sandboxId"`
 	Token     string    `json:"token"`
@@ -319,6 +320,33 @@ type SandboxAgentStatusReportRequest struct {
 	PoolID          string                    `json:"-"`
 	PrivateKey      ed25519.PrivateKey        `json:"-"`
 	Sandboxes       []SandboxAgentStatusEntry `json:"sandboxes"`
+}
+
+// SandboxInventoryEntry is one sandbox's inventory as this tick read it
+// (ADR 26-10-11-657 §2). Inventory is the sandbox agent's answer, relayed as
+// received like a status, and is omitted when the control plane was already
+// given the inventory with this digest: the entry then only says the
+// inventory still stood at ObservedAt.
+type SandboxInventoryEntry struct {
+	SandboxID  string          `json:"sandboxId"`
+	Digest     string          `json:"digest"`
+	ObservedAt time.Time       `json:"observedAt"`
+	Inventory  json.RawMessage `json:"inventory,omitempty"`
+}
+
+// SandboxInventoryReportRequest pushes the inventories this tick read.
+type SandboxInventoryReportRequest struct {
+	ControlPlaneURL string                  `json:"-"`
+	ProjectID       string                  `json:"-"`
+	PoolID          string                  `json:"-"`
+	PrivateKey      ed25519.PrivateKey      `json:"-"`
+	Sandboxes       []SandboxInventoryEntry `json:"sandboxes"`
+}
+
+// SandboxInventoryReportResponse names the sandboxes reported by digest alone
+// whose inventory the control plane does not hold under that digest.
+type SandboxInventoryReportResponse struct {
+	Wanted []string `json:"wanted"`
 }
 
 // RegisterResponse is returned by the control plane after pool registration.

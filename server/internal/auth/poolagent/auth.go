@@ -48,11 +48,14 @@ const (
 	// ScopeJudgeRun puts a job to a pool's judge (ADR 26-09-22-838 §2). It is the
 	// control plane's copy of the pool agent's scope of the same name.
 	ScopeJudgeRun = "judge:run"
-	// ScopeStatusRead authorizes only the sandbox-agent status endpoint. It is
-	// the sole scope MintSandboxAgentStatusTokens ever mints, hardcoded there
-	// rather than accepted from the caller, so a pool agent can never obtain a
-	// sandbox-agent token broader than read-only status through that path.
-	ScopeStatusRead = "status:read"
+	// ScopeStatusRead authorizes only the sandbox-agent status endpoint, and
+	// ScopeInventoryRead only its inventory endpoint (ADR 26-10-11-657 §1).
+	// They are the two scopes MintSandboxAgentStatusTokens mints, hardcoded
+	// there rather than accepted from the caller, so a pool agent can never
+	// obtain a sandbox-agent token broader than those two reads through that
+	// path.
+	ScopeStatusRead    = "status:read"
+	ScopeInventoryRead = "inventory:read"
 
 	TokenTTL  = 15 * time.Minute
 	ClockSkew = 5 * time.Minute

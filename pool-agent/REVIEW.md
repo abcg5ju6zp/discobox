@@ -117,6 +117,14 @@ status and goes out as a 500. Do not let a caller's only signal be the detail
 string: it is prose, it is written for people, and nothing stops it being
 reworded.
 
+The sandbox-directed routes have no problem document to carry a `type`: they
+are proxied onward and refuse in plain text, which git and the CLI relay to a
+person as it stands. Their condition travels in a header instead.
+`requireRunning`'s 409 sets `model.SandboxNotRunningHeader` to the state it
+found, and the control plane answers the reads it holds an inventory for from
+that inventory when it sees it (ADR 26-10-11-657 §4). Do not let it match the
+text there either.
+
 ## Running is not ready
 
 Docker reports a container `running` the moment it starts; the sandbox agent in
@@ -127,7 +135,8 @@ container marks the sandbox booting until then (`beginBoot`, before
 `StatusRunning` as reachable while `SandboxBooting` says otherwise: a request
 arriving mid-start reaches an agent that is not listening, and the caller gets
 a bare 502. `EnsureSandboxRunning` waits the boot out; `requireRunning` refuses
-with 409. A new path that starts a container brackets it with `beginBoot` and
+with 409, or for the lists (`waitOutBoot`) waits it out through
+`AwaitSandboxBoot`, which starts nothing, and then looks again. A new path that starts a container brackets it with `beginBoot` and
 `finishBoot` too. The boot's wait for the agent runs detached from the request
 that began it, so a caller going away cannot end the mark early; do not put it
 back on the caller's context.

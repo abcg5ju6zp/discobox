@@ -244,6 +244,41 @@ because attach streams carry input, resize, and signal frames. The TCP tunnel pr
 requests only `tcp:connect`, the scope ADR 0024 §3 defines for it, and the UDP
 tunnel proxy only `udp:connect` (ADR 0109).
 
+### Reads of a Sandbox That Is Not Running
+
+Six exec-proxy reads never start a sandbox: listing execs, services or tools,
+reading one exec or service, and a terminal's screen
+([ADR 26-10-11-657](../docs/adr/26-10-11-657-a-stopped-discobox-is-read-from-what-it-last-posted.md)).
+The pool agent refuses them for a sandbox that is not running, marking the
+409 with `X-Discobox-Sandbox-Not-Running`, and the proxy
+(`sandbox_agent_terminals_proxy.go`) answers that refusal from the inventory
+the sandbox last posted (`SandboxService.ReadSandboxInventory`): the part as
+posted, plus `observedAt`. A live answer has no `observedAt`. A sandbox that
+has posted nothing is a 409.
+
+```mermaid
+sequenceDiagram
+    participant C as client
+    participant S as server proxy
+    participant P as pool agent
+    participant A as sandbox agent
+    C->>S: GET .../execs
+    S->>P: proxied (AcquireRunningSandboxHTTPClient)
+    alt sandbox running
+        P->>A: forwarded
+        A-->>C: live answer
+    else not running
+        P-->>S: 409 + X-Discobox-Sandbox-Not-Running
+        S-->>C: last inventory's answer + observedAt
+    end
+```
+
+The pool agent decides, not the row: `runtimeState` lags an action that has
+just started the sandbox. The row is consulted only when the pool is not
+reachable, where a sandbox recorded as stopped is still read from its
+inventory. Every other route is proxied as before, and is what starts a
+stopped sandbox.
+
 Authorization must be decidable from request attributes available before body
 interpretation: authenticated principal, method, route/path parameters, query
 parameters, headers, and resource ownership loaded by those attributes. Do not

@@ -57,6 +57,10 @@ Pass "primary" for the discobox's harness terminal.`,
 			if a.output == "json" {
 				return writeTerminalSafeJSON(cmd.OutOrStdout(), screen)
 			}
+			// A discobox that is not running is read from the screen it last
+			// posted (ADR 26-10-11-657 §4). Said on stderr, so the screen on
+			// stdout is still only the screen.
+			noteStoredAnswer(cmd, screen.ObservedAt.Or(time.Time{}))
 			_, err = fmt.Fprint(cmd.OutOrStdout(), screenText(screen))
 			return err
 		},

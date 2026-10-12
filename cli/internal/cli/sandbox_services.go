@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -52,11 +53,11 @@ func (a *App) newSandboxServiceListCommand(sandboxID *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			services, err := listSandboxServices(cmd.Context(), client, projectID, resolvedSandboxID)
+			services, observedAt, err := listSandboxServices(cmd.Context(), client, projectID, resolvedSandboxID)
 			if err != nil {
 				return err
 			}
-			return a.writeSandboxServices(cmd, services)
+			return a.writeSandboxServices(cmd, services, observedAt)
 		},
 	}
 	a.addQuietFlag(cmd)
@@ -85,7 +86,7 @@ func (a *App) newSandboxServiceLifecycleCommand(sandboxID *string, verb, short s
 				}
 				changed = append(changed, *service)
 			}
-			return a.writeSandboxServices(cmd, changed)
+			return a.writeSandboxServices(cmd, changed, time.Time{})
 		},
 	}
 	return cmd
@@ -134,19 +135,23 @@ func (a *App) sandboxServiceRequest(ctx context.Context, sandboxArg string) (str
 	return a.sandboxRequest(ctx, sandboxArg)
 }
 
-func listSandboxServices(ctx context.Context, client *apiclientgen.Client, projectID, sandboxID string) ([]apimodel.SandboxService, error) {
+// listSandboxServices lists a discobox's declared services. Like the exec
+// listing it does not start a discobox that is not running: observedAt is
+// then when the discobox last posted what is returned, and zero for a live
+// answer (ADR 26-10-11-657 §4).
+func listSandboxServices(ctx context.Context, client *apiclientgen.Client, projectID, sandboxID string) ([]apimodel.SandboxService, time.Time, error) {
 	res, err := client.ListSandboxServices(ctx, apiclientgen.ListSandboxServicesParams{
 		ProjectId: projectID,
 		SandboxId: sandboxID,
 	})
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	body, err := expectResponse[apimodel.SandboxServicesResponse](res)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	return body.GetServices(), nil
+	return body.GetServices(), body.ObservedAt.Or(time.Time{}), nil
 }
 
 func actOnSandboxService(ctx context.Context, client *apiclientgen.Client, verb, projectID, sandboxID, serviceID string) (*apimodel.SandboxService, error) {
@@ -180,13 +185,14 @@ func actOnSandboxService(ctx context.Context, client *apiclientgen.Client, verb,
 	}
 }
 
-func (a *App) writeSandboxServices(cmd *cobra.Command, services []apimodel.SandboxService) error {
+func (a *App) writeSandboxServices(cmd *cobra.Command, services []apimodel.SandboxService, observedAt time.Time) error {
 	if a.quiet {
 		return writeResourceIDs(cmd.OutOrStdout(), services, func(service apimodel.SandboxService) string { return service.ID })
 	}
 	if a.output == "json" {
-		return writeJSON(cmd.OutOrStdout(), map[string]any{"services": services})
+		return writeJSON(cmd.OutOrStdout(), storedAnswerJSON("services", services, observedAt))
 	}
+	defer noteStoredAnswer(cmd, observedAt)
 	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSTATUS\tPID\tEXIT\tPORTS\tNAME\tDESCRIPTION")
 	for _, service := range services {
@@ -239,7 +245,7 @@ func sandboxServiceDetail(service apimodel.SandboxService) string {
 }
 
 func (a *App) listServiceCompletions(ctx context.Context, client *apiclientgen.Client, projectID, sandboxID string) ([]string, error) {
-	services, err := listSandboxServices(ctx, client, projectID, sandboxID)
+	services, _, err := listSandboxServices(ctx, client, projectID, sandboxID)
 	if err != nil {
 		return nil, err
 	}

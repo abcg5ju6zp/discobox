@@ -181,6 +181,10 @@ type GetSSHIngressRes interface {
 	getSSHIngressRes()
 }
 
+type GetSandboxAgentInventoryRes interface {
+	getSandboxAgentInventoryRes()
+}
+
 type GetSandboxAgentStatusRes interface {
 	getSandboxAgentStatusRes()
 }
@@ -439,6 +443,10 @@ type ReportPoolSandboxStatesRes interface {
 
 type ReportSandboxAgentStatusRes interface {
 	reportSandboxAgentStatusRes()
+}
+
+type ReportSandboxInventoriesRes interface {
+	reportSandboxInventoriesRes()
 }
 
 type ReportSandboxSecretRejectionRes interface {

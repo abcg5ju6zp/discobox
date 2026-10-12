@@ -596,6 +596,9 @@ func (s *Store) DeleteSandbox(ctx context.Context, projectID, sandboxID string, 
 		if err := deleteSandboxHostTrustsTx(tx, sandbox.ID); err != nil {
 			return err
 		}
+		if err := tx.Where("sandbox_id = ?", sandbox.ID).Delete(&model.SandboxInventory{}).Error; err != nil {
+			return err
+		}
 		return tx.Delete(sandbox).Error
 	})
 }
