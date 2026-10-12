@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -89,8 +90,14 @@ type dialog struct {
 	answerLabel string
 	cursor      int
 	offset      int
-	input       textinput.Model
-	err         bool
+	// itemOffset is the first menu row drawn, on a card whose menu is longer
+	// than the window gives it. It follows the cursor; see viewItems.
+	itemOffset int
+	// page is how many rows of body the last draw had room for, which is what
+	// PgUp and PgDn move by.
+	page  int
+	input textinput.Model
+	err   bool
 
 	// emphasis is the one line a question turns on — the size of a directory
 	// being measured behind it — drawn under the body in the window's accent
@@ -360,6 +367,19 @@ func (d *dialog) update(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		return d.cancel(), true
 	}
+	// The page keys move a body longer than its window on every kind of card.
+	// They are the only keys that do on a card with answers, whose arrows walk
+	// the answers instead, so they are taken before the card's own.
+	if d.overflow {
+		switch keyName(msg) {
+		case "pgup":
+			d.scroll(-max(d.page-1, 1))
+			return nil, false
+		case "pgdown":
+			d.scroll(max(d.page-1, 1))
+			return nil, false
+		}
+	}
 
 	switch d.kind {
 	case dlgStatus:
@@ -571,6 +591,15 @@ func (d *dialog) scroll(delta int) {
 	d.offset = max(d.offset+delta, 0)
 }
 
+// scrollKeys is what moves the body: the arrows on a card that is only read,
+// and the page keys on one whose arrows already move between its answers.
+func (d *dialog) scrollKeys() string {
+	if d.kind == dlgText || d.kind == dlgMessage {
+		return "↑/↓"
+	}
+	return "PgUp/PgDn"
+}
+
 // find is which of the wrapped body lines hold the search text, matched against
 // the text alone: the harness card carries color, and a query should not have
 // to be typed around the escapes in it.
@@ -654,13 +683,12 @@ func (d *dialog) view(st *styles, z *zones, width, height int) string {
 	b.WriteString(title)
 	b.WriteString("\n\n")
 
-	// What the body may take: the box's allowance, less its chrome, the title
-	// and the blank under it, and the three rows the scroll hint and footer
-	// need under it.
-	maxBody := max(dialogHeight(height)-dialogChromeHeight-2-3, 3)
-	scrolling := d.kind == dlgText || d.kind == dlgMessage
-	// A scrolling body keeps a column for the chevron, the way every list
-	// in this window points at the row you are on. It is there whether or
+	// What the card's contents may take: the box's allowance, less its chrome
+	// and the title and the blank under it.
+	avail := dialogHeight(height) - dialogChromeHeight - 2
+	searching := d.kind == dlgText || d.kind == dlgMessage
+	// A body that is searched keeps a column for the chevron, the way every
+	// list in this window points at the row you are on. It is there whether or
 	// not a search is open, so opening one shifts nothing: a body that
 	// re-wrapped under the search line would move the very text the search
 	// had just found.
@@ -668,19 +696,95 @@ func (d *dialog) view(st *styles, z *zones, width, height int) string {
 	// Not on a box too narrow to have an inside — below the floor on inner,
 	// lipgloss is already re-wrapping the body to the width it really has,
 	// and an indent survives that wrap and takes the row past the window.
-	chevron := scrolling && boxWidth-dialogChromeWidth >= inner
+	chevron := searching && boxWidth-dialogChromeWidth >= inner
 	room := inner
 	if chevron {
 		room -= lipgloss.Width(dialogMarkOff)
 	}
-	if lines := d.bodyLines(st, room); len(lines) > 0 {
-		if scrolling {
-			b.WriteString(d.viewBody(st, lines, inner, maxBody, chevron))
-		} else {
-			b.WriteString(strings.Join(lines, "\n"))
-		}
-		b.WriteString("\n")
+	lines := d.bodyLines(st, room)
+
+	// Everything under the body is what answers the card, so it is measured
+	// first and the body takes what the window has left: a body drawn whole
+	// pushes the answers off the bottom of a window shorter than the card,
+	// and a question that cannot be seen is answered blind. The measuring
+	// draw marks nothing and moves nothing — the hit map is made by the draw
+	// that is kept.
+	itemRoom := len(d.items)
+	measure := func() int {
+		return rowsOf(d.viewFoot(st, &zones{hoverX: -1, hoverY: -1}, 0, inner, avail, itemRoom, len(lines) > 0), inner)
 	}
+	foot := measure()
+	if len(lines)+foot > avail {
+		// A menu as long as its window shares it with the body. It takes what
+		// the body does not need, and half of what is not spoken for when the
+		// body is long too, so neither a card of twenty secrets nor one of ten
+		// uses takes the whole of it from the other.
+		flex := avail - (foot - len(d.items))
+		itemRoom = min(len(d.items), max(flex-len(lines), flex/2, dialogMinRows))
+	}
+	// Where the menu's window starts is settled before the menu is measured
+	// at its room: a window left where a shorter card had it would be measured
+	// with fewer rows than the draw then puts on screen.
+	d.itemOffset = d.itemWindow(itemRoom)
+	if itemRoom < len(d.items) {
+		foot = measure()
+	}
+	// The row the scroll hint takes comes out of the body's, and only when
+	// there is one.
+	maxBody := len(lines)
+	if len(lines)+foot > avail {
+		maxBody = max(avail-foot-1, dialogMinRows)
+	}
+	d.page = maxBody
+
+	if len(lines) > 0 {
+		b.WriteString(d.viewBody(st, lines, inner, maxBody, chevron))
+		b.WriteString("\n")
+	} else {
+		d.overflow = false
+	}
+	b.WriteString(d.viewFoot(st, z, strings.Count(b.String(), "\n"), inner, avail, itemRoom, len(lines) > 0))
+	return st.dialog.Width(boxWidth).Render(b.String())
+}
+
+// dialogMinRows is the least a scrolling part of a card is cut to. A window
+// too short for that and the answers is one the card runs off after all,
+// rather than one whose question shows a single line of itself.
+const dialogMinRows = 3
+
+// rowsOf is how many rows of the card a block that follows a finished line
+// occupies. It is measured the way the box draws it rather than by counting
+// lines: a key line wider than a narrow card wraps, and a row the budget did
+// not count is the row that falls off the bottom.
+func rowsOf(block string, inner int) int {
+	block = strings.TrimSuffix(block, "\n")
+	if block == "" {
+		return 0
+	}
+	return lipgloss.Height(lipgloss.NewStyle().Width(inner).Render(block))
+}
+
+// itemWindow is the first menu row to draw when the menu has room rows: where
+// it was, moved only as far as keeps the cursor inside it. A menu that fits
+// starts at its first row.
+func (d *dialog) itemWindow(room int) int {
+	if room >= len(d.items) {
+		return 0
+	}
+	rows := max(room-1, 1)
+	return min(max(d.itemOffset, d.cursor-rows+1, 0), max(d.cursor, 0), len(d.items)-rows)
+}
+
+// viewFoot draws what is under the body: the line a question turns on, the
+// question, whatever answers it, the caveat and the key line. top is the row
+// of the card's content it starts on, which is what places its marks; itemRoom
+// is how many rows a menu may take, and avail the card's whole allowance, which
+// is what a picker that windows itself is sized from; and body says whether a body was drawn
+// above, which is what the blank row over the question is measured against.
+func (d *dialog) viewFoot(st *styles, z *zones, top, inner, avail, itemRoom int, body bool) string {
+	var b strings.Builder
+	// row is where the next thing written lands, as a cell of the frame.
+	row := func() int { return top + strings.Count(b.String(), "\n") + dialogPadTop }
 
 	if d.emphasis != "" {
 		b.WriteString("\n")
@@ -692,7 +796,11 @@ func (d *dialog) view(st *styles, z *zones, width, height int) string {
 	// above it is the one the title already left when there is no body between
 	// them, rather than a second one under it.
 	answer := func() {
-		if !strings.HasSuffix(b.String(), "\n\n") {
+		blank := !body
+		if b.Len() > 0 {
+			blank = strings.HasSuffix(b.String(), "\n\n")
+		}
+		if !blank {
 			b.WriteString("\n")
 		}
 		if d.answerLabel != "" {
@@ -725,7 +833,7 @@ func (d *dialog) view(st *styles, z *zones, width, height int) string {
 			return
 		}
 		b.WriteString("\n")
-		z.push(dialogPadLeft, strings.Count(b.String(), "\n")+dialogPadTop)
+		z.push(dialogPadLeft, row())
 		b.WriteString(viewHints(st, z, line, 0, hintSep))
 		z.pop()
 	}
@@ -747,7 +855,7 @@ func (d *dialog) view(st *styles, z *zones, width, height int) string {
 			yes += " (Enter)"
 		}
 		// The two answers, each a button for its own letter.
-		answerRow := strings.Count(b.String(), "\n") + dialogPadTop
+		answerRow := row()
 		z.mark(keyHit("y"), dialogPadLeft, answerRow, lipgloss.Width("y "+yes), 1)
 		z.mark(keyHit("n"), dialogPadLeft+lipgloss.Width("y "+yes)+3, answerRow, lipgloss.Width("n "+no), 1)
 		b.WriteString(st.key.Render("y"))
@@ -770,7 +878,7 @@ func (d *dialog) view(st *styles, z *zones, width, height int) string {
 		keys(pressing("Esc stops watching", "esc"))
 	case dlgMessage, dlgText:
 		b.WriteString("\n")
-		z.push(dialogPadLeft, strings.Count(b.String(), "\n")+dialogPadTop)
+		z.push(dialogPadLeft, row())
 		b.WriteString(truncate(d.viewSearch(st, z, inner), inner))
 		z.pop()
 	case dlgActions:
@@ -778,13 +886,12 @@ func (d *dialog) view(st *styles, z *zones, width, height int) string {
 		// Every row of a menu is a press, marked where the card put it: a menu
 		// whose rows only answer their letters is a menu the pointer cannot
 		// work.
-		itemsTop := strings.Count(b.String(), "\n") + dialogPadTop
-		b.WriteString(d.viewItems(st, z, itemsTop, inner))
+		b.WriteString(d.viewItems(st, z, row(), inner, itemRoom))
 		footer()
 		keys(pressing("Enter runs the highlighted action", "enter"), pressing("Esc cancels", "esc"))
 	case dlgForm:
 		answer()
-		b.WriteString(d.form.view(st, z, strings.Count(b.String(), "\n")+dialogPadTop, inner))
+		b.WriteString(d.form.view(st, z, row(), inner))
 		// The hint keeps its rows whether or not it has anything to say, so
 		// moving down the form does not resize the card under the cursor.
 		b.WriteString("\n")
@@ -798,7 +905,10 @@ func (d *dialog) view(st *styles, z *zones, width, height int) string {
 		drawHints(formHints(d.form, line))
 
 	case dlgFilter:
-		b.WriteString(d.filter.view(st, z, strings.Count(b.String(), "\n")+dialogPadTop, inner, maxBody))
+		// The picker is the card, and windows its own rows: what it may take
+		// is the allowance less the rows its key line needs under it.
+		listRoom := max(avail-3, dialogMinRows)
+		b.WriteString(d.filter.view(st, z, row(), inner, listRoom))
 		keys(says("↑↓ moves"), pressing("Space marks", " "), pressing("Enter picks it and shows", "enter"), pressing("Esc cancels", "esc"))
 
 	case dlgInput:
@@ -807,14 +917,13 @@ func (d *dialog) view(st *styles, z *zones, width, height int) string {
 		// pointer is, rather than only bringing the card into focus it
 		// already has.
 		field := d.input.View()
-		z.mark(hit{kind: hitInput, idx: -1}, dialogPadLeft, strings.Count(b.String(), "\n")+dialogPadTop, lipgloss.Width(field), 1)
+		z.mark(hit{kind: hitInput, idx: -1}, dialogPadLeft, row(), lipgloss.Width(field), 1)
 		b.WriteString(field)
 		b.WriteString("\n")
 		footer()
 		keys(pressing("Enter accepts", "enter"), pressing("Esc cancels", "esc"))
 	}
-
-	return st.dialog.Width(boxWidth).Render(b.String())
+	return b.String()
 }
 
 // bodyLines is everything between the title and the answer, wrapped to the
@@ -948,7 +1057,7 @@ func answerRule(st *styles, label string, room int) string {
 // The key column is as wide as the widest key and no wider, and a menu whose
 // rows have no keys — one choosing between secrets, or grants, or discoboxes —
 // has no column at all rather than a ragged one full of IDs.
-func (d *dialog) viewItems(st *styles, z *zones, top, inner int) string {
+func (d *dialog) viewItems(st *styles, z *zones, top, inner, room int) string {
 	pressW := 0
 	for _, it := range d.items {
 		pressW = max(pressW, lipgloss.Width(it.press))
@@ -966,18 +1075,33 @@ func (d *dialog) viewItems(st *styles, z *zones, top, inner int) string {
 	}
 	labelW = min(labelW, max(inner-keyCol-24, 14))
 
+	// A menu longer than its room shows the rows around the cursor, and gives
+	// its last row to saying there are more: the cursor is what Enter runs, so
+	// it is the one row that has to be on screen. Where the window starts is
+	// the draw's to say (view, itemWindow), not this pass's: the card is drawn
+	// once to be measured, and a window moved there would be moved twice.
+	first, last := 0, len(d.items)
+	if room < len(d.items) {
+		first = min(d.itemOffset, len(d.items)-1)
+		last = min(first+max(room-1, 1), len(d.items))
+	}
+
 	var b strings.Builder
 	for i, it := range d.items {
+		if i < first || i >= last {
+			continue
+		}
+		y := top + i - first
 		// The row is a press, and it says so under the pointer: a menu that
 		// only answered its letters is a menu the pointer cannot work, and one
 		// that answered the pointer silently is one nobody tries twice. The
 		// chevron stays the cursor's — what Enter runs — so the two never say
 		// the same thing.
-		z.markRow(hit{kind: hitDialogItem, idx: i}, top+i, inner+2*dialogPadLeft)
+		z.markRow(hit{kind: hitDialogItem, idx: i}, y, inner+2*dialogPadLeft)
 		bar, label := " ", st.dimText
 		if i == d.cursor && it.enabled {
 			bar, label = st.key.Render("❯"), st.cursorName
-		} else if it.enabled && z.hovering(0, top+i, inner+2*dialogPadLeft, 1) {
+		} else if it.enabled && z.hovering(0, y, inner+2*dialogPadLeft, 1) {
 			label = st.hover
 		}
 		key, detail := "", it.detail
@@ -1001,6 +1125,10 @@ func (d *dialog) viewItems(st *styles, z *zones, top, inner int) string {
 		row := bar + " " + key + label.Render(pad(it.label, labelW)) + "  " +
 			emphasized(st, truncate(detail, room), it.emphasis) + note
 		b.WriteString(padANSI(row, inner))
+		b.WriteString("\n")
+	}
+	if room < len(d.items) {
+		b.WriteString(st.dimText.Render(pad(truncate(fmt.Sprintf("  … %d–%d of %d · ↑/↓ for more", first+1, last, len(d.items)), inner), inner)))
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -1071,7 +1199,7 @@ func (d *dialog) viewBody(st *styles, lines []string, inner, maxBody int, chevro
 	d.overflow = len(lines) > maxBody
 	if d.overflow {
 		b.WriteString("\n")
-		b.WriteString(st.dimText.Render("  … ↑/↓ to scroll"))
+		b.WriteString(st.dimText.Render(truncate("  … "+d.scrollKeys()+" to scroll", inner)))
 	}
 	return b.String()
 }

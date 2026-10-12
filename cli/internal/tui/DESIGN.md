@@ -2019,10 +2019,29 @@ lipgloss wraps it again, and the extra row makes the frame taller than the
 terminal. A path the question is about is the dialog's `subject`, a row of its
 own above the body cut from the middle, so a long path cannot push the answers
 down — the body itself always wraps, because a question cut off mid-sentence
-cannot be answered. Only a scrolling card caps its body at the height
-allowance; a question's body is never cut, so on a terminal shorter than the
-card it is the answers and key line that fall off the bottom, and their keys
-still answer it.
+cannot be answered.
+
+**Every card fits the window, with its answers on it** (`dialog.view`,
+`viewFoot`). What is under the body — the question, what answers it, the caveat
+and the key line — is measured first, and the body takes the rows the allowance
+has left, scrolling when it has more. A body drawn whole pushed the answers off
+the bottom of any window shorter than the card, which a lead discobox's request
+for the discobox API is in an ordinary one: ten uses, and `Approve` and `Deny`
+below the last row, answerable only by someone who already knew their keys.
+This is one rule for every kind of card rather than a property of the two that
+are read, so a new kind of card cannot be the one that runs off the screen.
+The wheel over the body scrolls it on all of them; the keys are `↑↓` on a card that is
+only read and `PgUp`/`PgDn` on one with answers, whose arrows walk the answers
+— the hint under a cut body names whichever applies. A menu longer than its
+share of the window (`viewItems`: a request offered every secret of a large
+project) is windowed too, following its cursor and saying how many rows there
+are; it takes the rows the body does not need, and half of them when the body
+is long too. The rows under the body are counted as the box wraps them
+(`rowsOf`), so a key line wider than a narrow card costs the two rows it draws.
+The wheel over a menu or a form moves its cursor, as it does on every list in
+the window; over the body it scrolls. Two things are still not cut: a form's
+rows, and the floor of three rows a body or a menu is left with, so a window
+too short for the answers and that floor is one the card overruns after all.
 
 **A card of facts is a column, not a paragraph** (`section`, `field`, `line`,
 `answerLabel`). What a credential is, what a grant covers, what an agent is

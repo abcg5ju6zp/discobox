@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // A dialog takes most of a window with room to spare, and all of one without.
@@ -444,6 +445,222 @@ func TestTheCardsKeyLineIsFittedToNarrowWindows(t *testing.T) {
 			if !strings.Contains(got, "Esc closes") {
 				t.Fatalf("%s at %d columns: the way out is not on the row:\n%s", tc.name, window, got)
 			}
+		}
+	}
+}
+
+// longBody is more question than any window here has rows for.
+func longBody() string {
+	var lines []string
+	for i := range 80 {
+		lines = append(lines, "fact "+itoa(i))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// Every kind of card fits the window it is drawn in, with what answers it on
+// screen: a body longer than the window scrolls above the answers rather than
+// pushing them off the bottom, where they could only be answered blind
+// (issue #161).
+func TestEveryKindOfCardKeepsItsAnswersInTheWindow(t *testing.T) {
+	t.Parallel()
+	menu := actionsDialog("Title", longBody(), []action{
+		{key: "yes", press: "a", label: "Approve", enabled: true},
+		{key: "no", press: "d", label: "Deny", enabled: true},
+	}, nil)
+	status := statusDialog("Title", longBody())
+	form := formDialog("Title", newForm(textRow("field", "the field", "", "")), nil)
+	form.body = longBody()
+	for _, tc := range []struct {
+		name   string
+		dialog *dialog
+		want   string
+	}{
+		{"a menu", menu, "Deny"},
+		{"a question", confirmDialog("Title", longBody(), nil), "yes (Enter)"},
+		{"a field", inputDialog("Title", longBody(), "", "", nil), "Enter accepts"},
+		{"a form", form, "the field"},
+		{"a report", status, "Esc stops watching"},
+		{"a message", errorDialog("Title", longBody()), "Esc closes"},
+		{"a text", textDialog("Title", longBody()), "Esc closes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, window := range []int{24, 40, 60} {
+				text := ansi.Strip(tc.dialog.view(newStyles(false), &zones{}, 100, window))
+				if rows := strings.Count(text, "\n") + 1; rows > window {
+					t.Errorf("%d rows in a window of %d", rows, window)
+				}
+				if !strings.Contains(text, tc.want) {
+					t.Errorf("%q is not on the card in a window of %d:\n%s", tc.want, window, text)
+				}
+				if !strings.Contains(text, "to scroll") {
+					t.Errorf("a window of %d does not say the body scrolls:\n%s", window, text)
+				}
+			}
+		})
+	}
+}
+
+// The page keys walk a card's body to its end while its arrows go on choosing
+// between the answers, and a card that fits is not offered a scroll it has no
+// use for.
+func TestThePageKeysScrollTheBodyOfACardWithAnswers(t *testing.T) {
+	t.Parallel()
+	menu := func(body string) *dialog {
+		return actionsDialog("Title", body, []action{
+			{key: "yes", press: "a", label: "Approve", enabled: true},
+			{key: "no", press: "d", label: "Deny", enabled: true},
+		}, nil)
+	}
+	d := menu(longBody())
+	if text := draw(d); !strings.Contains(text, "fact 0\n") && !strings.Contains(text, "fact 0 ") {
+		t.Fatalf("the card does not open at the top of its body:\n%s", text)
+	}
+	if !strings.Contains(draw(d), "PgUp/PgDn to scroll") {
+		t.Fatalf("the card does not name the keys that scroll it:\n%s", draw(d))
+	}
+	for range 20 {
+		if _, closed := d.update(keyPress("pgdown")); closed {
+			t.Fatal("PgDn closed the card")
+		}
+		draw(d)
+	}
+	text := draw(d)
+	if !strings.Contains(text, "fact 79") {
+		t.Errorf("PgDn did not reach the end of the body:\n%s", text)
+	}
+	if !strings.Contains(text, "Approve") || !strings.Contains(text, "Deny") {
+		t.Errorf("the answers left the card as it scrolled:\n%s", text)
+	}
+	d.update(keyPress("down"))
+	if d.cursor != 1 {
+		t.Errorf("down moved the cursor to %d, want the second answer", d.cursor)
+	}
+	d.update(keyPress("pgup"))
+	if text := draw(d); strings.Contains(text, "fact 79") {
+		t.Errorf("PgUp did not scroll back:\n%s", text)
+	}
+
+	short := menu("one fact")
+	if text := draw(short); strings.Contains(text, "to scroll") {
+		t.Errorf("a card that fits offers a scroll:\n%s", text)
+	}
+}
+
+// A menu longer than the window shows the rows around its cursor and says
+// there are more, so the row Enter runs is always one that can be read — and
+// every row is still pressed where it is drawn.
+func TestAMenuLongerThanTheWindowFollowsItsCursor(t *testing.T) {
+	t.Parallel()
+	var items []action
+	for i := range 40 {
+		items = append(items, action{key: "item-" + itoa(i), label: "secret " + itoa(i), enabled: true})
+	}
+	d := actionsDialog("Title", longBody(), items, nil)
+	z := &zones{}
+	view := func() string {
+		z.reset()
+		return ansi.Strip(d.view(newStyles(false), z, 100, 24))
+	}
+	text := view()
+	if rows := strings.Count(text, "\n") + 1; rows > 24 {
+		t.Fatalf("%d rows in a window of 24:\n%s", rows, text)
+	}
+	if !strings.Contains(text, "❯ secret 0 ") || !strings.Contains(text, "of 40") {
+		t.Fatalf("the menu does not open on its first row and say how many there are:\n%s", text)
+	}
+	if !strings.Contains(text, "fact 0") {
+		t.Fatalf("the menu left the body no rows:\n%s", text)
+	}
+	for range 39 {
+		d.update(keyPress("down"))
+		if text := view(); !strings.Contains(text, "❯ secret "+itoa(d.cursor)+" ") {
+			t.Fatalf("the cursor is on row %d, which is not drawn:\n%s", d.cursor, text)
+		}
+	}
+	if d.cursor != 39 {
+		t.Fatalf("down stopped at row %d of 40", d.cursor)
+	}
+	// The window moves only when the cursor leaves it: going back up a row
+	// keeps the rows below it on screen rather than scrolling them away.
+	bottom := "secret 39 "
+	d.update(keyPress("up"))
+	if text := view(); !strings.Contains(text, "❯ secret 38 ") || !strings.Contains(text, bottom) {
+		t.Fatalf("one row up scrolled the menu away from its last row:\n%s", text)
+	}
+	d.update(keyPress("down"))
+	// The row marked for the pointer is the row the frame drew there.
+	lines := strings.Split(view(), "\n")
+	marks := 0
+	for _, mark := range z.marks {
+		if mark.what.kind != hitDialogItem {
+			continue
+		}
+		marks++
+		if want := "secret " + itoa(mark.what.idx) + " "; !strings.Contains(lines[mark.y], want) {
+			t.Errorf("row %d is marked as %q and draws %q", mark.y, want, lines[mark.y])
+		}
+	}
+	if marks == 0 {
+		t.Error("no menu row is marked")
+	}
+}
+
+// A long menu under a short question takes the rows the question does not
+// need: the half it is held to is only the body's when the body wants it.
+func TestALongMenuTakesTheRowsAShortBodyLeaves(t *testing.T) {
+	t.Parallel()
+	var items []action
+	for i := range 40 {
+		items = append(items, action{key: "item-" + itoa(i), label: "secret " + itoa(i), enabled: true})
+	}
+	for _, body := range []string{"", "which one?"} {
+		d := actionsDialog("Title", body, items, nil)
+		text := ansi.Strip(d.view(newStyles(false), &zones{}, 100, 30))
+		// A window of 30 allows the card 27 rows, and it uses them.
+		if rows := strings.Count(text, "\n") + 1; rows != dialogHeight(30) {
+			t.Errorf("body %q: the card is %d rows, want the %d it is allowed:\n%s", body, rows, dialogHeight(30), text)
+		}
+	}
+}
+
+// A card too narrow for its key line wraps it, and the wrapped row is counted:
+// the row a narrow window loses is otherwise the one that says how to answer.
+func TestANarrowCardStillFitsItsWindow(t *testing.T) {
+	t.Parallel()
+	menu := actionsDialog("Title", longBody(), []action{
+		{key: "yes", press: "a", label: "Approve", enabled: true},
+		{key: "no", press: "d", label: "Deny", enabled: true},
+	}, nil)
+	for _, d := range []*dialog{menu, inputDialog("Title", longBody(), "", "", nil), confirmDialog("Title", longBody(), nil)} {
+		for width := 24; width <= 60; width++ {
+			for _, window := range []int{16, 20, 24, 40} {
+				text := ansi.Strip(d.view(newStyles(false), &zones{}, width, window))
+				if rows := strings.Count(text, "\n") + 1; rows > window {
+					t.Fatalf("kind %d at %d columns: %d rows in a window of %d:\n%s", d.kind, width, rows, window, text)
+				}
+			}
+		}
+	}
+}
+
+// A window made taller under a menu scrolled to its end is drawn at its new
+// size at once: the menu's window is settled before the card is measured, so
+// the first frame after a resize is not budgeted from the last one's rows.
+func TestAWindowedMenuFitsTheFirstFrameAfterAResize(t *testing.T) {
+	t.Parallel()
+	var items []action
+	for i := range 40 {
+		items = append(items, action{key: "item-" + itoa(i), label: "secret " + itoa(i), enabled: true})
+	}
+	d := actionsDialog("Title", longBody(), items, nil)
+	d.cursor = 39
+	st := newStyles(false)
+	d.view(st, &zones{}, 100, 24)
+	for _, window := range []int{60, 50, 30, 24} {
+		text := ansi.Strip(d.view(st, &zones{}, 100, window))
+		if rows := strings.Count(text, "\n") + 1; rows > dialogHeight(window) {
+			t.Fatalf("the first draw in a window of %d is %d rows, want at most %d:\n%s", window, rows, dialogHeight(window), text)
 		}
 	}
 }

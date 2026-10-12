@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -1186,5 +1187,77 @@ func TestAGateIsApprovedWithoutASecret(t *testing.T) {
 	}
 	if len(ds.approvals) != 1 || ds.approvals[0].SecretID != "" || ds.approvals[0].TTLSeconds != 86400 {
 		t.Fatalf("approvals = %#v, want one naming no secret, for a day", ds.approvals)
+	}
+}
+
+// A request card longer than the window still fits it, with its answers on
+// screen: the request a lead discobox makes for the discobox API names ten
+// uses, and a card that runs off the bottom hides Approve and Deny.
+func TestALongRequestCardKeepsItsAnswersOnScreen(t *testing.T) {
+	t.Parallel()
+	m, ds := secretsFixture(t)
+	req := waitingRequest()
+	req.Name, req.EnvVar, req.Type = "discobox", "DISCOBOX_TOKEN", "token"
+	req.Host, req.WellKnownID = "api.discobox.internal", wellknown.DiscoboxSandbox
+	req.GrantTTL = 72 * time.Hour
+	req.Justification = strings.Repeat("the user asked me to have worker discoboxes keep four pull requests reviewed, green and rebased ", 3)
+	req.Uses = nil
+	for i := range 10 {
+		req.Uses = append(req.Uses, fmt.Sprintf("discobox admin terminal input <terminal-id-%d> --discobox-id <discobox-id> [--literal] <keys or text>: "+
+			"type keys and messages into the terminal of a discobox I created, to answer its questions, give it its next step, or tell it to continue", i))
+	}
+	ds.mu.Lock()
+	ds.requests = []CredentialRequest{req}
+	ds.mu.Unlock()
+	send(t, m, tickMsg{})
+	send(t, m, keyPress(credentialsKey))
+	if m.dialog == nil {
+		t.Fatal("the request card did not open")
+	}
+
+	lines := frame(m)
+	if len(lines) > m.height {
+		t.Errorf("the card is %d rows in a window of %d", len(lines), m.height)
+	}
+	onScreen := strings.Join(lines[:min(len(lines), m.height)], "\n")
+	for _, answer := range []string{"Approve", "Deny"} {
+		if !strings.Contains(onScreen, answer) {
+			t.Errorf("%s is not on screen", answer)
+		}
+	}
+}
+
+// The wheel reads a long request card to its end, with the answers still under
+// it: what approving hands over is the last thing on the card, and the first
+// thing an approval turns on.
+func TestTheWheelScrollsALongRequestCard(t *testing.T) {
+	t.Parallel()
+	m, ds := secretsFixture(t)
+	req := waitingRequest()
+	req.Name, req.WellKnownID = "discobox", wellknown.DiscoboxSandbox
+	req.Uses = nil
+	for i := range 30 {
+		req.Uses = append(req.Uses, "use "+strconv.Itoa(i))
+	}
+	ds.mu.Lock()
+	ds.requests = []CredentialRequest{req}
+	ds.mu.Unlock()
+	send(t, m, tickMsg{})
+	send(t, m, keyPress(credentialsKey))
+
+	const last = "but only within what you separately delegate to it"
+	if strings.Contains(frameText(m), last) {
+		t.Fatalf("the card fits, so there is nothing to scroll:\n%s", frameText(m))
+	}
+	_, y := at(t, m, "use 3")
+	for range 20 {
+		send(t, m, tea.MouseWheelMsg{X: m.width / 2, Y: y, Button: tea.MouseWheelDown})
+	}
+	text := frameText(m)
+	if !strings.Contains(text, last) {
+		t.Errorf("the wheel did not reach the end of the card:\n%s", text)
+	}
+	if !strings.Contains(text, "Approve") || !strings.Contains(text, "Deny") {
+		t.Errorf("the answers left the card as it scrolled:\n%s", text)
 	}
 }
