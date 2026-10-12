@@ -2217,7 +2217,7 @@ type CredentialVerdict struct {
 	LatencyMs OptInt64 `json:"latencyMs"`
 	// The Jev model that answered, as Jev reported it, on a verdict from a server that judges with Jev
 	// rather than a judge discobox. judgeSandboxId, harnessConfigId and image are empty then, unless Jev
-	// did not allow and the server put the job to the project's judge discobox, which decided and which
+	// was unsure and the server put the job to the project's judge discobox, which decided and which
 	// they name.
 	Model OptString    `json:"model"`
 	Need  OptJudgeNeed `json:"need"`

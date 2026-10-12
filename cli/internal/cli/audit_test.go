@@ -279,7 +279,7 @@ func TestAuditCredsPromptShowsJevsVerdict(t *testing.T) {
 	}
 }
 
-// jevInputVerdict is a command Jev refused and the project's judge discobox
+// jevInputVerdict is a command Jev was unsure of and the project's judge discobox
 // then allowed, with what Jev was sent: the discobox's argv in its state, one
 // element of which carries a right-to-left override.
 const jevInputVerdict = `{"credentialVerdicts":[{
@@ -292,7 +292,7 @@ const jevInputVerdict = `{"credentialVerdicts":[{
 
 // --jev-input prints exactly what Jev was sent, laid out and escaped as data,
 // and the verdict names the judge discobox that decided after Jev
-// (ADR 26-10-07-937). Without it, the block leaves Jev's input out.
+// (ADR 26-10-12-669). Without it, the block leaves Jev's input out.
 func TestAuditCredsJevInputShowsWhatJevWasSent(t *testing.T) {
 	_, out, err := runAuditCreds(t, jevInputVerdict, "--jev-input")
 	if err != nil {

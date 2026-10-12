@@ -99,9 +99,9 @@ type Options struct {
 	// JudgeJev, when set, is what judges instead of a judge discobox per
 	// project (ADR 26-10-01-324).
 	JudgeJev *jev.Client
-	// JudgeJevFallback puts every job Jev refuses to the project's judge
-	// discobox, which every project then keeps and which decides it, rather
-	// than letting Jev's refusal stand.
+	// JudgeJevFallback puts every job Jev is unsure of to the project's judge
+	// discobox, which every project then keeps and which decides it, rather than
+	// refusing it. A refusal Jev is sure of stands either way.
 	JudgeJevFallback bool
 }
 

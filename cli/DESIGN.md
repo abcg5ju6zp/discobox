@@ -1696,8 +1696,8 @@ credential on. The control plane records each `judge` before it answers. A
 full; `--jev-input` does too, with exactly what Jev was sent on a server that
 judges with Jev (the request body to its API, laid out with `json.Indent`,
 which changes only whitespace), and escaped as data like the prompt. A verdict
-the judge discobox decided after Jev did not allow names both
-(ADR 26-10-07-937).
+the judge discobox decided after Jev was unsure names both
+(ADR 26-10-12-669).
 `refresh` is the asks for a new value of a token and how each closed
 (ADR 26-09-25-122 §6), two events per request — `asked`, then `answered` or
 `dismissed` — so a follower reading forward by time sees the answer arrive

@@ -91,6 +91,10 @@ type Run struct {
 	Answer  string        `json:"answer"`
 	Error   string        `json:"error,omitempty"`
 	Elapsed time.Duration `json:"elapsedNanos"`
+	// Unsure is a Jev refusal because Jev could not tell (jev.Verdict.Unsure):
+	// what a server with jevUnsure: harness puts to its judge discobox. A
+	// refusal without it is one Jev decided, which nothing reads again.
+	Unsure bool `json:"unsure,omitempty"`
 }
 
 func main() {
@@ -148,7 +152,7 @@ func main() {
 		}
 	}
 	results := ask(context.Background(), asker, cases, *runs, *parallel, *timeout, *logs)
-	failed := summarize(os.Stdout, cases, results, version)
+	failed := summarize(os.Stdout, cases, results, version, *useJev)
 	if *report != "" {
 		data, err := json.MarshalIndent(results, "", "  ")
 		if err == nil {
@@ -315,6 +319,7 @@ func askJev(ctx context.Context, client *jev.Client, c Case, timeout time.Durati
 		return run
 	}
 	run.Answer = string(said)
+	run.Unsure = verdict.Unsure
 	run.Outcome = outcomeOfAnswer(c.Job, verdict.Answer)
 	run.Pass = c.Expect.accepts(run.Outcome)
 	return run
@@ -353,23 +358,34 @@ func lastLine(s string) string {
 }
 
 // summarize prints a row per case and the totals, and reports whether any run
-// failed its case.
-func summarize(w *os.File, cases []Case, results []Run, version string) bool {
+// failed its case. jevAsked adds what only Jev's answers have: how many it was
+// unsure of, and how many it refused alone and wrongly.
+func summarize(w *os.File, cases []Case, results []Run, version string, jevAsked bool) bool {
 	byCase := map[string][]Run{}
 	for _, r := range results {
 		byCase[r.Case] = append(byCase[r.Case], r)
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(tw, "case\texpect\truns\tallow\trefuse\task\tinvalid\tfailed\tp50\t")
-	var failed, total int
+	// unsure is a column of Jev's alone: no other judge says it could not tell.
+	unsureHeader := ""
+	if jevAsked {
+		unsureHeader = "unsure\t"
+	}
+	fmt.Fprintf(tw, "case\texpect\truns\tallow\trefuse\task\t%sinvalid\tfailed\tp50\t\n", unsureHeader)
+	var failed, total, unsure, wronglyDecided int
 	var errs []string
 	for _, c := range cases {
 		runs := byCase[c.Name]
 		counts := map[Outcome]int{}
 		var elapsed []time.Duration
-		caseFailed := 0
+		caseFailed, caseUnsure := 0, 0
 		for _, r := range runs {
 			counts[r.Outcome]++
+			if r.Unsure {
+				caseUnsure++
+			} else if r.Outcome == OutcomeRefuse && !c.Expect.accepts(OutcomeRefuse) {
+				wronglyDecided++
+			}
 			elapsed = append(elapsed, r.Elapsed)
 			if !r.Pass {
 				caseFailed++
@@ -384,14 +400,25 @@ func summarize(w *os.File, cases []Case, results []Run, version string) bool {
 			p50 = elapsed[len(elapsed)/2]
 		}
 		failed += caseFailed
+		unsure += caseUnsure
 		total += len(runs)
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.1fs\t\n", c.Name, c.Expect, len(runs),
-			counts[OutcomeAllow], counts[OutcomeRefuse], counts[OutcomeAsk], counts[OutcomeInvalid], caseFailed, p50.Seconds())
+		unsureCell := ""
+		if jevAsked {
+			unsureCell = fmt.Sprintf("%d\t", caseUnsure)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%d\t%s%d\t%d\t%.1fs\t\n", c.Name, c.Expect, len(runs),
+			counts[OutcomeAllow], counts[OutcomeRefuse], counts[OutcomeAsk], unsureCell, counts[OutcomeInvalid], caseFailed, p50.Seconds())
 	}
 	if err := tw.Flush(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	fmt.Fprintf(w, "\n%d of %d runs failed their case (prompt version %s)\n", failed, total, version)
+	if jevAsked {
+		// The two numbers ADR 26-10-12-669 is held to: how much goes on to a
+		// judge discobox, and what Jev refused alone that it should not have.
+		fmt.Fprintf(w, "%d of %d runs were refused because Jev was unsure, which jevUnsure: harness puts to the judge discobox\n", unsure, total)
+		fmt.Fprintf(w, "%d of %d runs were refusals Jev decided on a case a correct judge does not refuse\n", wronglyDecided, total)
+	}
 	if len(errs) > 0 {
 		fmt.Fprintln(w, "\nwrapper errors:")
 		for _, e := range dedupe(errs) {

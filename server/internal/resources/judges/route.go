@@ -126,8 +126,8 @@ func (s *Service) Judge(ctx context.Context, poolID string, ask services.JudgeAs
 		bound = min(bound, left)
 	}
 	// A later round is Jev's only when Jev asked for it (ADR 26-10-07-937
-	// §2). One the judge discobox asked for, after taking the job over from
-	// a Jev refusal, is the discobox's, and so is one whose asker cannot be
+	// §2). One the judge discobox asked for, after taking over a job Jev was
+	// unsure of, is the discobox's, and so is one whose asker cannot be
 	// found: Jev answering a body it never asked for must not decide it.
 	jevs, err := s.jevsRound(ctx, project.ID, ask, job)
 	if err != nil {
@@ -146,7 +146,7 @@ func (s *Service) Judge(ctx context.Context, poolID string, ask services.JudgeAs
 	}
 	// What follows the verdict has a deadline of its own rather than the
 	// judge's, so a judge discobox that ran the judge's deadline out leaves
-	// Jev's refusal checked and recorded rather than lost to the expired
+	// Jev's unsure refusal checked and recorded rather than lost to the expired
 	// context (ADR 26-10-07-937 §4). It is bounded all the same, and the
 	// pool's own wait leaves judgeReplyMargin for it.
 	afterCtx, cancelAfter := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
@@ -175,10 +175,10 @@ func (s *Service) Judge(ctx context.Context, poolID string, ask services.JudgeAs
 }
 
 // jevsRound reports whether this round of an ask is Jev's to answer first.
-// Every round is on a server that does not send Jev's refusals on, and so is
-// the first round on one that does. A later round there is Jev's only when the
-// round before was Jev asking for the body; one the judge discobox asked for
-// is the discobox's, which answers that only after Jev refused.
+// Every round is on a server that does not send what Jev is unsure of on, and
+// so is the first round on one that does. A later round there is Jev's only
+// when the round before was Jev asking for the body; one the judge discobox
+// asked for is the discobox's, which answers that only after Jev was unsure.
 //
 // A pool asks again with the body under the same discobox and use, at the
 // next round, within one exchange's deadline; nothing else ties the rounds of
@@ -227,8 +227,8 @@ func sameRequest(earlier, now *judge.Request) bool {
 
 // judgeBound is how long one ask may take on this hop, before a pool's own
 // deadline is applied. A judge discobox may first have to be reached; Jev is
-// an HTTP call away and gets the judge's own time alone, unless what it
-// refuses goes on to a judge discobox, which may have to be reached too.
+// an HTTP call away and gets the judge's own time alone, unless what it is
+// unsure of goes on to a judge discobox, which may have to be reached too.
 func (s *Service) judgeBound() time.Duration {
 	if s.jev != nil && !s.jevFallback {
 		return judge.Timeout
@@ -244,15 +244,18 @@ type answered struct {
 	// sandbox is the judge discobox that answered, when one did.
 	sandbox *model.Sandbox
 	// model, probabilities and input are Jev's, when Jev was asked: what it
-	// said and what it was sent, whether it decided or refused and a judge
+	// said and what it was sent, whether it decided or was unsure and a judge
 	// discobox decided after it.
 	model         string
 	probabilities map[string]float64
 	input         json.RawMessage
+	// unsure is Jev's refusal because it could not tell (jev.Verdict.Unsure):
+	// the one answer of Jev's a judge discobox may be asked to decide instead.
+	unsure bool
 }
 
 // stamp writes who answered, and how long it took, onto the verdict that
-// records the answer. A verdict a judge discobox decided after Jev refused
+// records the answer. A verdict a judge discobox decided after Jev was unsure
 // names both, and its prompt version is the discobox's: it is whose words
 // decided.
 func (a answered) stamp(row *model.CredentialVerdict) {
@@ -282,21 +285,21 @@ func (a answered) stamp(row *model.CredentialVerdict) {
 // and otherwise the project's judge discobox. ctx bounds the whole exchange;
 // bound is what it was bounded by, for the refusal that says so.
 //
-// A server that sends Jev's refusals on (jevUnsure: harness) asks the
-// project's judge discobox about every job Jev refused, whatever refused it —
-// a clear no, a no Jev could not tell, or a hazard — and takes its answer
-// (ADR 26-10-07-937). Jev decides its allows alone, and an ask to be shown a
-// body is not a refusal: it goes back to be answered with the body. A later
-// round reaches put only when it is Jev's own (jevsRound); Judge puts any
-// other straight to the judge discobox. Jev was going to refuse what goes on,
-// so a judge discobox that cannot be had leaves Jev's refusal standing rather
-// than no verdict at all.
+// A server that sends what Jev is unsure of on (jevUnsure: harness) asks the
+// project's judge discobox about every job Jev could not tell about — a
+// within question or a hazard short of a sure yes and a sure no — and takes
+// its answer (ADR 26-10-12-669 §2). Everything else is Jev's alone: its
+// allows, its decided refusals, and an ask to be shown a body, which goes
+// back to be answered with the body. A later round reaches put only when it
+// is Jev's own (jevsRound); Judge puts any other straight to the judge
+// discobox. What goes on is a refusal already, so a judge discobox that
+// cannot be had leaves it standing rather than no verdict at all.
 func (s *Service) put(ctx context.Context, project *model.Project, judgeSandbox *model.Sandbox, job judge.Job, bound time.Duration) (answered, error) {
 	if s.jev == nil {
 		return s.putSandbox(ctx, project, judgeSandbox, job, bound)
 	}
 	jevAnswer, err := s.putJev(ctx, job, bound)
-	if err != nil || !s.jevFallback || !jevAnswer.Decided() || jevAnswer.Allow {
+	if err != nil || !s.jevFallback || !jevAnswer.unsure {
 		return jevAnswer, err
 	}
 	if s.leases == nil {
@@ -304,7 +307,7 @@ func (s *Service) put(ctx context.Context, project *model.Project, judgeSandbox 
 	}
 	decided, err := s.putJudgeDiscobox(ctx, project, job, bound)
 	if err != nil {
-		s.logger.WarnContext(ctx, "Jev refused and the project's judge discobox did not answer, so Jev's refusal stands",
+		s.logger.WarnContext(ctx, "Jev was unsure and the project's judge discobox did not answer, so the job is refused",
 			"projectId", project.ID, "error", err)
 		return jevAnswer, nil
 	}
@@ -314,7 +317,7 @@ func (s *Service) put(ctx context.Context, project *model.Project, judgeSandbox 
 }
 
 // putJudgeDiscobox asks the project's judge discobox on a server that judges
-// with Jev: one Jev refused, or one that took the job over in an earlier
+// with Jev: one Jev was unsure of, or one that took the job over in an earlier
 // round. It has to be brought up or found first, inside the same bound.
 func (s *Service) putJudgeDiscobox(ctx context.Context, project *model.Project, job judge.Job, bound time.Duration) (answered, error) {
 	if s.leases == nil {
@@ -335,7 +338,7 @@ func (s *Service) putJev(ctx context.Context, job judge.Job, bound time.Duration
 	verdict, err := s.jev.Judge(ctx, job)
 	if err == nil {
 		return answered{Answer: verdict.Answer, latency: time.Since(start), model: verdict.Model,
-			probabilities: verdict.Probabilities, input: verdict.Input}, nil
+			probabilities: verdict.Probabilities, input: verdict.Input, unsure: verdict.Unsure}, nil
 	}
 	var status *jev.StatusError
 	switch {

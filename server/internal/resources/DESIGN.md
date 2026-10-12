@@ -132,10 +132,12 @@ not an answer are each no verdict, and what Jev said goes to the log, not to
 the discobox.
 
 With `jevUnsure: harness`, the default, a project keeps its judge discobox, and `put` asks it
-about every job Jev does not allow (ADR 26-10-07-937): a clear no, a no Jev
-could not tell, and a hazard alike, for commands, requests and delegations. Jev
-alone decides only its allows. An ask to be shown the body is not a refusal: it
-goes back to the pool. A later round is Jev's only when Jev asked for it
+about every job Jev is unsure of (`jev.Verdict.Unsure`, ADR 26-10-12-669): a
+"within" question or a hazard short of both a sure yes and a sure no, for
+commands, requests and delegations. Jev's allows and the refusals it is sure
+of are its own, and the discobox is not asked. An ask to be shown the body
+goes back to the pool; an unsure hazard on a body not yet shown goes on at
+once. A later round is Jev's only when Jev asked for it
 (`jevsRound`): nothing in an ask names the round before it, so that round is
 looked for as the recorded body ask (`store.BodyAsks`, read from the primary,
 since a replica may not have it yet) for the same discobox, use and request
@@ -147,7 +149,7 @@ discobox call. The judge discobox's answer is the
 verdict, recorded with Jev's model, probabilities and input beside the discobox
 that decided. The bound is a judge discobox's, since one may have to be
 reached. A judge discobox that cannot be had, or runs out the bound, leaves
-Jev's refusal standing and recorded rather than no verdict: the re-check of
+Jev's unsure refusal standing and recorded rather than no verdict: the re-check of
 the use and the record run on a deadline of their own (`recordTimeout`), not
 the judge's. A round the discobox took over has no Jev refusal to stand, so a
 discobox that cannot answer it is no verdict.

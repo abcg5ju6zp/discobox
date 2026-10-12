@@ -122,8 +122,9 @@ type AppOptions struct {
 	// JudgeJev is the Jev a server judges with instead of a judge discobox
 	// per project, or nil for the judge discobox (ADR 26-10-01-324).
 	JudgeJev *jev.Client
-	// JudgeJevFallback puts every job Jev refuses to the project's judge
-	// discobox, which decides it, rather than letting Jev's refusal stand.
+	// JudgeJevFallback puts every job Jev is unsure of to the project's judge
+	// discobox, which decides it, rather than
+	// refusing it. A refusal Jev is sure of stands either way.
 	JudgeJevFallback bool
 }
 

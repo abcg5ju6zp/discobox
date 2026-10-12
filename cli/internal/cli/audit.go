@@ -676,8 +676,8 @@ func judgeLines(v apimodel.CredentialVerdict) []string {
 	// A server that judges with Jev names the model that answered and what it
 	// said, where one with a judge discobox names the discobox.
 	//
-	// A server that puts what Jev does not allow to its judge discobox names
-	// both on the verdict that discobox decided (ADR 26-10-07-937): the
+	// A server that puts what Jev is unsure of to its judge discobox names
+	// both on the verdict that discobox decided (ADR 26-10-12-669): the
 	// discobox decided, after Jev said what it said.
 	if model := v.Model.Or(""); model != "" {
 		judged := terminalSafe(model)

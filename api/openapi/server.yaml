@@ -3563,7 +3563,7 @@ components:
                     format: int64
                     type: integer
                 model:
-                    description: The Jev model that answered, as Jev reported it, on a verdict from a server that judges with Jev rather than a judge discobox. judgeSandboxId, harnessConfigId and image are empty then, unless Jev did not allow and the server put the job to the project's judge discobox, which decided and which they name.
+                    description: The Jev model that answered, as Jev reported it, on a verdict from a server that judges with Jev rather than a judge discobox. judgeSandboxId, harnessConfigId and image are empty then, unless Jev was unsure and the server put the job to the project's judge discobox, which decided and which they name.
                     type: string
                 need:
                     $ref: '#/components/schemas/JudgeNeed'
