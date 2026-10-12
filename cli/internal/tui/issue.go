@@ -293,36 +293,6 @@ func (m *Model) openIssue(number int, pull bool) tea.Cmd {
 	return tea.Batch(m.loadIssue(p, true), issueTick(p.id))
 }
 
-// openIssueOf is a click on a list row's `#issue=N` or `#pr=N`: the discobox's
-// workspace is opened, as Enter on the row opens it, with the tab beside it.
-// A discobox that cannot be attached to says why, as it does for Enter, and
-// nothing is opened: the tab is a pane of a workspace.
-func (m *Model) openIssueOf(id string, number int, pull bool) tea.Cmd {
-	at := slices.IndexFunc(m.list.all, func(s Sandbox) bool { return s.ID == id })
-	if at < 0 {
-		return nil
-	}
-	box := m.list.all[at]
-	// Its workspace is up — or on its way up, with a tab from a click before
-	// this one already in it and the primary yet to land (inPanes is the
-	// primary's). The tab joins what is there: opening the workspace again
-	// would close the first tab to open the second.
-	if m.paneBox.ID == box.ID && (m.inPanes() || m.shells.len() > 0) {
-		return m.openIssue(number, pull)
-	}
-	m.focusListForMouse()
-	if row := slices.IndexFunc(m.list.rows(), func(s Sandbox) bool { return s.ID == id }); row >= 0 {
-		m.list.moveTo(row)
-	}
-	gen := m.wsGen
-	open := m.actOn("a", []Sandbox{box})
-	if m.wsGen == gen || m.paneBox.ID != box.ID {
-		// Refused, or asked about first.
-		return open
-	}
-	return tea.Batch(open, m.openIssue(number, pull))
-}
-
 // toggleIssue is the leader's i, or its p for the pull request: the tab on the
 // discobox's issue, opened or focused.
 func (m *Model) toggleIssue(pull bool) tea.Cmd {
