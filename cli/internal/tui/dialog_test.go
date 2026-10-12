@@ -692,3 +692,28 @@ func TestAWindowedMenuFitsTheFirstFrameAfterAResize(t *testing.T) {
 		}
 	}
 }
+
+// A field wider than a narrow card wraps, and the key line under it is still
+// pressed where it is drawn: its marks are placed by the rows the box draws,
+// not by the lines written.
+func TestAWrappedFieldDoesNotMoveTheKeyLinesMarks(t *testing.T) {
+	t.Parallel()
+	d := inputDialog("Title", "a question", "", strings.Repeat("x", 60), nil)
+	for _, width := range []int{36, 44, 60, 100} {
+		z := &zones{}
+		lines := strings.Split(ansi.Strip(d.view(newStyles(false), z, width, 40)), "\n")
+		found := false
+		for _, mark := range z.marks {
+			if mark.what.kind != hitKey || len(mark.what.keys) == 0 || mark.what.keys[0] != "esc" {
+				continue
+			}
+			found = true
+			if !strings.Contains(lines[mark.y], "Esc cancels") {
+				t.Errorf("at %d columns Esc is marked on row %d, which draws %q", width, mark.y, lines[mark.y])
+			}
+		}
+		if !found {
+			t.Errorf("at %d columns the key line has no mark for Esc", width)
+		}
+	}
+}
