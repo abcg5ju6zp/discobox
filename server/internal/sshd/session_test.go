@@ -429,7 +429,9 @@ func TestSessionOperationalFailureSaysWhat(t *testing.T) {
 	h := newTestHarness(t)
 	acme := createRouteFixtureProject(t, h.server.store, "proj_acme00000000", "Acme")
 	sandbox := createRouteFixtureSandbox(t, h.server.store, acme, "devbox")
-	h.sandboxes.acquireErr = apperrors.NewStatusError(http.StatusConflict, "sandbox pool is not active")
+	// As it can arrive: a refusal quoting what a container runtime printed,
+	// over two lines and with a sequence that would clear the row.
+	h.sandboxes.acquireErr = apperrors.NewStatusError(http.StatusConflict, "sandbox pool is not active:\n \x1b[2Kruntime said so")
 
 	signer := newTestSigner(t)
 	writeAuthorizedKeys(t, h.server.dataDir, signer)
@@ -450,8 +452,11 @@ func TestSessionOperationalFailureSaysWhat(t *testing.T) {
 		t.Fatalf("shell: %v", err)
 	}
 	_ = session.Wait()
-	if !strings.Contains(stderr.String(), "sandbox pool is not active") {
-		t.Fatalf("stderr = %q, want the operational cause", stderr.String())
+	if !strings.Contains(stderr.String(), `sandbox pool is not active: \x1b[2Kruntime said so`) {
+		t.Fatalf("stderr = %q, want the operational cause, on one line and as text", stderr.String())
+	}
+	if strings.ContainsRune(stderr.String(), '\x1b') {
+		t.Fatalf("stderr = %q, want nothing a terminal would act on", stderr.String())
 	}
 	if strings.Contains(stderr.String(), "not authorized") {
 		t.Fatalf("an operational failure must not be reported as an authorization one: %s", stderr.String())

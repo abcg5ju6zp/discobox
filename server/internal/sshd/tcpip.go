@@ -41,7 +41,7 @@ func (s *Server) handleDirectTCPIPChannel(ctx context.Context, newChannel ssh.Ne
 	lease, sandboxModel, err := s.sandboxes.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, []string{poolagentauth.ScopeTCPConnect}, services.SandboxAction("ssh port forward"))
 	if err != nil {
 		s.logger.Warn("ssh direct-tcpip authorize failed", "project", projectID, "sandbox", sandboxID, "error", err)
-		_ = newChannel.Reject(ssh.ConnectionFailed, err.Error())
+		_ = newChannel.Reject(ssh.ConnectionFailed, noticeText(err.Error()))
 		return
 	}
 
@@ -52,7 +52,7 @@ func (s *Server) handleDirectTCPIPChannel(ctx context.Context, newChannel ssh.Ne
 			"host", payload.HostToConnect, "port", payload.PortToConnect, "error", err)
 		// Reject before accepting, matching what a real sshd does for a
 		// refused -L target: the client sees a clean channel-open failure.
-		_ = newChannel.Reject(ssh.ConnectionFailed, err.Error())
+		_ = newChannel.Reject(ssh.ConnectionFailed, noticeText(err.Error()))
 		return
 	}
 
