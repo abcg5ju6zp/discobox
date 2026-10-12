@@ -75,7 +75,6 @@ components:
                     "$ref": "#/components/schemas/GitSourceCheckout"
                 cacheKey:
                     description: The key of this pool's Git cache a cache-delivered source is delivered into. The source's namespace in it is the sandbox id and the source slug.
-                    maxLength: 2048
                     minLength: 1
                     type: string
                 delivery:
