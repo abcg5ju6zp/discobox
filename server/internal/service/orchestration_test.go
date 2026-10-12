@@ -656,7 +656,11 @@ func (noopSandboxProvider) Get(_ context.Context, ref sandboxes.SandboxRef, _ []
 	return runtimeSandbox(ref, sandboxes.Status("running")), nil
 }
 
-func (noopSandboxProvider) AcquireHTTPClient(context.Context, sandboxes.SandboxRef, []byte, []string) (*sandboxes.HTTPClientLease, error) {
+func (noopSandboxProvider) EnsureRunning(context.Context, sandboxes.SandboxRef, []byte) error {
+	return nil
+}
+
+func (noopSandboxProvider) AcquireHTTPClient(context.Context, sandboxes.SandboxRef, []byte, []string, sandboxes.Use) (*sandboxes.HTTPClientLease, error) {
 	return nil, nil
 }
 

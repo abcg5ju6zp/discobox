@@ -143,6 +143,7 @@ type SandboxAgentSourceState = apigen.SandboxAgentSourceState
 type SandboxAgentStatusEntry = apigen.SandboxAgentStatusEntry
 type SandboxAgentStatusResponse = apigen.SandboxAgentStatusResponse
 type SandboxAgentStatusToken = apigen.SandboxAgentStatusToken
+type SandboxAutomaticRepair = apigen.SandboxAutomaticRepair
 type SandboxCPUConsumption = apigen.SandboxCPUConsumption
 type SandboxCloneProgress = apigen.SandboxCloneProgress
 type SandboxConfig = apigen.SandboxConfig

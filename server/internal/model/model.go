@@ -822,9 +822,16 @@ type Sandbox struct {
 	// yet. Once ObservedGeneration reaches it the repair has landed, and the
 	// ensures that still arrive on that generation are observation-driven --
 	// which must not tear anything down.
-	RepairGeneration int64      `gorm:"column:repair_generation;not null;default:0" json:"-" doc:"Generation whose ensure rebuilds from a teardown"`
-	SecretState      []byte     `gorm:"column:secret_state" json:"-"`
-	LastActiveAt     *time.Time `gorm:"column:last_active_at;index" json:"lastActiveAt,omitempty" doc:"Last observed activity timestamp" format:"date-time"`
+	RepairGeneration int64 `gorm:"column:repair_generation;not null;default:0" json:"-" doc:"Generation whose ensure rebuilds from a teardown"`
+	// AutomaticRepair is the last repair nobody typed: the one recorded when an
+	// action found this sandbox failed with no container (ADR 26-10-12-711).
+	// Its generation is what bounds automatic repair to one. A sandbox that
+	// failed on that generation has had its repair, so a second is never
+	// recorded for it, and any explicit intent moves the generation on. It stays after the repair lands, because landing clears the failure
+	// that explains why the container was rebuilt, and is replaced by the next.
+	AutomaticRepair *AutomaticRepair `gorm:"column:automatic_repair;type:text;serializer:json" json:"automaticRepair,omitempty" doc:"The last repair recorded automatically for this sandbox, when one has been"`
+	SecretState     []byte           `gorm:"column:secret_state" json:"-"`
+	LastActiveAt    *time.Time       `gorm:"column:last_active_at;index" json:"lastActiveAt,omitempty" doc:"Last observed activity timestamp" format:"date-time"`
 	// RuntimeState is the power axis: what the container is doing, as observed
 	// by the pool agent hosting it. Store.ApplySandboxStateReports is its only
 	// writer, and Store.UpdateSandbox omits it so no other path can carry a
@@ -890,6 +897,63 @@ type Sandbox struct {
 }
 
 func (Sandbox) TableName() string { return "sandboxes" }
+
+// AutomaticRepair records one automatic repair of a sandbox
+// (ADR 26-10-12-711 §4).
+type AutomaticRepair struct {
+	// Generation is the repair's own: the generation its intent recorded.
+	Generation int64     `json:"generation" doc:"Generation the repair was recorded as"`
+	StartedAt  time.Time `json:"startedAt" doc:"When the repair was recorded" format:"date-time"`
+	// Trigger names the use that found the sandbox without a container, in
+	// words a listing can show: "exec attach", "ssh", "start".
+	Trigger string `json:"trigger" doc:"The use of the sandbox that triggered the repair"`
+	// Failure is the failure the repair answers: what the sandbox had settled
+	// on when it was used.
+	Failure string `json:"failure,omitempty" doc:"The failure the repair answers"`
+	// LandedAt is when the repair's rebuild converged, and is nil for one that
+	// is still running or that failed. It is what tells a failure the repair
+	// produced from one that came after it: the record outlives the repair,
+	// and a sandbox can fail again on the same generation, when a container
+	// lost later cannot be rebuilt.
+	LandedAt *time.Time `json:"landedAt,omitempty" doc:"When the repair landed. Absent while it runs, and when it failed." format:"date-time"`
+}
+
+// AutomaticRepairAllowed reports whether using this sandbox, found to have no
+// container, may record an automatic repair: it is meant to exist, it has
+// settled as failed, and that failure is not an automatic repair's own
+// (ADR 26-10-12-711 §4). Whether it has no container is the pool's to say and
+// is not read here.
+func (s *Sandbox) AutomaticRepairAllowed() bool {
+	if s.DesiredState != DesiredStatePresent || !s.Converged() {
+		return false
+	}
+	if s.State != SandboxStateFailed && s.ErrorMessage == nil {
+		return false
+	}
+	return !s.AutomaticRepairSpent()
+}
+
+// AutomaticRepairSpent reports whether the sandbox's current generation is an
+// automatic repair that has not landed: one in flight, or one that failed. A
+// repair that landed is spent on nothing — a failure after it is a new one,
+// and gets its own.
+func (s *Sandbox) AutomaticRepairSpent() bool {
+	return s.AutomaticRepair != nil && s.AutomaticRepair.Generation == s.Generation && s.AutomaticRepair.LandedAt == nil
+}
+
+// AutomaticRepairLandedSince reports whether an automatic repair of the sandbox
+// landed at or after t: the repair a use that began at t caused, or waited on.
+func (s *Sandbox) AutomaticRepairLandedSince(t time.Time) bool {
+	repair := s.AutomaticRepair
+	return repair != nil && repair.LandedAt != nil && !repair.LandedAt.Before(t)
+}
+
+// Repairing reports whether a repair of this sandbox, typed or automatic, has
+// been recorded and has not landed yet.
+func (s *Sandbox) Repairing() bool {
+	return s.DesiredState == DesiredStatePresent && s.RepairGeneration != 0 &&
+		s.RepairGeneration == s.Generation && !s.Converged()
+}
 
 // SetRuntimeState records an observation of what the container is doing,
 // stamping RuntimeStateChangedAt only on an actual change.

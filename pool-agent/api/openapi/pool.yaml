@@ -842,6 +842,22 @@ components:
             required:
             - sandboxId
             type: object
+        PoolSandboxRunning:
+            additionalProperties: false
+            description: Says the sandbox is running and its agent answers.
+            properties:
+                "$schema":
+                    description: A URL to the JSON Schema for this object.
+                    example: https://example.com/schemas/PoolSandboxRunning.json
+                    format: uri
+                    readOnly: true
+                    type: string
+                sandboxId:
+                    description: Sandbox that is running
+                    type: string
+            required:
+            - sandboxId
+            type: object
         PoolSandboxOperationRequest:
             additionalProperties: false
             properties:
@@ -1224,6 +1240,64 @@ paths:
             security:
             -   poolBearerAuth: []
             summary: Archive pool sandbox
+            tags:
+            - Pool Sandboxes
+    "/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/ensure-running":
+        post:
+            operationId: pool-ensure-sandbox-running
+            parameters:
+            -   description: Project ID
+                in: path
+                name: projectId
+                required: true
+                schema:
+                    description: Project ID
+                    type: string
+            -   description: Pool ID
+                in: path
+                name: poolId
+                required: true
+                schema:
+                    description: Pool ID
+                    type: string
+            -   description: Sandbox ID
+                in: path
+                name: sandboxId
+                required: true
+                schema:
+                    description: Sandbox ID
+                    type: string
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            "$ref": "#/components/schemas/PoolSandboxOperationRequest"
+                required: true
+            responses:
+                '200':
+                    content:
+                        application/json:
+                            schema:
+                                "$ref": "#/components/schemas/PoolSandboxRunning"
+                    description: The sandbox is running and its agent answers
+                default:
+                    content:
+                        application/problem+json:
+                            schema:
+                                "$ref": "#/components/schemas/ErrorModel"
+                    description: Error
+            security:
+            -   poolBearerAuth: []
+            description: |-
+                Starts the sandbox unless it is already running, and answers once the
+                sandbox agent inside it answers. It is what the control plane calls
+                before it forwards an action into a sandbox. Unlike the start
+                instruction it does not answer for a container that is up while its
+                agent is not, and a sandbox already running does not wait on the
+                start gate. A sandbox with no container is a 409 of type
+                sandbox-no-container, and an archived one a 409 of type
+                sandbox-archived.
+            summary: Ensure pool sandbox is running
             tags:
             - Pool Sandboxes
     "/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/start":

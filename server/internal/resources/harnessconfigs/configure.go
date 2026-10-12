@@ -109,7 +109,7 @@ func configureSecretType(declared string) (string, error) {
 type SandboxRuntime interface {
 	CreateSandbox(ctx context.Context, projectID string, input services.CreateSandboxBody) (*model.Sandbox, error)
 	DeleteSandbox(ctx context.Context, projectID, sandboxID string) error
-	AcquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error)
+	AcquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error)
 	// RebindHarnessConfigSecrets repoints existing sandboxes at the secrets this
 	// config's bindings now name. Configure is one of the two places a binding's
 	// secret changes, and the only one that can replace it outright.
@@ -760,7 +760,7 @@ func (s *Service) Reconcile(ctx context.Context, configID string) (reconcile.Res
 // caller's credentials.
 func (s *Service) sandboxAgentClient(ctx context.Context, projectID, sandboxID string) (*oneShotRunner, func(), error) {
 	lease, sandboxModel, err := s.sandboxes.AcquireSandboxHTTPClient(ctx, projectID, sandboxID,
-		[]string{poolagentauth.ScopeExecRead, poolagentauth.ScopeExecWrite})
+		[]string{poolagentauth.ScopeExecRead, poolagentauth.ScopeExecWrite}, services.SandboxAction("harness configure"))
 	if err != nil {
 		return nil, nil, err
 	}

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/discobox-ai/discobox/server/internal/apperrors"
-	"github.com/discobox-ai/discobox/server/internal/auth"
 	"github.com/discobox-ai/discobox/server/internal/model"
 	sandbox "github.com/discobox-ai/discobox/server/internal/sandbox"
 	services "github.com/discobox-ai/discobox/server/internal/services"
@@ -26,7 +25,8 @@ import (
 // thing the whole push handshake exists to prevent.
 var ErrSandboxProvisioning = errors.New("sandbox is still being provisioned")
 
-// sandboxReachableStallTimeout bounds tier 1 of the attach wait (ADR 0039).
+// sandboxReachableStallTimeout bounds the wait an action makes for its sandbox
+// (ADR 0039 tier 1, ADR 26-10-12-711 §6).
 //
 // It is a stall budget rather than a cap on how long the wait may take: every
 // write to this sandbox or to the pool hosting it restarts it, so a multi-
@@ -63,83 +63,134 @@ const sandboxReachablePollInterval = 500 * time.Millisecond
 // A var so a test can reach the ceiling without spending five minutes on it.
 var sandboxPoolHostWaitCeiling = 5 * time.Minute
 
-// AwaitSandboxHTTPClient is AcquireSandboxHTTPClient for a caller that means
-// "I want to use this sandbox now": it waits for the sandbox to become
-// reachable instead of refusing an attach that arrived while it was still
-// being provisioned (ADR 0039 tier 1).
+// acquireForAction is the acquire for a request that is about to act in the
+// sandbox: it returns a lease only onto a sandbox that can take the request.
+//
+// It waits for a sandbox that is still being provisioned instead of refusing
+// it, which is what lets a client create a sandbox and use it in the next call
+// rather than polling for readiness (ADR 0039 tier 1, widened from attach to
+// every action by ADR 26-10-12-711 §6). It then has the pool start the sandbox
+// (ensureRunning), and a sandbox the pool holds with no container is repaired
+// once or waited for (rebuildOnUse).
 //
 // Only what the control plane can see is waited on here: the sandbox has been
-// dispatched to a pool, that pool is up, and the sandbox is usable rather than
-// still mid-provisioning or mid-source-delivery. What the container and the
-// sandbox agent are doing is not observable from here, and is waited on by the
-// tiers that can see it.
-//
-// Every pass re-reads authoritative state and asks again, so there is no window
-// in which the transition that opens the gate can be missed.
-func (s *Service) AwaitSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
-	// Waiting is for an attach, or for an exec created to be used at once, and
-	// a discobox does neither to another: it reads and types into a
-	// terminal one judged call at a time (ADR 26-10-01-397 §2).
-	if principal, ok := auth.PrincipalFromContext(ctx); ok && principal.Type == auth.PrincipalTypeSandbox {
-		return nil, nil, apperrors.NewStatusError(http.StatusForbidden, "a discobox does not attach to another")
-	}
-	if err := authorizeRequestedScopes(ctx, scopes); err != nil {
-		return nil, nil, err
-	}
-	return s.awaitSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
-}
-
-// AwaitSandboxHTTPClientForServer is the same wait for a call Discobox makes
-// itself rather than on behalf of somebody: putting a job to the project's
-// judge (ADR 26-09-22-838 §2). There are no caller scopes to check, because
-// there is no caller — the scopes are this code's own, and the route they
-// reach is the one they name.
-//
-// It waits because a judge on a pool the server has not heard from since it
-// started is the ordinary state for the first heartbeat after a restart, and a
-// refusal there blocks a request the judge would have allowed. The caller
-// bounds the wait with its context.
-func (s *Service) AwaitSandboxHTTPClientForServer(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
-	return s.awaitSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
-}
-
-func (s *Service) awaitSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
-	stallDeadline := time.Now().Add(sandboxReachableStallTimeout)
-	var observed provisioningMark
-	var hostDownSince time.Time
-	// The last "not yet", which is what a caller's deadline is answered with.
-	var refusal error
-	for {
-		lease, sandboxModel, err := s.acquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
-		if err == nil && !sandboxProvisioningPending(sandboxModel) {
-			return lease, sandboxModel, nil
+// dispatched to a pool, that pool is up, the sandbox is usable rather than
+// still mid-provisioning or mid-source-delivery, and its container is there.
+// What the sandbox agent is doing is not observable from here, and is waited
+// on by the tiers that can see it.
+func (s *Service) acquireForAction(ctx context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
+	var lease *services.HTTPClientLease
+	sandboxModel, err := s.awaitUsable(ctx, projectID, sandboxID, use, waitFromTheStart, func(ctx context.Context) (*model.Sandbox, error) {
+		acquired, sandboxModel, err := s.acquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes, use.Kind)
+		if err != nil {
+			return sandboxModel, err
 		}
-		if err != nil && ctx.Err() != nil {
-			// The caller's time ran out inside the acquire, and what its reads
-			// said then is about the context, not the sandbox: a store read
-			// cut short reads as "sandbox not found".
-			return nil, sandboxModel, awaitEnded(ctx, refusal)
-		}
-		if err == nil {
-			// Reachable but not usable yet. The lease goes back rather than
-			// being held across the wait: it is a pooled client onto the pool
-			// agent, not a claim on the sandbox.
-			if lease != nil {
-				lease.Release()
-			}
+		if sandboxProvisioningPending(sandboxModel) {
+			// Reachable but not usable yet.
 			err = apperrors.StatusError{
 				Status:  http.StatusConflict,
 				Message: fmt.Sprintf("sandbox is still being provisioned: state=%s", sandboxModel.State),
 				Cause:   ErrSandboxProvisioning,
 			}
+		} else {
+			err = s.ensureRunning(ctx, sandboxModel)
 		}
-		// Acquire reports a provider-side refusal without the row it read, and
-		// the row carries half of the question of whether waiting can help.
+		if err != nil {
+			// The lease goes back rather than being held across the wait: it
+			// is a pooled client onto the pool agent, not a claim on the
+			// sandbox.
+			if acquired != nil {
+				acquired.Release()
+			}
+			return sandboxModel, err
+		}
+		lease = acquired
+		return sandboxModel, nil
+	})
+	if err != nil {
+		return nil, sandboxModel, err
+	}
+	return lease, sandboxModel, nil
+}
+
+// runtimeHasNoContainer reports whether the pool refused for want of the
+// sandbox's container while holding its tree, which is what a rebuild answers.
+//
+// The pool says it two ways. One is ErrNoContainer. The other is ErrArchived
+// for a sandbox this side means to exist: a repair tears the runtime down
+// before it rebuilds it, the teardown is the archive's and leaves its marker,
+// and only the create that follows clears it. So "archived" there is a rebuild
+// between its two halves, or one whose second half failed — the state the one
+// automatic repair leaves when it fails. A sandbox archived by intent never
+// gets this far: it is refused before its pool is asked.
+func runtimeHasNoContainer(err error) bool {
+	return errors.Is(err, ErrNoContainer) || errors.Is(err, ErrArchived)
+}
+
+// useWait is when a use of a sandbox starts waiting for it.
+type useWait bool
+
+const (
+	// waitFromTheStart waits out every "not yet" from the first attempt: a
+	// request into the sandbox, which has nothing better to do than wait.
+	waitFromTheStart useWait = true
+	// waitOnceRebuilding answers every refusal at once until the use finds
+	// the sandbox with no container and a rebuild coming, and waits from
+	// then: a power instruction, which is a command that wants an answer.
+	waitOnceRebuilding useWait = false
+)
+
+// awaitUsable runs attempt until it succeeds, waiting between attempts for the
+// sandbox to become usable, and returns the sandbox the last attempt read.
+//
+// An attempt that finds the sandbox with no container sets a rebuild in
+// motion where one is due (rebuildOnUse), and is waited for from then on
+// whatever wait says.
+//
+// Every pass re-reads authoritative state and asks again, so there is no window
+// in which the transition that opens the gate can be missed.
+func (s *Service) awaitUsable(ctx context.Context, projectID, sandboxID string, use services.SandboxUse, wait useWait, attempt func(context.Context) (*model.Sandbox, error)) (*model.Sandbox, error) {
+	stallDeadline := time.Now().Add(sandboxReachableStallTimeout)
+	var observed provisioningMark
+	var hostDownSince time.Time
+	// The last "not yet", which is what a caller's deadline is answered with.
+	var refusal error
+	waiting := wait == waitFromTheStart
+	// Whether this wait has already asked for the rebuild of a sandbox that
+	// lost its container without failing. Once is enough: the mark is durable.
+	var marked bool
+	for {
+		sandboxModel, err := attempt(ctx)
+		if err == nil {
+			return sandboxModel, nil
+		}
+		if ctx.Err() != nil {
+			// The caller's time ran out inside the attempt, and what its reads
+			// said then is about the context, not the sandbox: a store read
+			// cut short reads as "sandbox not found".
+			return sandboxModel, awaitEnded(ctx, refusal)
+		}
+		// An attempt reports a provider-side refusal without the row it read,
+		// and the row carries half of the question of whether waiting can help.
 		if sandboxModel == nil {
 			sandboxModel, _ = s.store.GetSandbox(ctx, projectID, sandboxID)
 		}
-		if !sandboxCanBecomeReachable(err, sandboxModel) {
-			return nil, sandboxModel, err
+		if sandboxModel != nil && runtimeHasNoContainer(err) {
+			rebuilding, rebuildErr := s.rebuildOnUse(ctx, sandboxModel, use, &marked)
+			if rebuildErr != nil {
+				return sandboxModel, rebuildErr
+			}
+			if !rebuilding {
+				return sandboxModel, err
+			}
+			waiting = true
+			// The row this pass read may be one generation behind the intent
+			// just recorded, and the mark below has to see the new one.
+			if current, getErr := s.store.GetSandbox(ctx, projectID, sandboxID); getErr == nil {
+				sandboxModel = current
+			}
+		} else if !waiting || !sandboxCanBecomeReachable(err, sandboxModel) {
+			return sandboxModel, err
 		}
 		// A host that is not there has its own ceiling, for the reason
 		// sandboxPoolHostWaitCeiling gives: this wait stamps the progress that
@@ -148,7 +199,7 @@ func (s *Service) awaitSandboxHTTPClient(ctx context.Context, projectID, sandbox
 			if hostDownSince.IsZero() {
 				hostDownSince = time.Now()
 			} else if time.Since(hostDownSince) >= sandboxPoolHostWaitCeiling {
-				return nil, sandboxModel, err
+				return sandboxModel, err
 			}
 		} else {
 			hostDownSince = time.Time{}
@@ -162,12 +213,12 @@ func (s *Service) awaitSandboxHTTPClient(ctx context.Context, projectID, sandbox
 		if !time.Now().Before(stallDeadline) {
 			// The last refusal names what never became true, which is more use
 			// than "timed out" on its own.
-			return nil, sandboxModel, err
+			return sandboxModel, err
 		}
 		refusal = err
 		select {
 		case <-ctx.Done():
-			return nil, sandboxModel, awaitEnded(ctx, refusal)
+			return sandboxModel, awaitEnded(ctx, refusal)
 		case <-time.After(sandboxReachablePollInterval):
 		}
 	}
@@ -285,12 +336,12 @@ func sandboxProvisioningPending(sb *model.Sandbox) bool {
 // retrying is exactly what the wait is for, and the answer arrives either way:
 // `ready`, or `failed` again and settled.
 func sandboxCanBecomeReachable(err error, sb *model.Sandbox) bool {
+	if sb == nil || sb.DesiredState != model.DesiredStatePresent {
+		return false
+	}
 	if !errors.Is(err, sandbox.ErrNotFound) &&
 		!errors.Is(err, sandbox.ErrPoolNotReachable) &&
 		!errors.Is(err, ErrSandboxProvisioning) {
-		return false
-	}
-	if sb == nil || sb.DesiredState != model.DesiredStatePresent {
 		return false
 	}
 	switch sb.State {

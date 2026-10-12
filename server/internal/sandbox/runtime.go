@@ -54,7 +54,18 @@ type Provider interface {
 	// job; there is no option here for it.
 	Remove(ctx context.Context, ref SandboxRef, state []byte) ([]byte, error)
 	Get(ctx context.Context, ref SandboxRef, state []byte) (*Sandbox, error)
-	AcquireHTTPClient(ctx context.Context, ref SandboxRef, state []byte, scopes []string) (*transport.HTTPClientLease, error)
+	// EnsureRunning starts the sandbox unless it is running, and returns once
+	// the agent inside it answers (ADR 26-10-12-711 §2). It is not Start: a
+	// start is an instruction that reports acceptance, and this is the answer
+	// to "can a request be forwarded into it now". A sandbox whose runtime
+	// holds its data and no container is ErrNoContainer, an archived one
+	// ErrArchived, and a pool agent too old to have the operation
+	// ErrPoolAgentUnsupported.
+	EnsureRunning(ctx context.Context, ref SandboxRef, state []byte) error
+	// AcquireHTTPClient leases a client onto the sandbox's routes for the
+	// given scopes. use marks every token the lease mints, which is how the
+	// runtime learns whether the request may start a stopped sandbox.
+	AcquireHTTPClient(ctx context.Context, ref SandboxRef, state []byte, scopes []string, use Use) (*transport.HTTPClientLease, error)
 
 	// ExportTree streams the sandbox's durable tree -- the data, workspace, and
 	// push-delivered origin repositories that survive a container rebuild -- as

@@ -15,6 +15,7 @@ import (
 	"github.com/discobox-ai/discobox/server/internal/database"
 	"github.com/discobox-ai/discobox/server/internal/model"
 	"github.com/discobox-ai/discobox/server/internal/sandbox"
+	services "github.com/discobox-ai/discobox/server/internal/services"
 	"github.com/discobox-ai/discobox/server/internal/store"
 	"github.com/discobox-ai/discobox/server/internal/transport"
 )
@@ -31,7 +32,7 @@ type provisioningProvider struct {
 	hostDown atomic.Bool
 }
 
-func (p *provisioningProvider) AcquireHTTPClient(context.Context, sandbox.SandboxRef, []byte, []string) (*transport.HTTPClientLease, error) {
+func (p *provisioningProvider) AcquireHTTPClient(context.Context, sandbox.SandboxRef, []byte, []string, sandbox.Use) (*transport.HTTPClientLease, error) {
 	if !p.ready.Load() {
 		return nil, sandbox.ErrNotFound
 	}
@@ -95,12 +96,12 @@ func attachWaitFixture(t *testing.T) (*Service, *provisioningProvider) {
 // The launcher creates a sandbox and attaches to it immediately, which is the
 // whole point of ADR 0039: the attach lands while the sandbox is still being
 // provisioned and waits for it instead of being told "sandbox not found".
-func TestAwaitSandboxHTTPClientWaitsForProvisioning(t *testing.T) {
+func TestAnActionWaitsForProvisioning(t *testing.T) {
 	service, provider := attachWaitFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if _, _, err := service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil); !errors.Is(err, sandbox.ErrNotFound) {
+	if _, _, err := service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil, services.SandboxRead); !errors.Is(err, sandbox.ErrNotFound) {
 		t.Fatalf("acquire on a provisioning sandbox = %v, want %v", err, sandbox.ErrNotFound)
 	}
 
@@ -110,7 +111,7 @@ func TestAwaitSandboxHTTPClientWaitsForProvisioning(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		lease, _, err := service.AwaitSandboxHTTPClient(ctx, "project-1", "sb-1", nil)
+		lease, _, err := service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil, services.SandboxAction("exec attach"))
 		done <- result{lease: lease, err: err}
 	}()
 
@@ -149,7 +150,7 @@ func TestAwaitSandboxHTTPClientWaitsForProvisioning(t *testing.T) {
 // traffic until its healthcheck passes. Only the driver sees that, and an
 // attach landing then waits for the host rather than failing with "health check
 // is starting".
-func TestAwaitSandboxHTTPClientWaitsForAPoolHostComingUp(t *testing.T) {
+func TestAnActionWaitsForAPoolHostComingUp(t *testing.T) {
 	service, provider := attachWaitFixture(t)
 	provider.ready.Store(true)
 	provider.hostDown.Store(true)
@@ -167,7 +168,7 @@ func TestAwaitSandboxHTTPClientWaitsForAPoolHostComingUp(t *testing.T) {
 
 	// A caller that cannot wait is told the same thing the pool row would
 	// have told it: a conflict, not a server error.
-	_, _, err = service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil)
+	_, _, err = service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil, services.SandboxRead)
 	if !errors.Is(err, sandbox.ErrPoolNotReachable) {
 		t.Fatalf("acquire on a pool host coming up = %v, want %v", err, sandbox.ErrPoolNotReachable)
 	}
@@ -178,7 +179,7 @@ func TestAwaitSandboxHTTPClientWaitsForAPoolHostComingUp(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := service.AwaitSandboxHTTPClient(ctx, "project-1", "sb-1", nil)
+		_, _, err := service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil, services.SandboxAction("exec attach"))
 		done <- err
 	}()
 
@@ -203,7 +204,7 @@ func TestAwaitSandboxHTTPClientWaitsForAPoolHostComingUp(t *testing.T) {
 // judge's pool reads not ready for up to a heartbeat. The judge is reached by
 // the server itself, and it waits out that window instead of refusing the
 // credential it was asked about.
-func TestAwaitSandboxHTTPClientForServerWaitsForAPoolHeartbeat(t *testing.T) {
+func TestAServerActionWaitsForAPoolHeartbeat(t *testing.T) {
 	service, provider := attachWaitFixture(t)
 	provider.ready.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -221,14 +222,14 @@ func TestAwaitSandboxHTTPClientForServerWaitsForAPoolHeartbeat(t *testing.T) {
 		t.Fatalf("begin pool health checks: %v", err)
 	}
 
-	_, _, err = service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil)
+	_, _, err = service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil, services.SandboxRead)
 	if !errors.Is(err, sandbox.ErrPoolNotReachable) {
 		t.Fatalf("acquire before the first heartbeat = %v, want %v", err, sandbox.ErrPoolNotReachable)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		lease, _, err := service.AwaitSandboxHTTPClientForServer(ctx, "project-1", "sb-1", []string{poolagentauth.ScopeJudgeRun})
+		lease, _, err := service.AcquireSandboxHTTPClientForServer(ctx, "project-1", "sb-1", []string{poolagentauth.ScopeJudgeRun}, services.SandboxAction("judge"))
 		if lease != nil {
 			lease.Release()
 		}
@@ -258,7 +259,7 @@ func TestAwaitSandboxHTTPClientForServerWaitsForAPoolHeartbeat(t *testing.T) {
 // same answer the stall budget and the host ceiling give. For the judge it is
 // all a discobox learns about why its credential did not go out, and "context
 // deadline exceeded" would tell it nothing.
-func TestAwaitSandboxHTTPClientAnswersADeadlineWithTheRefusal(t *testing.T) {
+func TestAnActionAnswersADeadlineWithTheRefusal(t *testing.T) {
 	service, provider := attachWaitFixture(t)
 	provider.ready.Store(true)
 	ctx := context.Background()
@@ -277,7 +278,7 @@ func TestAwaitSandboxHTTPClientAnswersADeadlineWithTheRefusal(t *testing.T) {
 
 	waitCtx, cancel := context.WithTimeout(ctx, 2*sandboxReachablePollInterval)
 	defer cancel()
-	_, _, err = service.AwaitSandboxHTTPClientForServer(waitCtx, "project-1", "sb-1", []string{poolagentauth.ScopeJudgeRun})
+	_, _, err = service.AcquireSandboxHTTPClientForServer(waitCtx, "project-1", "sb-1", []string{poolagentauth.ScopeJudgeRun}, services.SandboxAction("judge"))
 	if !errors.Is(err, sandbox.ErrPoolNotReachable) {
 		t.Fatalf("await past its deadline = %v, want the pool's refusal (%v)", err, sandbox.ErrPoolNotReachable)
 	}
@@ -285,7 +286,7 @@ func TestAwaitSandboxHTTPClientAnswersADeadlineWithTheRefusal(t *testing.T) {
 	// A cancel is the caller leaving, and is told so.
 	cancelCtx, cancelNow := context.WithCancel(ctx)
 	cancelNow()
-	_, _, err = service.AwaitSandboxHTTPClientForServer(cancelCtx, "project-1", "sb-1", []string{poolagentauth.ScopeJudgeRun})
+	_, _, err = service.AcquireSandboxHTTPClientForServer(cancelCtx, "project-1", "sb-1", []string{poolagentauth.ScopeJudgeRun}, services.SandboxAction("judge"))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("await after a cancel = %v, want %v", err, context.Canceled)
 	}
@@ -296,7 +297,7 @@ func TestAwaitSandboxHTTPClientAnswersADeadlineWithTheRefusal(t *testing.T) {
 // reads as movement, so a host that is never coming back renews the stall
 // budget for as long as the pool keeps reconciling. What comes back is the
 // host's own refusal, which names what never became true — not a deadline.
-func TestAwaitSandboxHTTPClientGivesUpOnAPoolHostAtTheCeiling(t *testing.T) {
+func TestAnActionGivesUpOnAPoolHostAtTheCeiling(t *testing.T) {
 	service, provider := attachWaitFixture(t)
 	provider.ready.Store(true)
 	provider.hostDown.Store(true)
@@ -317,7 +318,7 @@ func TestAwaitSandboxHTTPClientGivesUpOnAPoolHostAtTheCeiling(t *testing.T) {
 	}
 
 	started := time.Now()
-	_, _, err = service.AwaitSandboxHTTPClient(ctx, "project-1", "sb-1", nil)
+	_, _, err = service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil, services.SandboxAction("exec attach"))
 	if !errors.Is(err, sandbox.ErrPoolNotReachable) {
 		t.Fatalf("await at the ceiling = %v, want the host's own refusal (%v)", err, sandbox.ErrPoolNotReachable)
 	}
@@ -337,7 +338,7 @@ func TestAwaitSandboxHTTPClientGivesUpOnAPoolHostAtTheCeiling(t *testing.T) {
 // against an empty workspace, so the wait covers delivery too: `awaiting_source`
 // while the push is outstanding, and an unobserved generation while the
 // reconciler materializes what was pushed.
-func TestAwaitSandboxHTTPClientWaitsForSourceDelivery(t *testing.T) {
+func TestAnActionWaitsForSourceDelivery(t *testing.T) {
 	service, provider := attachWaitFixture(t)
 	provider.ready.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -358,13 +359,13 @@ func TestAwaitSandboxHTTPClientWaitsForSourceDelivery(t *testing.T) {
 
 	// Parked for the push. The plain acquire is happy — that is the hazard.
 	park(model.SandboxStateAwaitingSource, 1, 1)
-	if _, _, err := service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil); err != nil {
+	if _, _, err := service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil, services.SandboxRead); err != nil {
 		t.Fatalf("acquire on a parked sandbox = %v, want success (this is what the wait exists to cover)", err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := service.AwaitSandboxHTTPClient(ctx, "project-1", "sb-1", nil)
+		_, _, err := service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil, services.SandboxAction("exec attach"))
 		done <- err
 	}()
 
@@ -560,13 +561,13 @@ func TestSandboxCanBecomeReachableAnswersTerminalConditions(t *testing.T) {
 
 // A client that goes away takes its wait with it, rather than holding a
 // request open until the stall budget runs out.
-func TestAwaitSandboxHTTPClientEndsWithItsCaller(t *testing.T) {
+func TestAnActionEndsWithItsCaller(t *testing.T) {
 	service, _ := attachWaitFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := service.AwaitSandboxHTTPClient(ctx, "project-1", "sb-1", nil)
+		_, _, err := service.AcquireSandboxHTTPClient(ctx, "project-1", "sb-1", nil, services.SandboxAction("exec attach"))
 		done <- err
 	}()
 	time.Sleep(50 * time.Millisecond)

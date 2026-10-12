@@ -10,6 +10,7 @@ type ProviderManager = contract.ProviderManager
 type CreateOptions = contract.CreateOptions
 type UpdateOptions = contract.UpdateOptions
 type SandboxRef = contract.SandboxRef
+type Use = contract.Use
 type Sandbox = contract.Sandbox
 type Status = contract.Status
 type AssignedPort = contract.AssignedPort

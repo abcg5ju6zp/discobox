@@ -12318,6 +12318,52 @@ func (o OptSandboxAgentResourceUsage) Or(d SandboxAgentResourceUsage) SandboxAge
 	return d
 }
 
+// NewOptSandboxAutomaticRepair returns new OptSandboxAutomaticRepair with value set to v.
+func NewOptSandboxAutomaticRepair(v SandboxAutomaticRepair) OptSandboxAutomaticRepair {
+	return OptSandboxAutomaticRepair{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptSandboxAutomaticRepair is optional SandboxAutomaticRepair.
+type OptSandboxAutomaticRepair struct {
+	Value SandboxAutomaticRepair
+	Set   bool
+}
+
+// IsSet returns true if OptSandboxAutomaticRepair was set.
+func (o OptSandboxAutomaticRepair) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptSandboxAutomaticRepair) Reset() {
+	var v SandboxAutomaticRepair
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptSandboxAutomaticRepair) SetTo(v SandboxAutomaticRepair) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptSandboxAutomaticRepair) Get() (v SandboxAutomaticRepair, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptSandboxAutomaticRepair) Or(d SandboxAutomaticRepair) SandboxAutomaticRepair {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptSandboxCPUConsumption returns new OptSandboxCPUConsumption with value set to v.
 func NewOptSandboxCPUConsumption(v SandboxCPUConsumption) OptSandboxCPUConsumption {
 	return OptSandboxCPUConsumption{
@@ -19987,6 +20033,78 @@ func (s *SandboxAgentStatusToken) SetToken(val string) {
 	s.Token = val
 }
 
+// The last repair recorded for this sandbox without anybody asking for one: an
+// action found it failed with no container on its pool, and it was rebuilt once.
+// While displayState is repairing and generation is this record's, the repair is
+// still running. It is kept after the repair lands, with landedAt set, because
+// landing clears the failure it answered, and is replaced by the next one. A
+// sandbox in error on this record's generation with no landedAt is one whose
+// automatic repair failed, and it is not repaired automatically again until an
+// explicit repair or upgrade.
+// Ref: #/components/schemas/SandboxAutomaticRepair
+type SandboxAutomaticRepair struct {
+	// Generation the repair was recorded as.
+	Generation int64 `json:"generation"`
+	// When the repair was recorded.
+	StartedAt time.Time `json:"startedAt"`
+	// The use of the sandbox that triggered the repair, such as "exec attach", "ssh" or "start".
+	Trigger string `json:"trigger"`
+	// The failure the repair answers.
+	Failure OptString `json:"failure"`
+	// When the repair landed. Absent while it is running, and when it failed.
+	LandedAt OptDateTime `json:"landedAt"`
+}
+
+// GetGeneration returns the value of Generation.
+func (s *SandboxAutomaticRepair) GetGeneration() int64 {
+	return s.Generation
+}
+
+// GetStartedAt returns the value of StartedAt.
+func (s *SandboxAutomaticRepair) GetStartedAt() time.Time {
+	return s.StartedAt
+}
+
+// GetTrigger returns the value of Trigger.
+func (s *SandboxAutomaticRepair) GetTrigger() string {
+	return s.Trigger
+}
+
+// GetFailure returns the value of Failure.
+func (s *SandboxAutomaticRepair) GetFailure() OptString {
+	return s.Failure
+}
+
+// GetLandedAt returns the value of LandedAt.
+func (s *SandboxAutomaticRepair) GetLandedAt() OptDateTime {
+	return s.LandedAt
+}
+
+// SetGeneration sets the value of Generation.
+func (s *SandboxAutomaticRepair) SetGeneration(val int64) {
+	s.Generation = val
+}
+
+// SetStartedAt sets the value of StartedAt.
+func (s *SandboxAutomaticRepair) SetStartedAt(val time.Time) {
+	s.StartedAt = val
+}
+
+// SetTrigger sets the value of Trigger.
+func (s *SandboxAutomaticRepair) SetTrigger(val string) {
+	s.Trigger = val
+}
+
+// SetFailure sets the value of Failure.
+func (s *SandboxAutomaticRepair) SetFailure(val OptString) {
+	s.Failure = val
+}
+
+// SetLandedAt sets the value of LandedAt.
+func (s *SandboxAutomaticRepair) SetLandedAt(val OptDateTime) {
+	s.LandedAt = val
+}
+
 // Both the cumulative counter and the rate - the counter so a consumer can difference across any two
 // reports it kept, the rate so it does not have to.
 // Ref: #/components/schemas/SandboxCPUConsumption
@@ -22962,6 +23080,8 @@ type SandboxRuntime struct {
 	// User-facing lifecycle state, composed from the existence state, the runtime state,
 	// and whether the existence generations agree. This is the field
 	// clients should read: it is the one answer to "what is this sandbox doing".
+	// repairing is a repair, typed or automatic, that has been recorded and has not
+	// landed yet; automaticRepair says what triggered an automatic one.
 	DisplayState OptSandboxRuntimeDisplayState `json:"displayState"`
 	// Error from the generation currently recorded in observedGeneration. Cleared by every accepted
 	// intent.
@@ -22995,8 +23115,9 @@ type SandboxRuntime struct {
 	SourceDeliveredAt OptDateTime `json:"sourceDeliveredAt"`
 	// When the hosting pool agent last reported this sandbox's runtime state. A runtime
 	// state whose report is old is one nobody has confirmed recently.
-	StateReportedAt OptDateTime       `json:"stateReportedAt"`
-	Upgrade         OptSandboxUpgrade `json:"upgrade"`
+	StateReportedAt OptDateTime               `json:"stateReportedAt"`
+	Upgrade         OptSandboxUpgrade         `json:"upgrade"`
+	AutomaticRepair OptSandboxAutomaticRepair `json:"automaticRepair"`
 }
 
 // GetAgentStatus returns the value of AgentStatus.
@@ -23104,6 +23225,11 @@ func (s *SandboxRuntime) GetUpgrade() OptSandboxUpgrade {
 	return s.Upgrade
 }
 
+// GetAutomaticRepair returns the value of AutomaticRepair.
+func (s *SandboxRuntime) GetAutomaticRepair() OptSandboxAutomaticRepair {
+	return s.AutomaticRepair
+}
+
 // SetAgentStatus sets the value of AgentStatus.
 func (s *SandboxRuntime) SetAgentStatus(val OptNilSandboxRuntimeAgentStatus) {
 	s.AgentStatus = val
@@ -23207,6 +23333,11 @@ func (s *SandboxRuntime) SetStateReportedAt(val OptDateTime) {
 // SetUpgrade sets the value of Upgrade.
 func (s *SandboxRuntime) SetUpgrade(val OptSandboxUpgrade) {
 	s.Upgrade = val
+}
+
+// SetAutomaticRepair sets the value of AutomaticRepair.
+func (s *SandboxRuntime) SetAutomaticRepair(val OptSandboxAutomaticRepair) {
+	s.AutomaticRepair = val
 }
 
 // Latest sandbox-agent-reported git/session/connection status, pushed periodically by the hosting
@@ -23531,6 +23662,8 @@ func (s *SandboxRuntimeDesiredState) UnmarshalText(data []byte) error {
 // User-facing lifecycle state, composed from the existence state, the runtime state,
 // and whether the existence generations agree. This is the field
 // clients should read: it is the one answer to "what is this sandbox doing".
+// repairing is a repair, typed or automatic, that has been recorded and has not
+// landed yet; automaticRepair says what triggered an automatic one.
 type SandboxRuntimeDisplayState string
 
 const (
@@ -23538,6 +23671,7 @@ const (
 	SandboxRuntimeDisplayStateRunning   SandboxRuntimeDisplayState = "running"
 	SandboxRuntimeDisplayStateStopping  SandboxRuntimeDisplayState = "stopping"
 	SandboxRuntimeDisplayStateStopped   SandboxRuntimeDisplayState = "stopped"
+	SandboxRuntimeDisplayStateRepairing SandboxRuntimeDisplayState = "repairing"
 	SandboxRuntimeDisplayStateArchiving SandboxRuntimeDisplayState = "archiving"
 	SandboxRuntimeDisplayStateArchived  SandboxRuntimeDisplayState = "archived"
 	SandboxRuntimeDisplayStateDeleting  SandboxRuntimeDisplayState = "deleting"
@@ -23552,6 +23686,7 @@ func (SandboxRuntimeDisplayState) AllValues() []SandboxRuntimeDisplayState {
 		SandboxRuntimeDisplayStateRunning,
 		SandboxRuntimeDisplayStateStopping,
 		SandboxRuntimeDisplayStateStopped,
+		SandboxRuntimeDisplayStateRepairing,
 		SandboxRuntimeDisplayStateArchiving,
 		SandboxRuntimeDisplayStateArchived,
 		SandboxRuntimeDisplayStateDeleting,
@@ -23570,6 +23705,8 @@ func (s SandboxRuntimeDisplayState) MarshalText() ([]byte, error) {
 	case SandboxRuntimeDisplayStateStopping:
 		return []byte(s), nil
 	case SandboxRuntimeDisplayStateStopped:
+		return []byte(s), nil
+	case SandboxRuntimeDisplayStateRepairing:
 		return []byte(s), nil
 	case SandboxRuntimeDisplayStateArchiving:
 		return []byte(s), nil
@@ -23600,6 +23737,9 @@ func (s *SandboxRuntimeDisplayState) UnmarshalText(data []byte) error {
 		return nil
 	case SandboxRuntimeDisplayStateStopped:
 		*s = SandboxRuntimeDisplayStateStopped
+		return nil
+	case SandboxRuntimeDisplayStateRepairing:
+		*s = SandboxRuntimeDisplayStateRepairing
 		return nil
 	case SandboxRuntimeDisplayStateArchiving:
 		*s = SandboxRuntimeDisplayStateArchiving

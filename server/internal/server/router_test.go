@@ -637,7 +637,11 @@ func TestSandboxExecProxyErrorUsesJSON(t *testing.T) {
 	}
 }
 
-func TestSandboxExecCreateWaitOptionUsesAwait(t *testing.T) {
+// Every route onto a sandbox's agent names what the request is for, and that
+// is the one table of which of them starts a stopped sandbox and which may
+// repair one (ADR 26-10-12-711 §1). A route missing here is one nobody
+// classified.
+func TestSandboxAgentRoutesNameTheirUse(t *testing.T) {
 	stubs := newRouterTestServices()
 	stubs.sandboxes["sandbox-1"] = model.Sandbox{
 		ID: "sandbox-1", ProjectID: testDefaultProjectID,
@@ -658,18 +662,58 @@ func TestSandboxExecCreateWaitOptionUsesAwait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new router: %v", err)
 	}
-	path := "/api/projects/" + testDefaultProjectID + "/sandboxes/sandbox-1/execs"
+	action := func(trigger string) services.SandboxUse { return services.SandboxAction(trigger) }
+	attach := action("exec attach")
+	attach.Attach = true
+	base := "/api/projects/" + testDefaultProjectID + "/sandboxes/sandbox-1"
 	for _, tc := range []struct {
-		query     string
-		wantAwait int
+		method, path string
+		want         services.SandboxUse
 	}{
-		{"", 0}, {"?wait=ready", 1},
+		{http.MethodGet, "/harness-hooks", services.SandboxObserve},
+		{http.MethodGet, "/exec-events", services.SandboxObserve},
+		{http.MethodGet, "/execs/e1/screen", services.SandboxObserve},
+		{http.MethodPost, "/execs/e1/wait", services.SandboxObserve},
+		{http.MethodGet, "/execs", services.SandboxInspect},
+		{http.MethodGet, "/execs/e1", services.SandboxInspect},
+		{http.MethodGet, "/execs/e1/logs", services.SandboxRead},
+		{http.MethodGet, "/execs/e1/events", services.SandboxRead},
+		{http.MethodGet, "/execs/e1/resources", services.SandboxRead},
+		{http.MethodGet, "/execs/e1/resources/history", services.SandboxRead},
+		{http.MethodGet, "/execs/e1/resources/stream", services.SandboxRead},
+		{http.MethodGet, "/services", services.SandboxInspect},
+		{http.MethodGet, "/services/web", services.SandboxInspect},
+		{http.MethodGet, "/services/web/logs", services.SandboxRead},
+		{http.MethodGet, "/tools", services.SandboxInspect},
+		{http.MethodPost, "/execs", action("exec create")},
+		// The wait option predates every action waiting; it is still taken,
+		// and still not forwarded.
+		{http.MethodPost, "/execs?wait=ready", action("exec create")},
+		{http.MethodDelete, "/execs/e1", action("exec delete")},
+		{http.MethodPost, "/execs/e1/input", action("exec input")},
+		{http.MethodPost, "/execs/e1/start", action("exec start")},
+		{http.MethodPost, "/execs/e1/attach", attach},
+		{http.MethodGet, "/execs/e1/attach", attach},
+		{http.MethodPost, "/services/web/start", action("service start")},
+		{http.MethodPost, "/services/web/stop", action("service stop")},
+		{http.MethodPost, "/services/web/restart", action("service restart")},
+		// An id spelled like an operation is still an id: the use is the
+		// route's, not the path's last word.
+		{http.MethodGet, "/services/attach", services.SandboxInspect},
+		{http.MethodGet, "/services/wait", services.SandboxInspect},
+		{http.MethodGet, "/execs/screen", services.SandboxInspect},
+		{http.MethodDelete, "/execs/attach", action("exec delete")},
 	} {
+		stubs.sandboxUses = nil
 		resp := httptest.NewRecorder()
-		req := scopedUserRequest(context.Background(), http.MethodPost, path+tc.query, nil, poolagentauth.ScopeExecWrite)
+		req := scopedUserRequest(context.Background(), tc.method, base+tc.path, nil, poolagentauth.ScopeExecWrite, poolagentauth.ScopeExecRead)
 		router.ServeHTTP(resp, req)
-		if resp.Code != http.StatusCreated || stubs.sandboxAwaitCalls != tc.wantAwait {
-			t.Fatalf("POST %s: status=%d await calls=%d, want 201 and %d", tc.query, resp.Code, stubs.sandboxAwaitCalls, tc.wantAwait)
+		if resp.Code != http.StatusCreated {
+			t.Errorf("%s %s: status = %d, body = %s", tc.method, tc.path, resp.Code, resp.Body.String())
+			continue
+		}
+		if len(stubs.sandboxUses) != 1 || stubs.sandboxUses[0] != tc.want {
+			t.Errorf("%s %s: acquired as %+v, want %+v", tc.method, tc.path, stubs.sandboxUses, tc.want)
 		}
 	}
 }

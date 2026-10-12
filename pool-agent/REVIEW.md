@@ -147,6 +147,17 @@ archive, delete, import and stop, so waiting on it (or failing a `TryLock`)
 stalls healthy traffic behind unrelated work, and re-reading the container
 after it adds a Docker round trip to every request.
 
+## What starts a sandbox is not decided here
+
+A sandbox-directed route is wrapped in `onUse` and nothing else. Whether it
+starts a stopped sandbox is the `use` claim on the request's token, which the
+control plane sets where it classifies the route (ADR 26-10-12-711 §2). Do not
+give a route its own start-or-refuse choice here: that is a second table, and
+two tables drift. Do not read a token with no mark as leave to start one
+either. And do
+not wait here for a container that is not there: only the control plane knows
+whether a rebuild is coming, and it is the tier that waits.
+
 ## A missing container is not a missing sandbox
 
 Never destroy a sandbox's durable tree because no container carries its ID. A

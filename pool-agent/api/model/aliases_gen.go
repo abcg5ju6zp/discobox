@@ -26,6 +26,7 @@ type PoolSandboxListResponse = poolagentapi.PoolSandboxListResponse
 type PoolSandboxOperationAccepted = poolagentapi.PoolSandboxOperationAccepted
 type PoolSandboxOperationRequest = poolagentapi.PoolSandboxOperationRequest
 type PoolSandboxPort = poolagentapi.PoolSandboxPort
+type PoolSandboxRunning = poolagentapi.PoolSandboxRunning
 type PoolSandboxRuntime = poolagentapi.PoolSandboxRuntime
 type PoolSandboxUpdateRequest = poolagentapi.PoolSandboxUpdateRequest
 type PoolSyncRequest = poolagentapi.PoolSyncRequest

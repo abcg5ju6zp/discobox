@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -206,6 +207,68 @@ func TestSessionExecStartsTheExecAndStreamsOutput(t *testing.T) {
 		t.Fatalf("shellCommandLine = %q, want %q", cmdLine, "echo hello")
 	}
 	assertHomeWorkdir(t, agent.createBody)
+}
+
+// A session that caused a repair, or waited on one, says so on its stderr
+// before the command's
+// own output: the repair landing cleared the failure from the sandbox, so this
+// is the one place the person who triggered it is told their container was
+// rebuilt, and why (ADR 26-10-12-711 §8). It is an action named "ssh". A
+// sandbox repaired before the session began says nothing.
+func TestSessionSaysARepairItCaused(t *testing.T) {
+	for name, tc := range map[string]struct {
+		landedAgo  time.Duration
+		wantNotice bool
+	}{
+		// The repair may have been recorded by another request; what makes it
+		// this session's to mention is having waited for it to land.
+		"landed while this session waited": {landedAgo: -time.Minute, wantNotice: true},
+		"landed before this session":       {landedAgo: time.Hour, wantNotice: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent := newFakeExecAgent("hello\n", 0)
+			h, sandboxID := newExecSessionHarness(t, agent)
+			acquire := h.sandboxes.acquireResult
+			h.sandboxes.acquireResult = func() (*services.HTTPClientLease, *model.Sandbox, error) {
+				lease, sandbox, err := acquire()
+				sandbox.Generation = 4
+				landed := time.Now().Add(-tc.landedAgo)
+				sandbox.AutomaticRepair = &model.AutomaticRepair{
+					Generation: 4, StartedAt: time.Now().Add(-2 * time.Hour), LandedAt: &landed,
+					Trigger: "http", Failure: "create failed: EOF",
+				}
+				return lease, sandbox, err
+			}
+			signer := newTestSigner(t)
+			writeAuthorizedKeys(t, h.server.dataDir, signer)
+			client, err := h.dial(sandboxID, signer)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer client.Close()
+			session, err := client.NewSession()
+			if err != nil {
+				t.Fatalf("new session: %v", err)
+			}
+			defer session.Close()
+			var stderr bytes.Buffer
+			session.Stderr = &stderr
+			out, err := session.Output("echo hello")
+			if err != nil || string(out) != "hello\n" {
+				t.Fatalf("stdout = %q, err = %v; want the command's own output untouched", out, err)
+			}
+			notice := stderr.String()
+			if said := strings.Contains(notice, "was repaired") && strings.Contains(notice, "create failed: EOF"); said != tc.wantNotice {
+				t.Fatalf("stderr = %q, want a repair notice: %v", notice, tc.wantNotice)
+			}
+
+			h.sandboxes.mu.Lock()
+			defer h.sandboxes.mu.Unlock()
+			if calls := h.sandboxes.acquireCalls; len(calls) != 1 || calls[0].use != services.SandboxAction("ssh") {
+				t.Fatalf("acquire calls = %+v, want one, as the action \"ssh\"", calls)
+			}
+		})
+	}
 }
 
 // assertHomeWorkdir pins the workdir every session channel must request. SSH

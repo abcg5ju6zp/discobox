@@ -35,7 +35,7 @@ import (
 // Leases is the sandbox service's half of reaching a discobox's agent. It is
 // named here rather than taken whole because this package makes one call.
 type Leases interface {
-	AwaitSandboxHTTPClientForServer(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error)
+	AcquireSandboxHTTPClientForServer(ctx context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error)
 }
 
 // SetLeases installs it. A judge that cannot be reached is a judge that
@@ -405,12 +405,13 @@ func (s *Service) putSandbox(ctx context.Context, project *model.Project, judgeS
 	// stopped judge is part of how long it took to answer.
 	start := time.Now()
 	// A judge that is about to be reachable — its pool not yet heard from
-	// since this server started, or its host still coming back — is waited on
-	// rather than refused, for a bound of its own. Every deadline on the
+	// since this server started, its host still coming back, or the judge
+	// itself stopped and being started — is waited on rather than refused,
+	// for a bound of its own. Every deadline on the
 	// exchange allows for it on top of the judge's own time, so a first round
 	// that waits the whole of it still leaves the judge all of judge.Timeout.
 	reachCtx, cancelReach := context.WithTimeout(ctx, judge.ReachWait)
-	lease, sandboxModel, err := s.leases.AwaitSandboxHTTPClientForServer(reachCtx, project.ID, judgeSandbox.ID, []string{poolagentauth.ScopeJudgeRun})
+	lease, sandboxModel, err := s.leases.AcquireSandboxHTTPClientForServer(reachCtx, project.ID, judgeSandbox.ID, []string{poolagentauth.ScopeJudgeRun}, services.SandboxAction("judge"))
 	cancelReach()
 	if err != nil {
 		return answered{}, err

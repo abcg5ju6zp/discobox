@@ -8,6 +8,7 @@ import (
 
 	"github.com/discobox-ai/discobox/server/internal/auth"
 	poolagentauth "github.com/discobox-ai/discobox/server/internal/auth/poolagent"
+	services "github.com/discobox-ai/discobox/server/internal/services"
 )
 
 func TestAuthorizeRequestedScopesRequiresHeldScopes(t *testing.T) {
@@ -71,16 +72,18 @@ func TestAuthorizeRequestedScopesAllowsASandboxOnlyAPushAndItsTerminals(t *testi
 	}
 }
 
-// A discobox never attaches to another, nor waits on an exec it created to use
-// at once (ADR 26-10-01-397 §2): the waiting acquire refuses it before asking
-// anything of the sandbox, whatever scopes it names.
-func TestAwaitSandboxHTTPClientRefusesASandbox(t *testing.T) {
+// A discobox never attaches to another (ADR 26-10-01-397 §2): an acquire for an
+// attach refuses it before asking anything of the sandbox, whatever scopes it
+// names.
+func TestAcquireForAnAttachRefusesASandbox(t *testing.T) {
 	ctx := auth.WithPrincipal(context.Background(), auth.Principal{
 		Type: auth.PrincipalTypeSandbox, SandboxID: "sbx-lead", ProjectID: "proj-1", UserID: "user-1",
 	})
-	_, _, err := (&Service{}).AwaitSandboxHTTPClient(ctx, "proj-1", "sbx-worker", []string{poolagentauth.ScopeExecWrite, poolagentauth.ScopeExecRead})
+	attach := services.SandboxAction("exec attach")
+	attach.Attach = true
+	_, _, err := (&Service{}).AcquireSandboxHTTPClient(ctx, "proj-1", "sbx-worker", []string{poolagentauth.ScopeExecWrite, poolagentauth.ScopeExecRead}, attach)
 	var statusErr interface{ StatusCode() int }
 	if !errors.As(err, &statusErr) || statusErr.StatusCode() != http.StatusForbidden {
-		t.Fatalf("await for a sandbox: err = %v, want forbidden", err)
+		t.Fatalf("attach by a sandbox: err = %v, want forbidden", err)
 	}
 }

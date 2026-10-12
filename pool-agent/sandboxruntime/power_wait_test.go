@@ -14,12 +14,11 @@ import (
 	"github.com/moby/moby/client"
 )
 
-// Tier 2 of the attach wait (ADR 0039) waits for a container to come back only
-// for a sandbox this pool is actually holding. The tree is what says so: it is
-// the durable half of a sandbox and outlives the container a rebuild replaces,
-// so a sandbox mid-rebuild is worth waiting for while an id this pool has never
-// seen is not — waiting on that one would stall every sandbox-directed route
-// for the full budget before failing.
+// A sandbox with no container is one this pool holds only when its tree is
+// here. The tree is what says so: it is the durable half of a sandbox and
+// outlives the container a rebuild replaces, so a sandbox mid-rebuild is
+// answered as having no container, which the control plane repairs or waits
+// out, while an id this pool has never seen is not found.
 func TestHostsSandboxTellsARebuildFromAnUnknownID(t *testing.T) {
 	state := withTestRoot(t)
 	runtime := &DockerSandboxRuntime{root: state, projectID: "proj_a", poolID: "pool_a"}
@@ -87,7 +86,7 @@ func TestEnsureSandboxRunningWaitsForABootUnderWay(t *testing.T) {
 		t.Fatal("a sandbox mid-boot does not read as booting")
 	}
 	done := make(chan error, 1)
-	go func() { done <- runtime.EnsureSandboxRunning(context.Background(), "sbx_1", true) }()
+	go func() { done <- runtime.EnsureSandboxRunning(context.Background(), "sbx_1") }()
 
 	select {
 	case err := <-done:
@@ -119,7 +118,7 @@ func TestEnsureSandboxRunningDoesNotWaitOnARunningSandbox(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := runtime.EnsureSandboxRunning(ctx, "sbx_1", true); err != nil {
+	if err := runtime.EnsureSandboxRunning(ctx, "sbx_1"); err != nil {
 		t.Fatalf("EnsureSandboxRunning = %v, want nil at once", err)
 	}
 }
@@ -174,7 +173,7 @@ func TestEnsureSandboxRunningWaitsForABootFoundUnderTheLock(t *testing.T) {
 	boot := runtime.beginBoot("sbx_1")
 
 	done := make(chan error, 1)
-	go func() { done <- runtime.EnsureSandboxRunning(context.Background(), "sbx_1", true) }()
+	go func() { done <- runtime.EnsureSandboxRunning(context.Background(), "sbx_1") }()
 	select {
 	case err := <-done:
 		t.Fatalf("EnsureSandboxRunning returned %v while the boot was still under way", err)

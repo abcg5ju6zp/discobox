@@ -231,7 +231,7 @@ func TestReadSandboxInventoryRequiresTheReadsScope(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, err := service.ReadSandboxInventory(ctx, "project-1", "sb-1", execReadScope, services.InventoryRead{Part: services.InventoryExecs})
 			wantStatus(t, err, http.StatusForbidden, "")
-			_, _, err = service.AcquireRunningSandboxHTTPClient(ctx, "project-1", "sb-1", execReadScope)
+			_, _, err = service.AcquireRunningSandboxHTTPClient(ctx, "project-1", "sb-1", execReadScope, services.SandboxInspect)
 			wantStatus(t, err, http.StatusForbidden, "")
 		})
 	}
@@ -249,13 +249,13 @@ func TestAcquireRunningSandboxHTTPClientRefusesOnlyAStoppedSandboxOnAnUnreachabl
 		if state != "" {
 			reportRuntimeState(t, service, state)
 		}
-		if lease, _, err := service.AcquireRunningSandboxHTTPClient(metaCaller(), "project-1", "sb-1", execReadScope); err != nil || lease == nil {
+		if lease, _, err := service.AcquireRunningSandboxHTTPClient(metaCaller(), "project-1", "sb-1", execReadScope, services.SandboxInspect); err != nil || lease == nil {
 			t.Fatalf("sandbox recorded as %q on a reachable pool: lease = %v, err = %v; want a client", state, lease, err)
 		}
 	}
 
 	provider.hostDown.Store(true)
-	lease, sandboxModel, err := service.AcquireRunningSandboxHTTPClient(metaCaller(), "project-1", "sb-1", execReadScope)
+	lease, sandboxModel, err := service.AcquireRunningSandboxHTTPClient(metaCaller(), "project-1", "sb-1", execReadScope, services.SandboxInspect)
 	if !errors.Is(err, sandbox.ErrNotRunning) || lease != nil {
 		t.Fatalf("stopped sandbox, pool unreachable: lease = %v, err = %v; want sandbox.ErrNotRunning and no client", lease, err)
 	}
@@ -267,7 +267,7 @@ func TestAcquireRunningSandboxHTTPClientRefusesOnlyAStoppedSandboxOnAnUnreachabl
 	// A running sandbox on an unreachable pool has no answer to give: its
 	// inventory is not what it would say now.
 	reportRuntimeState(t, service, model.SandboxRuntimeStateRunning)
-	_, _, err = service.AcquireRunningSandboxHTTPClient(metaCaller(), "project-1", "sb-1", execReadScope)
+	_, _, err = service.AcquireRunningSandboxHTTPClient(metaCaller(), "project-1", "sb-1", execReadScope, services.SandboxInspect)
 	if err == nil || errors.Is(err, sandbox.ErrNotRunning) || !errors.Is(err, sandbox.ErrPoolNotReachable) {
 		t.Fatalf("running sandbox, pool unreachable: err = %v; want the pool's unreachability", err)
 	}

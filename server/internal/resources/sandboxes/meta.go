@@ -40,7 +40,7 @@ func (s *Service) UpdateSandboxMeta(ctx context.Context, projectID, sandboxID st
 	if err := change.Check(); err != nil {
 		return nil, apperrors.NewStatusError(http.StatusBadRequest, err.Error())
 	}
-	lease, sandboxModel, err := s.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, []string{poolagentauth.ScopeExecWrite})
+	lease, sandboxModel, err := s.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, []string{poolagentauth.ScopeExecWrite}, services.SandboxAction("meta write"))
 	if err != nil {
 		return nil, err
 	}

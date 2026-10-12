@@ -246,10 +246,12 @@ type Runtime interface {
 	StopSandbox(ctx context.Context, sandboxID string, req *workerapimodel.PoolSandboxOperationRequest) error
 	RestartSandbox(ctx context.Context, sandboxID string, req *workerapimodel.PoolSandboxOperationRequest) error
 	// EnsureSandboxRunning starts a stopped sandbox on demand, for the
-	// sandbox-directed routes (ADR 0017 §12). awaitContainer says whether a
-	// sandbox this pool holds without a container is waited on as a rebuild
-	// in progress (ADR 0039 tier 2) or answered at once with ErrNoContainer.
-	EnsureSandboxRunning(ctx context.Context, sandboxID string, awaitContainer bool) error
+	// sandbox-directed routes and the control plane's own ensure
+	// (ADR 0017 §12, ADR 26-10-12-711 §2), and returns once its agent answers.
+	// A sandbox this pool holds without a container is answered at once with
+	// ErrNoContainer: whether a rebuild is coming is the control plane's to
+	// know.
+	EnsureSandboxRunning(ctx context.Context, sandboxID string) error
 	// SandboxBooting reports whether the sandbox's container is up but its
 	// sandbox agent has not answered yet: Docker calls it running, and nothing
 	// in it can be reached.
@@ -2621,7 +2623,7 @@ func (r *MemorySandboxRuntime) RestartSandbox(ctx context.Context, sandboxID str
 	return r.StartSandbox(ctx, sandboxID, req)
 }
 
-func (r *MemorySandboxRuntime) EnsureSandboxRunning(ctx context.Context, sandboxID string, _ bool) error {
+func (r *MemorySandboxRuntime) EnsureSandboxRunning(ctx context.Context, sandboxID string) error {
 	return r.StartSandbox(ctx, sandboxID, nil)
 }
 

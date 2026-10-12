@@ -104,7 +104,7 @@ func TestWorktreeRouteRefusesASandboxThatCannotStart(t *testing.T) {
 	registerSandboxGitRoutes(router, service)
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/project/p/pool/w/sandboxes/sbx_1/git-repositories/primary.git/info/refs?service=git-upload-pack", nil))
+	router.ServeHTTP(rec, markedRequest(t, http.MethodGet, "/api/project/p/pool/w/sandboxes/sbx_1/git-repositories/primary.git/info/refs?service=git-upload-pack", UseAction))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500; body = %s", rec.Code, rec.Body.String())
 	}

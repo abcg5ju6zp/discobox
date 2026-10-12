@@ -65,6 +65,25 @@ func TestManagerCreatesTrustKeyAndScopedToken(t *testing.T) {
 	if len(scopes) != 1 || scopes[0] != ScopeSandboxRead {
 		t.Fatalf("scopes = %#v", scopes)
 	}
+	// A token that is not for a route into a sandbox carries no use, and the
+	// pool agent starts nothing on its word (ADR 26-10-12-711 §2).
+	if use, err := parsed.GetString("use"); err == nil {
+		t.Fatalf("use = %q on a token minted with none", use)
+	}
+	marked, err := manager.CreateToken(ctx, TokenClaims{
+		ProjectID: "project-1", PoolID: "worker-1", SandboxID: "sandbox-1",
+		Scopes: []string{ScopeSandboxRead}, Use: "action",
+	})
+	if err != nil {
+		t.Fatalf("create marked token: %v", err)
+	}
+	parsedMarked, err := parser.ParseV4Public(publicKey, marked, nil)
+	if err != nil {
+		t.Fatalf("parse marked token: %v", err)
+	}
+	if use, _ := parsedMarked.GetString("use"); use != "action" {
+		t.Fatalf("use = %q, want the use the token was minted for", use)
+	}
 	notBefore, err := parsed.GetTime("nbf")
 	if err != nil {
 		t.Fatalf("nbf claim: %v", err)

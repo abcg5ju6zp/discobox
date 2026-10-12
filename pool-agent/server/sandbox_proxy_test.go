@@ -292,7 +292,16 @@ func dialAddress(address string) sandboxruntime.Dialer {
 	}
 }
 
+// testPoolTokenSigner signs control-plane tokens marked as an action, which is
+// what most routes under test are reached by.
 func testPoolTokenSigner(t *testing.T) (string, func(projectID, poolID, sandboxID string, scopes ...string) string) {
+	t.Helper()
+	return testPoolTokenSignerFor(t, UseAction)
+}
+
+// testPoolTokenSignerFor signs control-plane tokens marked with use, or with
+// no mark when use is empty.
+func testPoolTokenSignerFor(t *testing.T, use string) (string, func(projectID, poolID, sandboxID string, scopes ...string) string) {
 	t.Helper()
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -314,6 +323,9 @@ func testPoolTokenSigner(t *testing.T) (string, func(projectID, poolID, sandboxI
 		token.SetString("sandbox_id", sandboxID)
 		if err := token.Set("scopes", scopes); err != nil {
 			t.Fatalf("set scopes: %v", err)
+		}
+		if use != "" {
+			token.SetString("use", use)
 		}
 		return token.V4Sign(secretKey, nil)
 	}
