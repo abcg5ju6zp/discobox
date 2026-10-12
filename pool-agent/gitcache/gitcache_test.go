@@ -132,6 +132,16 @@ func nameWithoutSending(t *testing.T, s *Store, path, caller, sandboxID, slug, o
 	return string(out), err
 }
 
+// hasBranches is Store.HasBranches for a cache that reads.
+func hasBranches(t *testing.T, s *Store, path, sandboxID, slug string) bool {
+	t.Helper()
+	held, err := s.HasBranches(context.Background(), path, sandboxID, slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return held
+}
+
 func use(t *testing.T, s *Store, key string) string {
 	t.Helper()
 	path, release, err := s.Use(context.Background(), key)
@@ -192,7 +202,7 @@ func TestAPinCreatesWhatTheCacheHoldsAndReportsTheRest(t *testing.T) {
 	if !slices.Equal(result.Missing, []string{"refs/heads/main", "refs/remotes/origin/main"}) || len(result.Pinned) != 0 {
 		t.Fatalf("pin = %+v", result)
 	}
-	if s.HasBranches(ctx, path, "sbx-three", "widget") {
+	if hasBranches(t, s, path, "sbx-three", "widget") {
 		t.Fatal("a branch was pinned while another ref was missing")
 	}
 }
@@ -208,6 +218,63 @@ func TestAMembersDeliveryRecordsTheRemoteOutsideEveryNamespace(t *testing.T) {
 	}
 	if got := refs(t, path, RemoteRefPrefix); !slices.Equal(got, []string{"refs/cache/heads/main", "refs/cache/tags/v1"}) {
 		t.Fatalf("remote refs = %v", got)
+	}
+}
+
+// The record of a remote is what was last delivered, not everything ever
+// delivered: a branch the remote dropped goes, which is also what lets the
+// remote replace a branch with branches beneath its name.
+func TestTheRecordOfARemoteFollowsWhatWasLastDelivered(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "caches"))
+	path := use(t, s, "github.com/acme/widget")
+	w := newWork(t)
+	tip := w.commit("a")
+	if out, err := w.push(s, path, "sbx-one", "widget", "", tip+":refs/heads/main", tip+":refs/remotes/origin/main", tip+":refs/remotes/origin/release", tip+":refs/remotes/origin/HEAD"); err != nil {
+		t.Fatalf("push: %v\n%s", err, out)
+	}
+	if out, err := w.push(s, path, "sbx-two", "widget", "", tip+":refs/heads/main", tip+":refs/remotes/origin/main", tip+":refs/remotes/origin/release/1.0"); err != nil {
+		t.Fatalf("a delivery after the remote renamed a branch beneath itself: %v\n%s", err, out)
+	}
+	if got := refs(t, path, RemoteRefPrefix); !slices.Equal(got, []string{"refs/cache/heads/main", "refs/cache/heads/release/1.0"}) {
+		t.Fatalf("remote refs = %v", got)
+	}
+	// A delivery that names none of the remote's branches says nothing of them.
+	if out, err := w.push(s, path, "sbx-three", "widget", "", tip+":refs/heads/main"); err != nil {
+		t.Fatalf("push: %v\n%s", err, out)
+	}
+	if got := refs(t, path, RemoteRefPrefix); len(got) != 2 {
+		t.Fatalf("remote refs after a delivery with no remote branches = %v", got)
+	}
+}
+
+// A sweep is due an interval after the last one began, by a record that
+// outlives the pool agent: restarting it neither sweeps at once nor puts the
+// sweep off for ever.
+func TestASweepIsDueByARecordThatOutlivesTheProcess(t *testing.T) {
+	ctx := context.Background()
+	logger := slog.New(slog.DiscardHandler)
+	root := filepath.Join(t.TempDir(), "caches")
+	s := New(root)
+	path := use(t, s, "github.com/acme/widget")
+	w := newWork(t)
+	gone := w.commit("gone")
+	if out, err := w.push(s, path, "sbx-gone", "widget", "", gone+":refs/heads/main"); err != nil {
+		t.Fatalf("push: %v\n%s", err, out)
+	}
+	held := func(context.Context) ([]string, error) { return nil, nil }
+	opts := SweepOptions{NamespaceRetention: time.Minute, CacheRetention: 24 * time.Hour}
+	now := time.Now()
+	marker := filepath.Join(path, namespacesDir, "sbx-gone-widget"+unheldSuffix)
+
+	New(root).SweepIfDue(ctx, time.Hour, held, opts, now, logger)
+	New(root).SweepIfDue(ctx, time.Hour, held, opts, now.Add(30*time.Minute), logger)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a store swept before an interval had passed")
+	}
+	// Another process, later: the interval has passed since the record.
+	New(root).SweepIfDue(ctx, time.Hour, held, opts, now.Add(2*time.Hour), logger)
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("a restarted store never swept: %v", err)
 	}
 }
 
@@ -251,6 +318,13 @@ func TestASandboxDeliversOnlyWhatItSendsAndWhatItsOwnSourcesHold(t *testing.T) {
 		t.Fatalf("a sandbox's own delta was refused: %v\n%s", err, out)
 	}
 
+	// And so is the next one into the same discobox: the caller is told
+	// what that namespace holds, so its push leaves it out.
+	after := mine.commit("after")
+	if out, err := mine.push(s, path, "sbx-child", "widget", "sbx-caller", after+":refs/heads/main"); err != nil {
+		t.Fatalf("a sandbox's second push into a discobox it created was refused: %v\n%s", err, out)
+	}
+
 	// A ref at an object it never sent and does not hold is refused, though
 	// the store has the object: git alone would accept it. No stock client
 	// sends such a push, so it is spoken by hand: one ref update and a pack
@@ -262,7 +336,7 @@ func TestASandboxDeliversOnlyWhatItSendsAndWhatItsOwnSourcesHold(t *testing.T) {
 	if !strings.Contains(out, "did not send") {
 		t.Fatalf("a ref at another sandbox's commit was accepted:\n%s", out)
 	}
-	if s.HasBranches(ctx, path, "sbx-child2", "widget") {
+	if hasBranches(t, s, path, "sbx-child2", "widget") {
 		t.Fatal("the refused ref was created")
 	}
 	// The same commit, sent, is the caller's to deliver: it holds it.
@@ -326,14 +400,14 @@ func TestSweepRemovesTheNamespacesOfSandboxesThatAreGone(t *testing.T) {
 
 	// The first pass only starts the clock.
 	s.Sweep(ctx, held, opts, now, logger)
-	if !s.HasBranches(ctx, path, "sbx-gone", "widget") {
+	if !hasBranches(t, s, path, "sbx-gone", "widget") {
 		t.Fatal("a namespace was removed before its retention")
 	}
 	s.Sweep(ctx, held, opts, now.Add(2*time.Hour), logger)
-	if s.HasBranches(ctx, path, "sbx-gone", "widget") {
+	if hasBranches(t, s, path, "sbx-gone", "widget") {
 		t.Fatal("the namespace of a sandbox that is gone was kept")
 	}
-	if !s.HasBranches(ctx, path, "sbx-kept", "widget") {
+	if !hasBranches(t, s, path, "sbx-kept", "widget") {
 		t.Fatal("a held sandbox's namespace was removed")
 	}
 	// What only the removed namespace reached is pruned; the rest is not.

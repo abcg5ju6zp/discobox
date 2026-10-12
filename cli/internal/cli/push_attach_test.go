@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,6 +40,24 @@ func TestDeliverableHereIsThisMachinesParkedDiscoboxes(t *testing.T) {
 	boundSource.Delivery.Reset()
 	bound.Config.SetSource(apiclientgen.NewOptGitSource(boundSource))
 
+	// A discobox a discobox created, claiming this machine as its origin.
+	byASandbox := pushDeliveredSandbox()
+	byASandbox.Runtime.State = apiclientgen.SandboxRuntimeStateAwaitingSource
+	byASandbox.CreatedBySandboxId = apiclientgen.NewOptString("sbx-lead")
+
+	// Waiting only for a source that is a remote, created on another machine.
+	remoteElsewhere := pushDeliveredSandbox()
+	remoteElsewhere.Runtime.State = apiclientgen.SandboxRuntimeStateAwaitingSource
+	remoteElsewhere.Origin = apiclientgen.NewOptOrigin(apiclientgen.Origin{HostId: "hst_othermachine0002"})
+	remoteSource, _ := remoteElsewhere.Config.Source.Get()
+	remoteSource.Delivery = apiclientgen.NewOptGitSourceDelivery(apiclientgen.GitSourceDeliveryCache)
+	remoteSource.LocalDirectory.Reset()
+	remoteSource.URL = apiclientgen.NewOptURI(url.URL{Scheme: "https", Host: "github.com", Path: "/acme/widget"})
+	remoteElsewhere.Config.SetSource(apiclientgen.NewOptGitSource(remoteSource))
+
+	remoteByASandbox := remoteElsewhere
+	remoteByASandbox.CreatedBySandboxId = apiclientgen.NewOptString("sbx-lead")
+
 	for _, tc := range []struct {
 		name    string
 		sandbox apimodel.Sandbox
@@ -46,6 +65,12 @@ func TestDeliverableHereIsThisMachinesParkedDiscoboxes(t *testing.T) {
 		want    bool
 	}{
 		{"parked, created here", parked, thisHost, true},
+		// Its origin is the creating sandbox's own claim, and what a person's
+		// machine delivers into it that sandbox can read.
+		{"parked, created by a discobox naming this machine", byASandbox, thisHost, false},
+		{"parked for a remote, created by a discobox", remoteByASandbox, thisHost, false},
+		// A remote is on no machine: whichever client attaches delivers it.
+		{"parked for a remote, created on another machine", remoteElsewhere, thisHost, true},
 		{"running", pushDeliveredSandbox(), thisHost, false},
 		// Still parked because the reconciler has not caught up, but the
 		// delivery is reported: what `discobox new --raw` attaches to.

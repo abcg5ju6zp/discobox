@@ -358,6 +358,13 @@ func (r *repository) configureOrigin(ctx context.Context, spec sandboxconfig.Sou
 	if err := r.run(ctx, nil, "fetch", spec.PoolRemote, "+refs/remotes/"+originRemote+"/*:refs/remotes/"+originRemote+"/*"); err != nil {
 		return fmt.Errorf("fetch the remote's branches from the pool: %w", err)
 	}
+	// A delivery carries refs and no symbolic ones, so a HEAD among them is a
+	// plain ref frozen where the client's was. None is the honest state: a
+	// `git remote set-head origin --auto` asks the remote, as it would in any
+	// clone that lacks one.
+	if err := r.run(ctx, nil, "symbolic-ref", "--quiet", "refs/remotes/"+originRemote+"/HEAD"); err != nil {
+		_ = r.run(ctx, nil, "update-ref", "-d", "refs/remotes/"+originRemote+"/HEAD")
+	}
 	if err := r.configureRemote(ctx, originRemote, remote); err != nil {
 		return err
 	}

@@ -151,11 +151,14 @@ func (d cacheDelivery) deliverLocal(ctx context.Context, source apimodel.GitSour
 		if err != nil {
 			return err
 		}
+		// Not the remote's HEAD: a push would land it as a plain ref frozen
+		// at one commit, where a clone has a symbolic one.
+		delete(tracking, "HEAD")
 		for name, object := range tracking {
 			refs[remoteTrackingPrefix+name] = object
 		}
 		if len(tracking) > 0 {
-			refspecs = append(refspecs, "+refs/remotes/"+remote+"/*:"+remoteTrackingPrefix+"*")
+			refspecs = append(refspecs, "+refs/remotes/"+remote+"/*:"+remoteTrackingPrefix+"*", "^refs/remotes/"+remote+"/HEAD")
 		}
 	}
 	tags, err := refsUnder(ctx, repoRoot, "refs/tags/")
@@ -347,8 +350,9 @@ func (d cacheDelivery) pinOnce(ctx context.Context, pinURL string, body []byte) 
 	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return pinResult{}, true, err
 	case http.StatusConflict:
-		// A pool that is still coming up; any other conflict is an answer.
-		return pinResult{}, strings.Contains(message, "pool is not reachable"), err
+		// A pool, or its agent, that is still coming up; any other conflict
+		// is an answer.
+		return pinResult{}, strings.Contains(message, "is not reachable"), err
 	}
 	return pinResult{}, false, err
 }

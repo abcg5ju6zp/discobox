@@ -131,23 +131,31 @@ func preReceive(stdin io.Reader) error {
 	if revisions.Len() == 0 {
 		return nil
 	}
-	own, err := ownNamespaces(strings.TrimSpace(gitDir), caller)
+	// What the caller was told the cache holds, and so what its push leaves
+	// out: its own namespaces, and the one it is pushing into. That one is
+	// the pushed discobox's own, which a ref there reveals nothing of.
+	reach, err := ownNamespaces(strings.TrimSpace(gitDir), caller)
 	if err != nil {
 		return err
 	}
-	if len(own) > 0 {
+	if target := strings.TrimSpace(os.Getenv("GIT_NAMESPACE")); target != "" && validNamespace(target) {
+		reach = append(reach, target)
+	}
+	if len(reach) > 0 {
 		args := []string{"for-each-ref", "--format=%(objectname)"}
-		for _, namespace := range own {
+		for _, namespace := range reach {
 			args = append(args, "refs/namespaces/"+namespace+"/")
 		}
 		tips, err := hookGit(nil, nil, args...)
 		if err != nil {
 			return err
 		}
-		revisions.WriteString("--not\n")
-		revisions.WriteString(tips)
+		if strings.TrimSpace(tips) != "" {
+			revisions.WriteString("--not\n")
+			revisions.WriteString(tips)
+		}
 	}
-	// Everything the new refs reach that the caller's own namespaces do not.
+	// Everything the new refs reach that those namespaces do not.
 	needed, err := hookGit(revisions.Bytes(), nil, "rev-list", "--objects", "--stdin")
 	if err != nil {
 		return err

@@ -139,6 +139,10 @@ sandbox create requests.
   declared source resolves to means looking at this machine's disk for a
   checkout of it — which is also why it is not a field of `.discobox/project.json`,
   read by pool-agent out of the materialized clone. A remote primary source
+  A declared URL names a repository on a network: the client fetches it and
+  delivers it into the discobox, and the declaration is repository content,
+  so a `file://` URL or a path — this machine's disk — is refused. A remote
+  primary source
   declares sources too (`readRemoteDeclaredSources`): the file is read from
   the remote at the pinned commit, by fetching that commit alone
   (`--depth=1 --filter=tree:0`, at depth 1 when the remote refuses the filter)

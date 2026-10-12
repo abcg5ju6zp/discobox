@@ -30,6 +30,40 @@ type SweepOptions struct {
 	CacheRetention time.Duration
 }
 
+// sweptFile, in the store's root, is touched when a sweep begins. Its age is
+// how long ago that was, across restarts of the pool agent.
+const sweptFile = ".swept"
+
+// SweepIfDue runs Sweep when none has begun within interval, and records
+// that one has. A store with no record — a new pool's, or one from before
+// the record was kept — has it started now, so its first sweep is an interval
+// away rather than at every start.
+func (s *Store) SweepIfDue(ctx context.Context, interval time.Duration, held Held, opts SweepOptions, now time.Time, logger *slog.Logger) {
+	stamp := filepath.Join(s.root, sweptFile)
+	info, err := os.Stat(stamp)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if _, err := os.Stat(s.root); err != nil {
+			// No cache has been made yet, so there is nothing to keep time for.
+			return
+		}
+		if err := os.WriteFile(stamp, nil, 0o600); err != nil {
+			logger.Warn("record the git cache sweep", "error", err)
+		}
+		return
+	case err != nil:
+		logger.Warn("read the git cache sweep record", "error", err)
+		return
+	case now.Sub(info.ModTime()) < interval:
+		return
+	}
+	if err := os.Chtimes(stamp, now, now); err != nil {
+		logger.Warn("record the git cache sweep", "error", err)
+		return
+	}
+	s.Sweep(ctx, held, opts, now, logger)
+}
+
 // Sweep is the pool's periodic care of its caches: it removes the namespaces
 // of sandboxes the control plane no longer holds, removes a cache nothing has
 // used for its retention, and collects what is left.

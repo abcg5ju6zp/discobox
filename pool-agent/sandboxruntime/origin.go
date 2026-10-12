@@ -13,6 +13,8 @@ import (
 	workerclient "github.com/discobox-ai/discobox/pool-agent/api/gen"
 	workerapimodel "github.com/discobox-ai/discobox/pool-agent/api/model"
 	"github.com/discobox-ai/discobox/pool-agent/gitcache"
+	"github.com/discobox-ai/discobox/pool-agent/proxyagent"
+	"github.com/discobox-ai/discobox/sandboxuser"
 )
 
 // sourceCachesFileName records, per sandbox, which of this pool's Git caches
@@ -110,14 +112,45 @@ func (r *DockerSandboxRuntime) originLocation(ctx context.Context, sandboxID, sl
 		}, nil
 	}
 	repoPath := r.sandboxOriginPath(sandboxID, slug)
+	uid, gid := sandboxUserFromEnv(env)
 	if _, err := os.Stat(filepath.Join(repoPath, "HEAD")); err != nil {
-		if os.IsNotExist(err) {
+		if !os.IsNotExist(err) {
+			return GitRepositoryLocation{}, err
+		}
+		served, err := r.poolServesSlug(sandboxID, slug)
+		if err != nil {
+			return GitRepositoryLocation{}, err
+		}
+		if !served {
 			return GitRepositoryLocation{}, fmt.Errorf("%w: %s", ErrRepositoryNotFound, slug)
 		}
-		return GitRepositoryLocation{}, err
+		// A source this pool once served live from the developer's Git
+		// directory, in a sandbox that has not been rebuilt since: it gets
+		// its repository now, empty until a client next pushes (ADR
+		// 26-10-10-545 §8).
+		ownerUID, ownerGID := int64(uid), int64(gid)
+		owner := sandboxuser.User{UID: &ownerUID, GID: &ownerGID}
+		if err := r.initGitOrigin(ctx, repoPath, "", owner); err != nil {
+			return GitRepositoryLocation{}, fmt.Errorf("prepare source origin %q: %w", slug, err)
+		}
 	}
-	uid, gid := sandboxUserFromEnv(env)
 	return GitRepositoryLocation{Path: repoPath, UID: uid, GID: gid}, nil
+}
+
+// poolServesSlug reports whether the sandbox's runtime-config document names
+// slug as a source whose origin is this pool's route: the pool's record of
+// what it told the sandbox to fetch from, and so of what it has to serve.
+func (r *DockerSandboxRuntime) poolServesSlug(sandboxID, slug string) (bool, error) {
+	doc, ok, err := r.readRuntimeConfig(sandboxID)
+	if err != nil || !ok {
+		return false, err
+	}
+	for _, source := range doc.Sources {
+		if source.Slug == slug {
+			return source.OriginURL == proxyagent.OriginURL(r.projectID, r.poolID, sandboxID, slug), nil
+		}
+	}
+	return false, nil
 }
 
 // adoptImportedOrigins reads into this pool's cache the repositories an
@@ -144,7 +177,8 @@ func (r *DockerSandboxRuntime) adoptImportedOrigins(ctx context.Context, sandbox
 		if err != nil {
 			return err
 		}
-		if !r.gitCache.HasBranches(ctx, path, sandboxID, source.slug) {
+		delivered, err := r.gitCache.HasBranches(ctx, path, sandboxID, source.slug)
+		if err == nil && !delivered {
 			err = r.gitCache.Import(ctx, path, sandboxID, source.slug, imported)
 		}
 		release()

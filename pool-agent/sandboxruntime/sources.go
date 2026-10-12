@@ -382,7 +382,11 @@ func (r *DockerSandboxRuntime) cachedSourceLanded(ctx context.Context, key, sand
 		return false, fmt.Errorf("source %q cache: %w", source.slug, err)
 	}
 	defer release()
-	if !r.gitCache.HasBranches(ctx, path, sandboxID, source.slug) {
+	landed, err := r.gitCache.HasBranches(ctx, path, sandboxID, source.slug)
+	if err != nil {
+		return false, fmt.Errorf("source %q cache: %w", source.slug, err)
+	}
+	if !landed {
 		return false, nil
 	}
 	if err := r.gitCache.EnsureHead(ctx, path, sandboxID, source.slug, gitSourceInitialBranch(source.git)); err != nil {

@@ -973,7 +973,12 @@ flowchart TD
 - **The remote view** (`git-cache-remotes`) serves `refs/cache/*` with every
   namespace hidden, fetch-only: what a client fetches before it fetches the
   remote itself.
-- **Sweep** (`gitcache.Store.Sweep`, from `WatchSandboxVolumes`, every 24h).
+- **Sweep** (`gitcache.Store.SweepIfDue`, from `WatchSandboxVolumes`): due
+  24h after the last one began, by a record in the store's root, so a pool
+  agent that restarts often still sweeps and never sweeps at each start.
+  The cache's record of its remote (`refs/cache/heads`) is replaced by each
+  member delivery that names the remote's branches, so a branch the remote
+  dropped or replaced goes with it.
   A namespace whose sandbox the control plane no longer holds is removed
   after the sandbox tree retention (24h from the first answer that omits
   it); a cache with no namespace is removed 30 days after its last delivery,
@@ -1152,8 +1157,10 @@ flowchart LR
     purge and the volume reaper cover it; it is deliberately not under
     `sources/`, which the sandbox can write. The `clone` case is a source an
     earlier pool served live from the developer's Git directory: its
-    repository is empty until a client next pushes, and its checkout is
-    untouched. See ADR 0058.
+    repository is made by the next create, or the first time its origin is
+    asked for (`originLocation`, for a source the runtime-config document
+    points at this pool), is empty until a client next pushes, and its
+    checkout is untouched. See ADR 0058.
   A remote-URL source recorded as `clone` has that remote as its origin; its
   sandbox cloned it through its proxy and the pool serves nothing for it.
 - Normalize provider-owned source destination defaults before both mounting
