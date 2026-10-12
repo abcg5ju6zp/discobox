@@ -603,13 +603,15 @@ pane, not a second viewer, and everything below holds for it. What it adds:
 - **The rest of its page.** The badge (open, draft, merged, closed) and who
   wants what merged into where; among the facts the reviewers and what each
   last said, the size of the change, and the checks — how they stand, then each
-  one that has not passed, a link to its own page. In the timeline a push is its commits, a review is its verdict,
+  one that has not passed, a link to its own page; a list that is not all of
+  them (`ChecksPartial`) says so, so a row of passes is not read as the whole. In the timeline a push is its commits, a review is its verdict,
   its summary, and each thread it started on the diff under the lines it is
   about, replies with it.
 - **Files changed is a second page of the tab** (`f`, and back), and a list
-  like every other in the window: a cursor the arrows move, `Enter` (or a
-  second click on the row, `hitPullFile`) opening the diff of the file under
-  it, `Esc` back to the list. A diff is one file's, colored by its first
+  like every other in the window: a cursor the arrows, the page keys and the
+  wheel move — it scrolls by its cursor, never by an offset of its own —
+  `Enter` (or a second click on the row, `hitPullFile`) opening the diff of
+  the file under it, `Esc` back to the list. A diff is one file's, colored by its first
   column in the header diffstat's colors, long lines run on rather than cut;
   `n` and `p` turn to the next file's and the one before. Each page keeps its
   own place (`issuePage`); the keys line offers the list's or the diff's keys
@@ -617,17 +619,23 @@ pane, not a second viewer, and everything below holds for it. What it adds:
 - **Whether it can merge is the first thing under the title** (`mergeBanner`),
   in GitHub's own terms (`mergeable_state`): a band across the tab when it is ready —
   open, not a draft, and clean, which is no conflicts, checks passed and every
-  required review in — and otherwise the one reason it is not. Ready also marks
+  required review in — and otherwise the one reason it is not. The band's `m`
+  is a control, marked from the row it is drawn on. Ready also marks
   the tab (`PR #9 ●`), so it shows from whichever pane has the keys. GitHub
   works the state out when first asked, so the client's full read asks again
   before it answers and a read that still came back unknown is asked again in
   a moment, a few times (`pullSettle`); past that the bar says GitHub has not
-  said, which is what it tells a reader with no token.
+  said, which is what it tells a reader with no token — so with none the
+  client asks once and does not wait.
 - **`m` merges, asking which way** (`askMerge`): squash, a merge commit, or
   rebase, with the ways the repository does not allow shown and not takeable;
-  a repository that will not say which it allows is asked by trying. The merge
+  a repository that will not say which it allows is asked by trying. None of
+  the answers is on `m`: its second press is not one. The merge
   names the head commit that was read, so a branch pushed to since is refused
-  rather than merged unseen. Only what GitHub could not do either is refused
+  rather than merged unseen — and since the tab reads itself again on its own
+  clock, a read that brings a new head says so on the tab until the person asks
+  for one (`pushed`, `r`), and the question names the commit it would merge.
+  The files' cursor follows its file across that push, by path. Only what GitHub could not do either is refused
   here — a draft, a conflict; a pull request a rule blocks is GitHub's to
   refuse, with its own reason, since someone allowed to bypass the rule may.
 - **Closing is one question.** A pull request closes one way, unmerged, and a
@@ -639,7 +647,8 @@ pane, not a second viewer, and everything below holds for it. What it adds:
 - **It looks like the window, not like the page.** The page is the model for
   what is shown, never for how. Markdown is rendered in the window's palette
   (`markdownStyle`), not the renderer's: the terminal's own text, headings in
-  the accent, code in the command green with no field behind it. A title is
+  the accent, code in a sentence in the header's link blue and a block of it highlighted
+  in discobox-review's syntax colors, neither with a field behind it. A title is
   the accent and bold; a comment, a review and a file's diff are headed by the
   list's group bar (`groupBar`); what happened between comments is a table as
   the audit screen's is, time first (`eventRows`); a state is the list's dot,
@@ -668,7 +677,14 @@ pane, not a second viewer, and everything below holds for it. What it adds:
   every five minutes; a change says how to log in.
 - **What GitHub says is display data.** The issue arrives in this package's own
   types (`Issue`), every string already escaped by the data source: a title or
-  a comment carrying an escape sequence is shown, not obeyed. The links glamour
+  a comment carrying an escape sequence is shown, not obeyed. What a page is
+  written with is not escaped with it, in what is written to be read — a
+  title, a body, a commit's message: the invisible hints at where a line may
+  break are dropped, and the joiners in an emoji sequence kept. A name, a path,
+  a branch and a diff keep every invisible character shown, so two that differ
+  are never drawn as one. A body is markdown, whose renderer decodes character
+  references: `markdownSource` leaves undecoded any that names a character
+  which would not be let through as itself. The links glamour
   draws in a comment are controls like the header's, marked from the lines as
   drawn (`lineLinks`) and lit under the pointer from the same walk
   (`litLink`) — the absolute http and https ones only (`webLink`): a click

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -108,6 +109,16 @@ type issuePane struct {
 	diff       issuePage
 	fileRow    int
 	fileTop    int
+	// pushed is the head the person was last shown, once a read of the tab's
+	// own brought a newer one: the tab says so until they ask for a read (r).
+	// asked is that read under way: the head it brings is one they asked to
+	// see, not one that moved under them.
+	pushed string
+	asked  bool
+	// mergeRow is the line of the conversation the ready band is on, or -1,
+	// and mergeAt the row of the tab it was last drawn on (as fileTop is).
+	mergeRow int
+	mergeAt  int
 	// md are the markdown renderers by the width they wrap to: a comment in
 	// a review thread is drawn narrower than one in the timeline.
 	md map[int]*glamour.TermRenderer
@@ -342,11 +353,14 @@ func (m *Model) issueLoaded(msg issueLoadedMsg) tea.Cmd {
 		return nil
 	}
 	v.loading = false
+	asked := v.asked
+	v.asked = false
 	if msg.err != nil {
 		v.err = msg.err.Error()
 		return nil
 	}
 	issue := msg.issue
+	was := v.issue
 	v.issue, v.err = &issue, ""
 	v.conversation.lines, v.changes.lines, v.diff.lines = nil, nil, nil
 	v.pull = issue.PullRequest
@@ -354,6 +368,27 @@ func (m *Model) issueLoaded(msg issueLoadedMsg) tea.Cmd {
 	if issue.Pull == nil {
 		v.files = false
 		return nil
+	}
+	if was != nil && was.Pull != nil && was.Pull.HeadSHA != issue.Pull.HeadSHA {
+		// A push: what was read here is no longer what would be merged, and
+		// the files are another list. The cursor follows its file by name, and
+		// a diff that was open is left only if its file is still there.
+		if v.pushed == "" && !asked {
+			v.pushed = was.Pull.HeadSHA
+		}
+		at := -1
+		if v.fileCursor < len(was.Pull.Files) {
+			path := was.Pull.Files[v.fileCursor].Path
+			at = slices.IndexFunc(issue.Pull.Files, func(file PullFile) bool { return file.Path == path })
+		}
+		if at < 0 {
+			v.fileOpen = false
+		} else {
+			v.fileCursor = at
+		}
+		if v.fileOpen {
+			v.diff.offset = 0
+		}
 	}
 	// The files may be fewer than they were: a push took one out.
 	v.fileCursor = min(v.fileCursor, max(len(issue.Pull.Files)-1, 0))
@@ -488,6 +523,9 @@ func (m *Model) issueKeyPress(p *pane, msg tea.KeyPressMsg) tea.Cmd {
 		if v.loading {
 			return nil
 		}
+		// Asked for: what it brings is what the person has now seen, a head
+		// newer than the last one included (issueLoaded).
+		v.pushed, v.asked = "", true
 		return tea.Batch(m.loadIssue(p, true), status("reading #%d again", v.number))
 	case "x":
 		if v.files {
@@ -712,6 +750,7 @@ func issueHints(v *issuePane) []hint {
 // where it is being read, and under it the comment field while one is being
 // written.
 func (m *Model) issueView(v *issuePane, width, height int) []string {
+	v.mergeAt = -1
 	var foot []string
 	if v.composing && height > issueComposerRows+4 {
 		v.composer.SetWidth(width)
@@ -737,6 +776,9 @@ func (m *Model) issueView(v *issuePane, width, height int) []string {
 			say = "could not read it again: "
 		}
 		head = append(head, wrapLines(m.st.statusER.Render(say+v.err), width)...)
+	}
+	if v.pushed != "" && v.issue != nil && v.issue.Pull != nil {
+		head = append(head, wrapLines(m.st.statusWA.Render(pushedNotice(v.pushed, v.issue.Pull.HeadSHA)+" — r reads it again"), width)...)
 	}
 
 	room := max(height-len(foot)-len(head), 0)
@@ -764,12 +806,26 @@ func (m *Model) issueView(v *issuePane, width, height int) []string {
 		v.conversation.offset, v.toEnd = len(v.conversation.lines), false
 	}
 	if v.files && !v.fileOpen {
-		// The cursor is kept on screen, as a list keeps it.
+		// The cursor is kept on screen, as a list keeps it. On the first file
+		// that is the top of the page, with the heading over the list, and on
+		// the last its end, with whatever is said under it.
 		row := v.fileRow + v.fileCursor
-		shown.offset = max(min(shown.offset, row), row-room+1)
+		low, high := row-room+1, row
+		if v.fileCursor == 0 {
+			high = 0
+		}
+		if v.fileCursor >= len(v.issue.Pull.Files)-1 {
+			low = max(low, min(len(shown.lines)-room, row))
+		}
+		shown.offset = max(min(shown.offset, high), low)
 	}
 	v.scroll(0)
 	v.fileTop = len(head) + v.fileRow - shown.offset
+	// Not while a comment is being written: the keys are the field's then, and
+	// a press of this one would type into it.
+	if !v.files && !v.composing && v.mergeRow >= shown.offset && v.mergeRow < shown.offset+room {
+		v.mergeAt = len(head) + v.mergeRow - shown.offset
+	}
 	end := min(shown.offset+room, len(shown.lines))
 	body := append(head, shown.lines[shown.offset:end]...)
 	return append(fitRows(body, height-len(foot)), foot...)
@@ -879,7 +935,11 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 	}
 	out = append(out, wrapLines(byline, width)...)
 	out = append(out, "")
+	v.mergeRow = -1
 	if banner := mergeBanner(st, issue, width); banner != "" {
+		if pullReady(issue) {
+			v.mergeRow = len(out)
+		}
 		out = append(out, banner, "")
 	}
 
@@ -941,7 +1001,7 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 	if pull := issue.Pull; pull != nil {
 		room := max(width-issueLabelWidth, 1)
 		fact("Changes", pullChanges(st, *pull))
-		factRows("Checks", checkRows(st, pull.Checks, room))
+		factRows("Checks", checkRows(st, pull.Checks, pull.ChecksPartial, room))
 	}
 
 	out = append(out, m.commentLines(v, issue.Author, "opened", issue.CreatedAt, issue.Body, issue.Reactions, width, now)...)
@@ -1083,7 +1143,7 @@ func (m *Model) markdown(v *issuePane, body string, width int) []string {
 		}
 		v.md[width] = renderer
 	}
-	rendered, err := v.md[width].Render(strings.ReplaceAll(body, "\r\n", "\n"))
+	rendered, err := v.md[width].Render(markdownSource(strings.ReplaceAll(body, "\r\n", "\n")))
 	if err != nil {
 		return wrapLines(body, width)
 	}

@@ -1215,7 +1215,7 @@ func (m *Model) routeMouse(msg tea.MouseMsg) tea.Cmd {
 		// it draws, and the wheel scrolls the issue.
 		switch ev := msg.(type) {
 		case tea.MouseWheelMsg:
-			p.issue.scroll(-wheelLines(ev))
+			p.issue.wheel(-wheelLines(ev))
 			return nil
 		case tea.MouseClickMsg:
 			if ev.Button == tea.MouseLeft {
@@ -2181,6 +2181,11 @@ func (m *Model) viewPaneBox(p *pane, top string, edge lipgloss.Style, width int)
 		// The files changed are a list, and a row of one is a control too.
 		for row, file := range p.issue.fileRows(len(lines)) {
 			m.zones.mark(hit{kind: hitPullFile, idx: file}, x, y+row, grid, 1)
+		}
+		// So is the key the ready band draws at its right end.
+		if row := p.issue.mergeAt; row >= 0 && row < len(lines) {
+			w := min(lipgloss.Width(pullMergeKey+mergeBandHint), grid)
+			m.zones.mark(keyHit(pullMergeKey), x+grid-w, y+row, w, 1)
 		}
 		for row, line := range lines {
 			links := lineLinks(line)

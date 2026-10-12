@@ -1678,8 +1678,18 @@ type SourcePush struct {
 
 // Issue is a GitHub issue or pull request as its page shows it, for the issue
 // tab. Every string in it was written by whoever can comment on the issue, so
-// the data source hands it over made safe to draw: no control or format
-// character reaches the screen as itself.
+// the data source hands it over made safe to draw: no control character, and
+// no format character a terminal acts on or that misleads — a bidirectional
+// override or mark — reaches the screen as itself. Two kinds of text, two
+// rules. What is written to be read on the page (a title, a body, a commit's
+// message, a label) may carry the zero-width joiner and non-joiner an emoji
+// sequence and several scripts are made with, and has lost the invisible hints
+// at where a line may break. Everything else is a name or code (a login, a
+// branch, a path, a diff, a hunk): every invisible character in it arrives
+// escaped, so two that differ are never drawn as one.
+//
+// A body is markdown, and the character references in it are still to be
+// decoded: whoever renders one passes it through markdownSource first.
 type Issue struct {
 	// Repository is owner/name.
 	Repository string
@@ -1794,7 +1804,10 @@ type PullRequest struct {
 	// — and empty when it would not say.
 	MergeMethods []string
 	Reviewers    []PullReviewer
-	Checks       []PullCheck
+	// Checks are the head commit's, and ChecksPartial is set when not all of
+	// them could be read: the ones here are not the whole list.
+	Checks        []PullCheck
+	ChecksPartial bool
 	// Files are the changes as far as they were read; FilesTruncated is set
 	// when ChangedFiles is more.
 	Files          []PullFile

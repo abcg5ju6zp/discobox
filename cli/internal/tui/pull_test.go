@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -567,7 +568,7 @@ func TestThePullRequestIsMerged(t *testing.T) {
 		t.Errorf("the merge commit this repository does not allow is offered as the rest are:\n%s", frame)
 	}
 	// The way the repository does not allow is not taken.
-	d.key("m")
+	d.key("c")
 	ds.mu.Lock()
 	early := len(ds.merges)
 	ds.mu.Unlock()
@@ -651,4 +652,162 @@ func TestAPullRequestGitHubHasNotSettledIsReadAgain(t *testing.T) {
 	ds.mu.Unlock()
 	d.dispatch(pullSettleMsg{id: p.id})
 	d.wait("the answer", func() bool { return strings.Contains(plainFrame(m), "Ready to merge") })
+}
+
+// The key that asks how to merge is not one of the answers: a second press of
+// it, or its repeat, merges nothing.
+func TestTheMergeKeyTwiceDoesNotMerge(t *testing.T) {
+	t.Parallel()
+	ds := pullSource()
+	pull := readyPull()
+	pull.Pull.MergeMethods = nil
+	ds.issues["https://github.com/acme/foo#9"] = pull
+	d, m := openPullPane(t, ds)
+	d.key(pullMergeKey)
+	d.key(pullMergeKey)
+	ds.mu.Lock()
+	merges := len(ds.merges)
+	ds.mu.Unlock()
+	if merges != 0 || m.dialog == nil {
+		t.Fatalf("%s twice: %d merges, question up %v; want none and the question still asked", pullMergeKey, merges, m.dialog != nil)
+	}
+	for _, method := range mergeMethods {
+		if method.press == pullMergeKey {
+			t.Errorf("%q is picked with the key that asks", method.label)
+		}
+	}
+}
+
+// The ready band's key is a control: a click on it asks, as the key does.
+func TestTheReadyBandsKeyIsPressed(t *testing.T) {
+	t.Parallel()
+	ds := pullSource()
+	ds.issues["https://github.com/acme/foo#9"] = readyPull()
+	_, m := openPullPane(t, ds)
+	x, y := at(t, m, "merges it")
+	tap(t, m, x, y)
+	if m.dialog == nil || !strings.Contains(plainFrame(m), "Merge #9 into main") {
+		t.Errorf("a click on the band's key did not ask how to merge:\n%s", plainFrame(m))
+	}
+}
+
+// A push while the tab is open is said, on the tab and in the merge question,
+// which names the commit it would merge: what was read here before is not it.
+// The cursor follows its file, and a read the person asks for is what they
+// have now seen.
+func TestAPushWhileTheTabIsOpenIsSaid(t *testing.T) {
+	t.Parallel()
+	ds := pullSource()
+	ds.issues["https://github.com/acme/foo#9"] = readyPull()
+	d, m := openPullPane(t, ds)
+	p := issueTabOf(m)
+	v := p.issue
+	d.key("f")
+	d.key("down")
+	d.key("enter")
+	if !v.fileOpen || v.issue.Pull.Files[v.fileCursor].Path != "reaper/reaper_test.go" {
+		t.Fatalf("the second file's diff is not open: cursor %d, open %v", v.fileCursor, v.fileOpen)
+	}
+
+	pushed := readyPull()
+	pushed.Pull.HeadSHA = "fff9999000111"
+	pushed.Pull.Files = append([]PullFile{{Path: "a/first.go", Status: "added", Patch: "@@ -0,0 +1 @@\n+package a"}}, pushed.Pull.Files...)
+	ds.mu.Lock()
+	ds.issues["https://github.com/acme/foo#9"] = pushed
+	ds.mu.Unlock()
+	d.dispatch(issueTickMsg{id: p.id})
+	d.wait("the push", func() bool { return strings.Contains(plainFrame(m), "commits were pushed since") })
+	if !v.fileOpen || v.issue.Pull.Files[v.fileCursor].Path != "reaper/reaper_test.go" {
+		t.Errorf("the open diff did not follow its file: cursor %d (%s), open %v", v.fileCursor, v.issue.Pull.Files[v.fileCursor].Path, v.fileOpen)
+	}
+	// The merge is asked from the conversation.
+	d.key("f")
+	d.key(pullMergeKey)
+	frame := plainFrame(m)
+	if m.dialog == nil || !strings.Contains(m.dialog.body, "at fff999900011 — commits were pushed since abc123456789 was read here: the head is now fff999900011") {
+		t.Errorf("the merge question does not name the commit and the push:\n%s", frame)
+	}
+	d.key("esc")
+	// A read the person asks for is what they have seen, a head newer still
+	// included: the notice goes and is not raised again by that read.
+	again := readyPull()
+	again.Pull.HeadSHA = "eee8888000222"
+	ds.mu.Lock()
+	ds.issues["https://github.com/acme/foo#9"] = again
+	ds.mu.Unlock()
+	d.key("r")
+	d.wait("the read", func() bool { return v.issue.Pull.HeadSHA == "eee8888000222" && !v.loading })
+	if v.pushed != "" || strings.Contains(plainFrame(m), "commits were pushed") {
+		t.Errorf("a read that was asked for left the notice up (pushed %q):\n%s", v.pushed, plainFrame(m))
+	}
+}
+
+// While a comment is being written the keys are the field's: the ready band's
+// key is not a control then, so a click on it types nothing.
+func TestTheReadyBandsKeyIsNotPressedWhileWriting(t *testing.T) {
+	t.Parallel()
+	ds := pullSource()
+	ds.issues["https://github.com/acme/foo#9"] = readyPull()
+	d, m := openPullPane(t, ds)
+	v := issueTabOf(m).issue
+	d.key("c")
+	if !v.composing {
+		t.Fatal("c did not open the comment field")
+	}
+	x, y := at(t, m, "merges it")
+	tap(t, m, x, y)
+	if m.dialog != nil || v.composer.Value() != "" {
+		t.Errorf("a click on the band's key while writing: question up %v, field %q", m.dialog != nil, v.composer.Value())
+	}
+}
+
+// The files are a list, and a list scrolls by its cursor: the wheel and the
+// page keys move it, and the end of the list shows what is said under it.
+func TestTheFilesListScrollsByItsCursor(t *testing.T) {
+	t.Parallel()
+	ds := pullSource()
+	pull := testPull()
+	pull.Pull.Files = nil
+	for i := range 120 {
+		pull.Pull.Files = append(pull.Pull.Files, PullFile{Path: "pkg/file" + itoa(i) + ".go", Status: "modified", Additions: 1})
+	}
+	pull.Pull.ChangedFiles, pull.Pull.FilesTruncated = 150, true
+	ds.issues["https://github.com/acme/foo#9"] = pull
+	d, m := openPullPane(t, ds)
+	v := issueTabOf(m).issue
+	d.key("f")
+	d.key("pgdown")
+	if v.fileCursor == 0 || !strings.Contains(plainFrame(m), "❯ M pkg/file"+itoa(v.fileCursor)+".go") {
+		t.Fatalf("page down left the cursor on %d:\n%s", v.fileCursor, plainFrame(m))
+	}
+	paged := v.fileCursor
+	x, y := at(t, m, "pkg/file"+itoa(paged)+".go")
+	send(t, m, tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown})
+	if v.fileCursor <= paged {
+		t.Errorf("the wheel left the cursor on %d", v.fileCursor)
+	}
+	d.key("G")
+	if v.fileCursor != 119 || !strings.Contains(plainFrame(m), "30 more files — o opens them on GitHub") {
+		t.Errorf("G: cursor on %d, and the list's end is not on screen:\n%s", v.fileCursor, plainFrame(m))
+	}
+	d.key("g")
+	if v.fileCursor != 0 || !strings.Contains(plainFrame(m), "Files changed #9") {
+		t.Errorf("g: cursor on %d, and the list's heading is not on screen:\n%s", v.fileCursor, plainFrame(m))
+	}
+}
+
+// Checks that could not all be read say so, so a row of passes is not taken
+// for the whole.
+func TestChecksNotAllReadSaySo(t *testing.T) {
+	t.Parallel()
+	st := newStyles(false)
+	if got := checkRows(st, []PullCheck{{Name: "build", State: "success"}}, true, 80); len(got) == 0 || !strings.Contains(got[0], "1 passed · not all could be read") {
+		t.Errorf("partial checks = %q", got)
+	}
+	if got := checkRows(st, nil, true, 80); len(got) != 1 || !strings.Contains(got[0], "could not be read") {
+		t.Errorf("unread checks = %q", got)
+	}
+	if got := checkRows(st, nil, false, 80); got != nil {
+		t.Errorf("no checks = %q, want no row", got)
+	}
 }
