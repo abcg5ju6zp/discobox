@@ -375,8 +375,11 @@ unwritable or corrupt file costs the convenience and never the command.
 `DISCOBOX_CLIENT_CONFIG_FILE` names (empty reads none), through the root
 module's `configfile` — the same tag-driven strict decode, reference and schema
 as the server's `server.yaml` (ADR 0096). `cli/generate.go` emits
-`cli/config.schema.json` and `cli/client.example.yaml`; a client that finds no
-file rewrites `client.example.yaml` beside where it belongs.
+`cli/config.schema.json` and `cli/client.example.yaml`. A client reading the
+default path that finds nothing there (`clientconfig.MissingDefault`) rewrites
+`client.example.yaml` beside it, whenever it reads the configuration and when
+the console starts (`refreshClientConfigExample`). Nothing is written beside a
+path the variable names: that location is the user's own.
 
 - **Read on use, every use.** `loadClientConfig` runs where a setting is
   needed — never at startup, so a command that takes no setting never fails on

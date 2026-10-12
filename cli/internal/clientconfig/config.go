@@ -162,6 +162,21 @@ func Schema() (map[string]any, error) {
 		"Configuration for the discobox CLI: what its commands take when the command line does not say. A flag given on the command line wins over the setting it defaults.")
 }
 
+// MissingDefault is the default path and true when that is where the client
+// reads its configuration and nothing is there: the one case the reference is
+// written for. A path FileVar names is the user's own, anywhere — a missing
+// one is Load's error, and nothing is written beside it.
+func MissingDefault() (string, bool) {
+	if _, named := os.LookupEnv(FileVar); named {
+		return "", false
+	}
+	path := Path()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		return "", false
+	}
+	return path, true
+}
+
 // RefreshExample writes the reference file beside configFile, the path the
 // client looked for its configuration at and found nothing, and returns where
 // it wrote it. It is rewritten on every such look rather than written once,

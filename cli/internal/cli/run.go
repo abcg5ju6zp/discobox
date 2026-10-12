@@ -168,10 +168,11 @@ out; the skills are carried in the request, at most 1 MiB in all.
 
 Either can be made the default for every new discobox, in the console too, in
 client.yaml under <XDG config home>/discobox (or wherever
-DISCOBOX_CLIENT_CONFIG_FILE names): new.skills and new.userSkills. A client
-that finds no such file writes client.example.yaml beside where it belongs,
-listing every setting. --skills given replaces new.skills rather than adding
-to it, and --user-skills=false turns new.userSkills off.
+DISCOBOX_CLIENT_CONFIG_FILE names): new.skills and new.userSkills. When
+that variable is unset and <XDG config home>/discobox holds no client.yaml,
+the client writes client.example.yaml there, listing every setting. --skills
+given replaces new.skills rather than adding to it, and --user-skills=false
+turns new.userSkills off.
 
 --grant gives the new discobox a use of a credential: a well-known one by its
 ID, ID[@HOST]=USE, or a project secret, SECRET[@HOST]:ENV_VAR=USE. Its agent
