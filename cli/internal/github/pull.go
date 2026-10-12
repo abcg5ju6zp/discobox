@@ -392,14 +392,20 @@ func spokenReviews(timeline []Event) []Event {
 // threads is not a reviewer.
 func reviewers(author string, timeline []Event, raw rawPull) []Reviewer {
 	var out []Reviewer
-	at := map[string]int{}
-	set := func(name, state string, weak bool) {
+	// By who they are, not by what they are called: a person and a team are
+	// different namespaces, and one of each may share a name.
+	type who struct {
+		team bool
+		name string
+	}
+	at := map[who]int{}
+	set := func(team bool, name, state string, weak bool) {
 		if name == "" {
 			return
 		}
-		i, ok := at[name]
+		i, ok := at[who{team, name}]
 		if !ok {
-			at[name] = len(out)
+			at[who{team, name}] = len(out)
 			out = append(out, Reviewer{Name: name, State: state})
 			return
 		}
@@ -409,14 +415,14 @@ func reviewers(author string, timeline []Event, raw rawPull) []Reviewer {
 	}
 	for _, event := range timeline {
 		if event.Kind == "reviewed" && event.Actor != author {
-			set(event.Actor, event.Review, event.Review == "commented")
+			set(false, event.Actor, event.Review, event.Review == "commented")
 		}
 	}
 	for _, user := range raw.RequestedReviewers {
-		set(user.Login, "requested", false)
+		set(false, user.Login, "requested", false)
 	}
 	for _, team := range raw.RequestedTeams {
-		set(team.Name, "requested", false)
+		set(true, team.Name, "requested", false)
 	}
 	return out
 }

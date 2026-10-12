@@ -937,7 +937,7 @@ func (m *Model) issueLines(v *issuePane, issue Issue, width int, now time.Time) 
 	out = append(out, "")
 	v.mergeRow = -1
 	if banner := mergeBanner(st, issue, width); banner != "" {
-		if pullReady(issue) {
+		if pullReady(issue) && mergeBandKeyFits(width) {
 			v.mergeRow = len(out)
 		}
 		out = append(out, banner, "")

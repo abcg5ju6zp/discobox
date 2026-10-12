@@ -71,10 +71,10 @@ var githubClient = sync.OnceValue(github.New)
 
 // tuiIssue is the issue as the tab draws it, every string made safe. What is
 // written to be read on the page — a title, a description, a comment, a
-// commit's message, a label — is made safe as a page's text (pageSafe,
+// commit's message — is made safe as a page's text (pageSafe,
 // pageBlock). An event's subject is not that: it is who was assigned or asked
 // to review, or a commit's ID. Everything else is a name or code — a login, a branch, a path, a
-// diff — where an invisible character is something to be shown, and keeps the
+// diff, a label — where an invisible character is something to be shown, and keeps the
 // audit screen's rule (terminalSafe): two paths that differ are never drawn as
 // one on a tab that merges.
 func tuiIssue(in github.Issue) tui.Issue {
@@ -177,7 +177,8 @@ func tuiPull(in github.Pull) *tui.PullRequest {
 }
 
 func tuiLabel(in github.Label) tui.IssueLabel {
-	return tui.IssueLabel{Name: pageSafe(in.Name), Color: terminalSafe(in.Color)}
+	// A label is picked by its name: two that differ are not drawn as one.
+	return tui.IssueLabel{Name: terminalSafe(in.Name), Color: terminalSafe(in.Color)}
 }
 
 func tuiRef(in github.Ref) tui.IssueRef {

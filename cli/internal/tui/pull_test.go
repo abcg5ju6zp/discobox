@@ -678,6 +678,37 @@ func TestTheMergeKeyTwiceDoesNotMerge(t *testing.T) {
 	}
 }
 
+// The band's key is lit under the pointer, from the cells it is pressed on.
+func TestTheReadyBandsKeyIsLitUnderThePointer(t *testing.T) {
+	t.Parallel()
+	ds := pullSource()
+	ds.issues["https://github.com/acme/foo#9"] = readyPull()
+	d, m := openPullPane(t, ds)
+	m.st = newStyles(true)
+	lit := m.st.hover.Render(pullMergeKey + mergeBandHint)
+	if strings.Contains(rawFrame(m), lit) {
+		t.Fatalf("the band's key is lit with the pointer elsewhere")
+	}
+	x, y := at(t, m, "merges it")
+	d.dispatch(tea.MouseMotionMsg{X: x, Y: y})
+	if !strings.Contains(rawFrame(m), lit) {
+		t.Errorf("the band's key is not lit under the pointer:\n%q", rawFrame(m))
+	}
+}
+
+// A band too narrow for its key draws none, and says so to whoever marks it.
+func TestANarrowReadyBandHasNoKey(t *testing.T) {
+	t.Parallel()
+	st := newStyles(false)
+	issue := readyPull()
+	for width := 1; width <= 40; width++ {
+		drawn := strings.Contains(mergeBanner(st, issue, width), pullMergeKey+strings.TrimRight(mergeBandHint, " "))
+		if drawn != mergeBandKeyFits(width) {
+			t.Errorf("at %d wide the key is drawn %v, and said to fit %v", width, drawn, mergeBandKeyFits(width))
+		}
+	}
+}
+
 // The ready band's key is a control: a click on it asks, as the key does.
 func TestTheReadyBandsKeyIsPressed(t *testing.T) {
 	t.Parallel()
