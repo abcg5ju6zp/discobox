@@ -64,13 +64,14 @@ The pool agent asks for the inventory on the standing poll, naming the digest
 it last delivered (`?known=`). A sandbox agent whose inventory still has that
 digest answers `unchanged` and no parts.
 
-The inventory rides the status batch (ADR 0030): an entry carries the
-inventory when it changed and only its digest when it did not. The control
-plane stores a changed one, and for an unchanged one moves the stored
-inventory's observation time forward. The batch's answer names the sandboxes
-whose digest it does not hold, and the pool agent sends those in full on its
-next tick. A pool agent records a digest as delivered only on an answer that
-does not name the sandbox.
+The pool agent posts what it collected each tick to an endpoint of its own,
+`POST /api/pools/{poolId}/sandbox-inventories`, under the pool assertion the
+status batch uses (ADR 0030): an entry carries the inventory when it changed
+and only its digest when it did not. The control plane stores a changed one,
+and for an unchanged one moves the stored inventory's observation time
+forward. Its answer names the sandboxes whose digest it does not hold, and the
+pool agent sends those in full on its next tick. A pool agent records a digest
+as delivered only on an answer that does not name the sandbox.
 
 Configure sandboxes are not asked: they are polled every second
 (ADR 26-10-09-867) and nobody reads one that has stopped.
@@ -80,7 +81,8 @@ Configure sandboxes are not asked: they are polled every second
 One row per sandbox in a table of its own, `sandbox_inventories`, never on the
 sandbox row and never in a sandbox listing. The document is sealed with the
 server's sealer, as secrets are, because it holds terminal content and the
-environment exec records carry. The row is deleted with its sandbox.
+environment exec records carry; a server run without an encryption key keeps
+it as it keeps its secrets, unsealed. The row is deleted with its sandbox.
 
 ### 4. Which reads it answers
 
@@ -90,13 +92,19 @@ environment exec records carry. The row is deleted with its sandbox.
 | exec logs, exec events, service logs, exec resources (snapshot, history, stream) | proxied, live | starts the box, as before |
 | exec wait, exec event trail, harness hooks | proxied, live | refused with 409, as before |
 
-- **The control plane decides from the row.** A sandbox whose `runtimeState`
-  is not `running` is answered from the inventory without reaching its pool,
-  so a stopped box on an unreachable pool is still read.
-- **The pool agent refuses rather than starts.** The six reads in the first
-  row are registered `requireRunning`, whose 409 now carries a header naming
-  the state. A box that stops between the control plane's check and the proxy
-  is refused that way, and the control plane then answers from the inventory.
+- **The pool agent says whether the box is running, by refusing rather than
+  starting.** The six reads in the first row are registered `requireRunning`,
+  whose 409 now carries a header naming the state it found. The control plane
+  proxies each of these reads as before and answers that refusal from the
+  inventory.
+- **A boot under way is waited out by the lists, not by the screen.** Exec,
+  service and tool reads wait for a boot something else began, which starts
+  nothing: a client that has just created or started a box reads it next, and
+  must get the box's answer, not its last run's. The screen is what an
+  orchestrator polls, and answers at once from the inventory.
+- **The row decides only when the pool cannot be asked.** A sandbox whose
+  `runtimeState` is `stopped`, on a pool that is not reachable, is answered
+  from the inventory, so a stopped box is still read while its pool is down.
 - **A stored answer has the live answer's shape**, plus `observedAt`: when the
   box posted it. A live answer has no `observedAt`. That one field is how a
   client tells the two apart and shows how old a stored answer is.
@@ -129,6 +137,11 @@ Rejected: the status is stored on the sandbox row, so the exec list, the tool
 catalog and every screen would be returned by every sandbox listing and
 rewritten every 15 seconds whether or not they changed.
 
+**Inventory entries in the status batch.** One post per tick instead of two.
+Rejected: the batch's entry admits no unknown field, so a control plane older
+than this would refuse the whole batch and lose the status with it, and the
+batch answers 204 where this needs to name what it lacks.
+
 **Taking the inventory when the box stops.** Cheaper than a standing poll, and
 exactly the state a stopped box is read for. Rejected: an idle stop is the
 sandbox powering itself off (ADR 0108), and the sandbox agent may not call out
@@ -149,22 +162,42 @@ poll wakes a box, which is the behavior being removed.
 "nothing there" and "not known" would look the same to every client that does
 not check a marker.
 
+**Deciding from the sandbox row.** The control plane already holds
+`runtimeState`, and a row that says `stopped` could be answered without a
+round trip to the pool. Rejected: the row lags. An action that starts a
+stopped box — an exec create — is followed at once by reads of what it made,
+and the pool's state report may not have landed; answered from the inventory,
+those reads would not find the exec. The pool agent knows the container's
+state, and asking it costs one request that starts nothing.
+
 **Marking the pool's refusal by its message.** No new header. Rejected: the
 control plane would match prose that exists to be read by people.
 
 ## Consequences
 
-- Opening a stopped discobox's workspace in the console, or listing its
-  services or tools, no longer starts it. Attaching to one of its terminals
-  does.
+- Listing a stopped discobox's execs, services or tools, or reading one of
+  its screens, no longer starts it. Attaching to one of its terminals does,
+  so opening its workspace in the console still does; what changes there is
+  that the workspace's poll no longer restarts a box stopped under it.
 - Terminal content and exec environment are at rest in the server's database,
   sealed. Before this the server held only terminal titles.
 - A stored answer can be up to one poll interval older than the stop it
   describes.
+- A poll that lands while a box is shutting down can replace the inventory
+  with one taken mid-shutdown, its terminals already gone. The sandbox agent
+  stops alongside the exec units rather than after them, so the window is
+  short, but nothing closes it.
 - A busy terminal changes its screen between most polls, so a working box
   posts its whole inventory every 15 seconds. Splitting the screens from the
   lists, each with its own digest, is the next step if that proves a cost.
 - A sandbox agent older than this has no inventory route; its box is read as
   one with no inventory once it stops. A pool agent older than this still
-  starts a box for these reads when the control plane's row says `running`
-  and the box is not.
+  starts a box for these reads. A control plane older than this, under a pool
+  agent that is not, mints no `inventory:read` and has no inventory to answer
+  with: it relays the pool agent's 409 for these reads of a stopped box.
+- Listing a stopped box's tools is refused when it posted none. Running a
+  tool is use: the CLI starts the box and reads its tools then.
+- A client that asked one of these reads in order to act on the answer now
+  has to look at `observedAt`: a stored exec record can say `running` for a
+  box that is down. The CLI's wait for an exec to exit ends on a stored answer
+  rather than polling it, and the console opens no tab from one.
