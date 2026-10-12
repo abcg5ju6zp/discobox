@@ -116,8 +116,8 @@ func NormalizeRemote(remote string) string {
 			return ""
 		}
 		scheme := strings.ToLower(parsed.Scheme)
-		scheme = strings.TrimPrefix(strings.TrimSuffix(scheme, "+ssh"), "ssh+")
-		if scheme == "" {
+		// git+ssh and ssh+git are SSH by another name.
+		if scheme == "git+ssh" || scheme == "ssh+git" {
 			scheme = "ssh"
 		}
 		implied, ok := defaultPorts[scheme]

@@ -13,6 +13,8 @@ func TestEverySpellingOfARemoteIsOneCache(t *testing.T) {
 		"ssh://git@github.com/Acme/widget.git",
 		"ssh://git@github.com:22/Acme/widget.git",
 		"git+ssh://git@github.com/Acme/widget.git",
+		"git+ssh://git@github.com:22/Acme/widget.git",
+		"ssh+git://github.com:22/Acme/widget",
 		"git://github.com/Acme/widget.git",
 		"git@github.com:Acme/widget.git",
 		"github.com:Acme/widget",

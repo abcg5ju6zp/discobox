@@ -466,3 +466,81 @@ func TestAnExportedNamespaceImportsIntoAnotherCache(t *testing.T) {
 		t.Fatalf("imported HEAD = %q", got)
 	}
 }
+
+// An imported origin is whatever an archive's author wrote, configuration
+// included, and the pool agent is root: git is never run in it, so nothing
+// its configuration names is run, and nothing it links to elsewhere on this
+// host is lent to the cache.
+func TestAnImportRunsNothingTheImportedRepositoryNames(t *testing.T) {
+	ctx := context.Background()
+	s := New(filepath.Join(t.TempDir(), "caches"))
+	path := use(t, s, "github.com/acme/widget")
+	w := newWork(t)
+	tip := w.commit("a")
+	w.git("tag", "-a", "-m", "v1", "v1")
+	w.git("pack-refs", "--all")
+	src := filepath.Join(t.TempDir(), "widget.git")
+	w.git("clone", "--quiet", "--bare", w.dir, src)
+
+	// Configuration that would run a program were git started in src.
+	ran := filepath.Join(t.TempDir(), "ran")
+	hostile := "[core]\n\tfsmonitor = touch " + ran + "\n\tsshCommand = touch " + ran + "\n[uploadpack]\n\tpackObjectsHook = touch " + ran + "\n"
+	config, err := os.OpenFile(filepath.Join(src, "config"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.WriteString(hostile); err != nil {
+		t.Fatal(err)
+	}
+	_ = config.Close()
+
+	if err := s.Import(ctx, path, "sbx-one", "widget", src); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("importing a repository ran a program its configuration named")
+	}
+	if got := resolve(ctx, path, "refs/namespaces/sbx-one-widget/refs/heads/main"); got != tip {
+		t.Fatalf("imported branch = %q, want %q", got, tip)
+	}
+	if got := resolve(ctx, path, "refs/namespaces/sbx-one-widget/refs/tags/v1^{commit}"); got != tip {
+		t.Fatalf("imported packed tag = %q, want %q", got, tip)
+	}
+	// The objects are the cache's own now, not borrowed.
+	if err := os.RemoveAll(src); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git(ctx, path, nil, nil, "cat-file", "-e", tip+"^{tree}"); err != nil {
+		t.Fatalf("the imported objects went with the repository they came from: %v", err)
+	}
+
+	// A repository that borrows objects from elsewhere on this host, by an
+	// alternates file or a link, is refused: it would hand the importer
+	// whatever those objects are.
+	for name, corrupt := range map[string]func(string) error{
+		"an alternates file": func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, "objects", "info", "alternates"), []byte(filepath.Join(path, "objects")+"\n"), 0o600)
+		},
+		"a linked object directory": func(dir string) error {
+			return os.Symlink(filepath.Join(path, "objects", "pack"), filepath.Join(dir, "objects", "borrowed"))
+		},
+		"a linked ref": func(dir string) error {
+			return os.Symlink("/etc/hostname", filepath.Join(dir, "refs", "heads", "linked"))
+		},
+	} {
+		borrowed := filepath.Join(t.TempDir(), "borrowed.git")
+		w.git("clone", "--quiet", "--bare", w.dir, borrowed)
+		if err := os.MkdirAll(filepath.Join(borrowed, "objects", "info"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := corrupt(borrowed); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Import(ctx, path, "sbx-two", "widget", borrowed); err == nil {
+			t.Fatalf("a repository with %s was imported", name)
+		}
+		if hasBranches(t, s, path, "sbx-two", "widget") {
+			t.Fatalf("a repository with %s left refs behind", name)
+		}
+	}
+}

@@ -636,26 +636,38 @@ func (s *Store) Export(ctx context.Context, path, sandboxID, slug, dest string) 
 }
 
 // Import reads the bare repository at src, which an export wrote, into a
-// source's namespace. src is another pool's word and whoever owns it on disk
-// is not this process, so its ownership is not held against it; nothing in it
-// is run.
+// source's namespace. src is whatever an archive's author put there, so git
+// is never run in it (readImportedRepository): its objects are lent to the
+// cache as an alternate while the cache packs what src's refs reach into its
+// own store, and the refs are then created there.
 func (s *Store) Import(ctx context.Context, path, sandboxID, slug, src string) error {
 	namespace := Namespace(sandboxID, slug)
 	if !validNamespace(namespace) {
 		return fmt.Errorf("%w: namespace %q", ErrInvalid, namespace)
 	}
+	imported, err := readImportedRepository(src)
+	if err != nil {
+		return fmt.Errorf("import origin: %w", err)
+	}
 	if err := s.markNamespace(path, namespace, sandboxID); err != nil {
 		return err
 	}
-	prefix := "refs/namespaces/" + namespace + "/"
-	if _, err := git(ctx, path, nil, nil, "-c", "safe.directory="+src, "fetch", "--quiet", "--no-tags", src, "+refs/*:"+prefix+"refs/*"); err != nil {
-		return fmt.Errorf("import origin: %w", err)
+	if len(imported.refs) > 0 {
+		var tips, updates bytes.Buffer
+		for ref, object := range imported.refs {
+			tips.WriteString(object + "\n")
+			fmt.Fprintf(&updates, "update %s %s\n", namespaceRef(namespace, ref), object)
+		}
+		lend := []string{"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + imported.objects}
+		if _, err := git(ctx, path, tips.Bytes(), lend, "pack-objects", "--revs", "--quiet", filepath.Join(path, "objects", "pack", "pack")); err != nil {
+			return fmt.Errorf("import origin: %w", err)
+		}
+		// Without the loan: a ref is created only at what the cache now holds.
+		if _, err := git(ctx, path, updates.Bytes(), nil, "update-ref", "--stdin"); err != nil {
+			return fmt.Errorf("import origin: %w", err)
+		}
 	}
-	branch := ""
-	if target, err := git(ctx, src, nil, nil, "-c", "safe.directory="+src, "symbolic-ref", "--quiet", "HEAD"); err == nil {
-		branch = strings.TrimPrefix(target, "refs/heads/")
-	}
-	if err := s.EnsureHead(ctx, path, sandboxID, slug, branch); err != nil {
+	if err := s.EnsureHead(ctx, path, sandboxID, slug, imported.branch); err != nil {
 		return err
 	}
 	return s.Delivered(ctx, path, sandboxID, slug, false, "")
