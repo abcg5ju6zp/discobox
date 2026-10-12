@@ -1,6 +1,6 @@
 ---
 name: verify-recipes
-description: This repository's recipes for verifying a change at runtime inside a discobox — a CLI or console (TUI) change against the running `task dev` loop (opening the console in an isolated tmux, signalling it, forcing a real out-of-memory kill), the nested-Docker runc wrapper (runcca / sandbox-agent/cmd/discobox-runc) via docker run and kind, the pool proxy (`proxy/`) by driving traffic from a box of the dev pool, the runtime-config intake the pool delivers to its sandboxes, and a change to a skill (`.discobox/skills`, `.agents/skills`) via a headless agent in an isolated HOME. Inside a discobox, the generic `verify` skill (from `.discobox/skills/verify`) reads it first and records what it learns here; outside one, Claude Code's built-in `/verify` does not know this name. Use when verifying a change to the discobox console, its terminal guard, anything reached from bare `./build/discobox`, the runc wrapper, the pool proxy, the runtime-config intake, or a skill.
+description: This repository's recipes for verifying a change at runtime inside a discobox — a CLI or console (TUI) change against the running `task dev` loop (opening the console in an isolated tmux, signalling it, forcing a real out-of-memory kill), the nested-Docker runc wrapper (runcca / sandbox-agent/cmd/discobox-runc) via docker run and kind, the pool proxy (`proxy/`) by driving traffic from a box of the dev pool, the runtime-config intake the pool delivers to its sandboxes, and a change to a skill (`.agents/skills`) via a headless agent in an isolated HOME. The generic `verify` skill (`.agents/skills/verify`) reads it first and records what it learns here; Claude Code's built-in `/verify` does not know this name. Use when verifying a change to the discobox console, its terminal guard, anything reached from bare `./build/discobox`, the runc wrapper, the pool proxy, the runtime-config intake, or a skill.
 ---
 
 # Verifying the console
@@ -124,12 +124,12 @@ and that the process started after the build (no `ps` in the image: walk
   media type, or the content-aware arm refuses it. Either route leaves the
   pool-agent, server, and CLI relays unexercised.
 
-# Verifying a skill change (`.discobox/skills`, `.agents/skills`)
+# Verifying a skill change (`.agents/skills`)
 
 The surface is an agent loading the skill. Install it the way
-`sandbox-agent/terminal/skills.go` does — the image's skills, then
-`.discobox/skills`, into both `.claude/skills` and `.agents/skills` of an
-isolated `HOME` — and run a headless agent in a throwaway repo built to reach
+`sandbox-agent/terminal/skills.go` does — the image's skills (this repository
+has no `.discobox/skills` to follow them) into both `.claude/skills` and
+`.agents/skills` of an isolated `HOME` — and run a headless agent in a throwaway repo built to reach
 the changed instruction. A changed `.agents/skills/<name>` is a project skill:
 the harness reads it from the repo it runs in, so copy it into the throwaway
 repo's `.agents/skills/` and link `.claude/skills -> ../.agents/skills` there,
@@ -140,7 +140,7 @@ as this repository does: Claude Code reads only a repo's `.claude/skills`
 S=<scratchpad>; H=$S/home; mkdir -p $H/.claude
 cp ~/.claude/.credentials.json ~/.claude/settings.json $H/.claude/; cp ~/.claude.json $H/
 for d in .claude/skills .agents/skills; do mkdir -p $H/$d
-  cp -r /usr/local/share/discobox/skills/. .discobox/skills/. $H/$d/; done
+  cp -r /usr/local/share/discobox/skills/. $H/$d/; done
 # in a throwaway git repo holding the scenario:
 env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
   -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_CHILD_SESSION \
