@@ -106,9 +106,10 @@ func (s *sandboxService) cacheOriginHandler() http.Handler {
 
 		repo := githttp.Repository{Path: path, UID: -1, GID: -1, Namespace: gitcache.Namespace(sandboxID, slug)}
 		push := gitbackend.IsReceivePack(r)
+		var before gitcache.RemoteView
 		switch {
 		case push:
-			if err := store.Receiving(path, sandboxID, slug); err != nil {
+			if before, err = store.Receiving(r.Context(), path, sandboxID, slug); err != nil {
 				http.Error(w, err.Error(), statusCodeForCacheError(err))
 				return
 			}
@@ -135,7 +136,7 @@ func (s *sandboxService) cacheOriginHandler() http.Handler {
 			// the refs are in the cache either way.
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), deliveredTimeout)
 			defer cancel()
-			if err := store.Delivered(ctx, path, sandboxID, slug, caller == ""); err != nil {
+			if err := store.Delivered(ctx, path, sandboxID, slug, caller == "", before); err != nil {
 				slog.WarnContext(ctx, "settle a delivered git cache namespace", "sandboxId", sandboxID, "source", slug, "error", err)
 			}
 		}

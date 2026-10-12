@@ -74,7 +74,8 @@ func (w *work) commit(name string) string {
 // sandbox caller.
 func (w *work) push(s *Store, path, sandboxID, slug, caller string, refspecs ...string) (string, error) {
 	w.t.Helper()
-	if err := s.Receiving(path, sandboxID, slug); err != nil {
+	before, err := s.Receiving(context.Background(), path, sandboxID, slug)
+	if err != nil {
 		w.t.Fatal(err)
 	}
 	config := ReceiveConfig()
@@ -92,7 +93,7 @@ func (w *work) push(s *Store, path, sandboxID, slug, caller string, refspecs ...
 	receive := "git " + strings.Join(config, " ") + " receive-pack"
 	out, err := w.try(env, append([]string{"push", "--receive-pack=" + receive, path}, refspecs...)...)
 	if err == nil {
-		if err := s.Delivered(context.Background(), path, sandboxID, slug, caller == ""); err != nil {
+		if err := s.Delivered(context.Background(), path, sandboxID, slug, caller == "", before); err != nil {
 			w.t.Fatal(err)
 		}
 	}
@@ -104,7 +105,7 @@ func (w *work) push(s *Store, path, sandboxID, slug, caller string, refspecs ...
 // answered.
 func nameWithoutSending(t *testing.T, s *Store, path, caller, sandboxID, slug, object string) (string, error) {
 	t.Helper()
-	if err := s.Receiving(path, sandboxID, slug); err != nil {
+	if _, err := s.Receiving(context.Background(), path, sandboxID, slug); err != nil {
 		t.Fatal(err)
 	}
 	config, env, err := s.SandboxReceiveConfig(path, caller, sandboxID, slug)
@@ -237,6 +238,16 @@ func TestTheRecordOfARemoteFollowsWhatWasLastDelivered(t *testing.T) {
 	}
 	if got := refs(t, path, RemoteRefPrefix); !slices.Equal(got, []string{"refs/cache/heads/main", "refs/cache/heads/release/1.0"}) {
 		t.Fatalf("remote refs = %v", got)
+	}
+	// A later push into an older sandbox's namespace moves its branch and
+	// says nothing of the remote: its view of the remote, as old as the
+	// sandbox, is not written back over the newer record.
+	next := w.commit("b")
+	if out, err := w.push(s, path, "sbx-one", "widget", "", next+":refs/heads/main"); err != nil {
+		t.Fatalf("push: %v\n%s", err, out)
+	}
+	if got := refs(t, path, RemoteRefPrefix); !slices.Equal(got, []string{"refs/cache/heads/main", "refs/cache/heads/release/1.0"}) {
+		t.Fatalf("remote refs after a push into an older namespace = %v", got)
 	}
 	// A delivery that names none of the remote's branches says nothing of them.
 	if out, err := w.push(s, path, "sbx-three", "widget", "", tip+":refs/heads/main"); err != nil {

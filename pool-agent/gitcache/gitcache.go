@@ -359,7 +359,8 @@ func (s *Store) Pin(ctx context.Context, path, sandboxID, slug string, refs map[
 		result.Missing = append(result.Missing, branches...)
 		sort.Strings(result.Missing)
 	}
-	if err := s.markNamespace(path, namespace, sandboxID); err != nil {
+	before, err := s.Receiving(ctx, path, sandboxID, slug)
+	if err != nil {
 		return PinResult{}, err
 	}
 	if updates.Len() > 0 {
@@ -368,7 +369,7 @@ func (s *Store) Pin(ctx context.Context, path, sandboxID, slug string, refs map[
 		}
 	}
 	sort.Strings(result.Pinned)
-	if err := s.Delivered(ctx, path, sandboxID, slug, caller == ""); err != nil {
+	if err := s.Delivered(ctx, path, sandboxID, slug, caller == "", before); err != nil {
 		return PinResult{}, err
 	}
 	return result, nil
@@ -455,21 +456,45 @@ func (s *Store) markNamespace(path, namespace, sandboxID string) error {
 }
 
 // Receiving prepares the cache at path to take a push into one source's
-// namespace: it records whose the namespace is.
-func (s *Store) Receiving(path, sandboxID, slug string) error {
+// namespace: it records whose the namespace is, and returns what the
+// namespace says of the remote's branches now, for Delivered to tell whether
+// the push said anything new of them.
+func (s *Store) Receiving(ctx context.Context, path, sandboxID, slug string) (RemoteView, error) {
 	namespace := Namespace(sandboxID, slug)
 	if !validNamespace(namespace) {
-		return fmt.Errorf("%w: namespace %q", ErrInvalid, namespace)
+		return "", fmt.Errorf("%w: namespace %q", ErrInvalid, namespace)
 	}
-	return s.markNamespace(path, namespace, sandboxID)
+	if err := s.markNamespace(path, namespace, sandboxID); err != nil {
+		return "", err
+	}
+	return remoteView(ctx, path, namespace)
+}
+
+// RemoteView is what a namespace holds of its remote's branches at one
+// moment.
+type RemoteView string
+
+func remoteView(ctx context.Context, path, namespace string) (RemoteView, error) {
+	out, err := git(ctx, path, nil, nil, "for-each-ref", "--format=%(objectname) %(refname)", namespaceRef(namespace, "refs/remotes/origin/"))
+	if err != nil {
+		return "", fmt.Errorf("read the remote's branches in git cache namespace %s: %w", namespace, err)
+	}
+	return RemoteView(out), nil
 }
 
 // Delivered settles a namespace after a pin or a push wrote it: its HEAD
-// names a branch it holds, and — for a project member's delivery — the
-// cache's record of the remote follows what was delivered. A sandbox's word
-// on where a remote's branches are is not recorded: the cache it names is its
-// own claim (ADR 26-10-10-545 §7).
-func (s *Store) Delivered(ctx context.Context, path, sandboxID, slug string, member bool) error {
+// names a branch it holds, and — for a project member's delivery that said
+// something of the remote's branches — the cache's record of the remote
+// follows what was delivered. before is what the namespace held of them when
+// the delivery began (Receiving).
+//
+// A later `discobox push` into the namespace moves a branch and says nothing
+// of the remote, so it leaves the record alone: the namespace's view of the
+// remote is as old as its sandbox, and must not be written back over what a
+// newer delivery recorded. A sandbox's word on where a remote's branches are
+// is never recorded: the cache it names is its own claim (ADR 26-10-10-545
+// §7).
+func (s *Store) Delivered(ctx context.Context, path, sandboxID, slug string, member bool, before RemoteView) error {
 	namespace := Namespace(sandboxID, slug)
 	_ = os.WriteFile(filepath.Join(path, usedFile), nil, 0o600)
 	if err := s.EnsureHead(ctx, path, sandboxID, slug, ""); err != nil {
@@ -477,6 +502,10 @@ func (s *Store) Delivered(ctx context.Context, path, sandboxID, slug string, mem
 	}
 	if !member {
 		return nil
+	}
+	after, err := remoteView(ctx, path, namespace)
+	if err != nil || after == before {
+		return err
 	}
 	return recordRemote(ctx, path, namespace)
 }
@@ -629,7 +658,7 @@ func (s *Store) Import(ctx context.Context, path, sandboxID, slug, src string) e
 	if err := s.EnsureHead(ctx, path, sandboxID, slug, branch); err != nil {
 		return err
 	}
-	return s.Delivered(ctx, path, sandboxID, slug, false)
+	return s.Delivered(ctx, path, sandboxID, slug, false, "")
 }
 
 // git runs git in dir — a cache, or nowhere — in the environment every git
