@@ -21,8 +21,9 @@ func registerSandboxGitRoutes(router chi.Router, service *sandboxService) {
 	router.Handle("/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/git-repositories/*", service.autoStart(failFast, needsSandbox, service.sandboxWorktreeHandler()))
 }
 
-// registerSandboxOriginRoutes serves each source's origin, whichever kind it is
-// (ADR 0126 §4). It is a different repository from the worktree above,
+// registerSandboxOriginRoutes serves each source's origin as its sandbox
+// reaches it (ADR 0126 §4), and to the control plane for a source with a bare
+// origin of its own (ADR 0058). It is a different repository from the worktree above,
 // addressed by its own route rather than a synthesized repository id: source
 // slugs are client-supplied, so any suffix convention could collide with a
 // real one (ADR 0058 §3). It is registered apart from the other routes because
@@ -68,12 +69,15 @@ func (s *sandboxService) sandboxOriginHandler() http.Handler {
 			http.Error(w, err.Error(), statusCodeForGitError(err))
 			return
 		}
+		if location.Release != nil {
+			defer location.Release()
+		}
 		githttp.ServeBackend(w, r, githttp.Repository{
-			Path: location.Path,
-			UID:  location.UID,
-			GID:  location.GID,
-			Live: location.Live,
-			Refs: location.Refs,
+			Path:      location.Path,
+			UID:       location.UID,
+			GID:       location.GID,
+			Namespace: location.Namespace,
+			FetchOnly: location.FetchOnly,
 		}, suffix)
 	})
 }

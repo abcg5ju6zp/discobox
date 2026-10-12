@@ -320,55 +320,6 @@ func TestNormalizeSandboxConfigPublishesPrimaryBindRoot(t *testing.T) {
 	}
 }
 
-// The origin a sandbox is bound to is the repository's own Git directory and
-// nothing else: a .git that is a file (a linked worktree or submodule checkout)
-// or a symlink would make the bind something other than that, and a symlink
-// can point at the working tree whose ignored files ADR 0093 exists to keep out.
-func TestCheckLocalGitDirectoryRefusesAnythingButARealDirectory(t *testing.T) {
-	requirePOSIXHost(t)
-	runtime := &DockerSandboxRuntime{}
-	source := func(dir string) workerapimodel.GitSource {
-		return workerapimodel.GitSource{
-			Kind:           workerclient.GitSourceKindGit,
-			LocalDirectory: workerclient.NewOptString(dir),
-		}
-	}
-
-	repo := t.TempDir()
-	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.checkLocalGitDirectory(source(repo)); err != nil {
-		t.Fatalf("check a repository's own Git directory: %v", err)
-	}
-
-	worktree := t.TempDir()
-	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+filepath.Join(repo, ".git", "worktrees", "w")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.checkLocalGitDirectory(source(worktree)); err == nil {
-		t.Fatal("a .git file was accepted as a Git directory to bind")
-	}
-
-	linked := t.TempDir()
-	if err := os.Symlink(linked, filepath.Join(linked, ".git")); err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.checkLocalGitDirectory(source(linked)); err == nil {
-		t.Fatal("a .git symlink to the working tree was accepted as a Git directory to bind")
-	}
-
-	if err := runtime.checkLocalGitDirectory(source(t.TempDir())); err == nil {
-		t.Fatal("a directory with no .git was accepted as a Git directory to bind")
-	}
-
-	pushed := source(worktree)
-	pushed.Delivery = workerclient.NewOptGitSourceDelivery(workerclient.GitSourceDeliveryPush)
-	if err := runtime.checkLocalGitDirectory(pushed); err != nil {
-		t.Fatalf("check a push-delivered source, whose origin is pool-side: %v", err)
-	}
-}
-
 // Discobox state is addressed by its container path everywhere; only the mount
 // source handed to the daemon is translated, and only when a driver relocated
 // the state root.

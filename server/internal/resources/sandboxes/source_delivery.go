@@ -1,20 +1,17 @@
 package sandboxes
 
 import (
-	"context"
 	"fmt"
 	"net/http"
-	"net/url"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/discobox-ai/discobox/internal/originkey"
+	"github.com/discobox-ai/discobox/internal/sourcecache"
 	"github.com/discobox-ai/discobox/server/internal/apperrors"
 	"github.com/discobox-ai/discobox/server/internal/model"
 	"github.com/discobox-ai/discobox/server/internal/reconcile"
-	"github.com/discobox-ai/discobox/server/internal/sandbox"
 )
 
 // sourceDataKey identifies the durable pool-local data shared by every sandbox
@@ -30,77 +27,75 @@ func sourceDataKey(hostID string, source *model.GitSource) string {
 }
 
 // resolveSourceDelivery records how each of a sandbox's sources reaches it, so
-// every later stage reads a stated intent instead of re-deriving it. The
-// decision needs the provider, the client's origin, and this server's identity
-// together, and only create has all three. The provider instance is the one
-// backing the sandbox's pool, resolved by the caller.
+// every later stage reads a stated intent instead of re-deriving it. Nothing
+// is chosen: every Git source of a sandbox is delivered by a client into the
+// pool's cache for its remote (ADR 26-10-10-545 §1), the primary one and each
+// source code reference alike. What is decided here is which cache.
 //
-// Every source is decided the same way: the primary one and each source code
-// reference alike are local directories the sandbox either binds or cannot see,
-// and a reference the sandbox cannot reach is exactly as undeliverable as a
-// primary one. The provider is resolved once for all of them.
-//
-// A client may not ask for push delivery: whether a bind is possible is the
-// server's to know, and a client claiming otherwise would either force a
-// needless push or assert a reachability it cannot verify.
-func (s *Service) resolveSourceDelivery(ctx context.Context, source *model.GitSource, refs model.SourceCodeReferences, origin *model.Origin, providerInstance *model.SandboxProviderInstance) error {
-	sources := sandboxGitSources(source, refs)
-	if len(sources) == 0 {
-		return nil
-	}
-	for _, entry := range sources {
-		if entry.source.Delivery == model.GitSourceDeliveryPush {
+// A client may not name a delivery or a cache: both are the server's record.
+func resolveSourceDelivery(sandboxID string, source *model.GitSource, refs model.SourceCodeReferences, origin *model.Origin) error {
+	for _, entry := range sandboxGitSources(source, refs) {
+		if entry.source.Delivery != "" {
 			return apperrors.NewStatusError(http.StatusBadRequest,
 				"source delivery is decided by the server and cannot be requested")
 		}
-	}
-	provider, err := s.sandboxProviders.ResolveInstance(ctx, providerInstance)
-	if err != nil {
-		// The instance exists in the store but has not been instantiated, so its
-		// reachability is unknown. Leaving delivery at clone is safe only
-		// because a sandbox whose provider never instantiates cannot run at all,
-		// so no bind is ever attempted. Nothing here can be concluded about a
-		// provider that does come up later.
-		for _, entry := range sources {
-			entry.source.Delivery = model.GitSourceDeliveryClone
-			entry.store()
+		slug := ""
+		if entry.source.Slug != nil {
+			slug = strings.TrimSpace(*entry.source.Slug)
 		}
-		return nil //nolint:nilerr // an uninstantiated provider is not a create failure
-	}
-	for _, entry := range sources {
-		if sourceNeedsPush(provider.Definition(), s.hostID, origin, entry.source) {
-			entry.source.Delivery = model.GitSourceDeliveryPush
-		} else {
-			entry.source.Delivery = model.GitSourceDeliveryClone
+		if slug == "" {
+			return apperrors.NewStatusError(http.StatusBadRequest, "a source has no slug to name its cache namespace by")
 		}
+		key := sourceCacheKey(sandboxID, slug, origin, entry.source)
+		entry.source.Delivery = model.GitSourceDeliveryCache
+		entry.source.CacheKey = &key
 		entry.store()
 	}
 	return nil
 }
 
-// refuseHostURLs refuses a sandbox's create whose sources name a URL the pool
-// agent would clone off its own host: `file://`, or a bare path. The agent
-// clones a URL as itself, so such a source would put any repository it can read
-// into a discobox a sandbox made, which ADR 26-09-24-630 §3 exists to prevent. Only
-// the network schemes Git clones over are a remote.
-func refuseHostURLs(source *model.GitSource, refs model.SourceCodeReferences) error {
-	for _, entry := range sandboxGitSources(source, refs) {
-		if entry.source.URL == nil {
-			continue
-		}
-		raw := strings.TrimSpace(*entry.source.URL)
-		parsed, err := url.Parse(raw)
-		if err != nil {
-			return apperrors.NewStatusError(http.StatusBadRequest, fmt.Sprintf("source URL %q is not a URL", raw))
-		}
-		switch strings.ToLower(parsed.Scheme) {
-		case "https", "http", "ssh", "git":
-		default:
-			return apperrors.NewStatusError(http.StatusForbidden,
-				fmt.Sprintf("a discobox names a source for a discobox it creates by a network URL or pushes it; %q is neither", raw))
+// sourceCacheKey names the pool cache a source is delivered into (ADR
+// 26-10-10-545 §2): its remote's, when it has one; else its directory's on
+// its client's host; else one of its own.
+//
+// The host identity is deliberately not part of a remote's key. Members of a
+// project are trusted with each other's source, and sharing a remote's cache
+// between them is where a team's reuse is. The identity is a sandbox's own
+// claim when a sandbox creates a discobox, and so is the remote; that is
+// harmless, because a sandbox reaches nothing in a cache but what it sent
+// (§7), whichever cache it names.
+func sourceCacheKey(sandboxID, slug string, origin *model.Origin, source *model.GitSource) string {
+	if key := sourcecache.RemoteKey(sourceRemote(source)); key != "" {
+		return key
+	}
+	hostID := ""
+	if origin != nil {
+		hostID = strings.TrimSpace(origin.HostID)
+	}
+	if hostID != "" {
+		if key := sourcecache.DirectoryKey(sourceDataKey(hostID, source)); key != "" {
+			return key
 		}
 	}
-	return nil
+	return sourcecache.SandboxKey(sandboxID, slug)
+}
+
+// sourceRemote is a source's remote: the URL of a remote-URL source, and the
+// remote its client reported for a local checkout.
+func sourceRemote(source *model.GitSource) string {
+	if source == nil {
+		return ""
+	}
+	if source.LocalDirectory == nil || strings.TrimSpace(*source.LocalDirectory) == "" {
+		if source.URL != nil {
+			return strings.TrimSpace(*source.URL)
+		}
+		return ""
+	}
+	if source.UpstreamURL != nil {
+		return strings.TrimSpace(*source.UpstreamURL)
+	}
+	return ""
 }
 
 // gitSourceEntry is one of a sandbox's sources, addressable for mutation. A
@@ -192,107 +187,37 @@ func awaitingSourcePush(sb *model.Sandbox) bool {
 	if sb == nil {
 		return false
 	}
-	if len(pushDeliveredSources(sb)) == 0 {
+	if len(clientDeliveredSources(sb)) == 0 {
 		return false
 	}
 	return sb.SourceDeliveredAt == nil
 }
 
-// pushDeliveredSources is every source of a sandbox the client must push,
-// primary first. A sandbox with none of them never parks.
-func pushDeliveredSources(sb *model.Sandbox) []gitSourceEntry {
+// clientDeliveredSources is every source of a sandbox a client delivers,
+// primary first: one delivered into a pool cache, and one pushed into the
+// repository an earlier pool made for its sandbox (ADR 0058). A sandbox with
+// none of them never parks.
+//
+// A local source recorded as clone was served live from the developer's Git
+// directory, which no pool does now (ADR 26-10-10-545 §8). A sandbox that ran
+// has cloned it and is owed nothing. One created before that changed and not
+// yet run has nothing to clone until a client pushes, so it waits for one as
+// a pushed source does.
+func clientDeliveredSources(sb *model.Sandbox) []gitSourceEntry {
 	if sb == nil {
 		return nil
 	}
 	var out []gitSourceEntry
 	for _, entry := range sandboxGitSources(sb.Source, sb.SourceCodeReferences) {
-		if entry.source.Delivery == model.GitSourceDeliveryPush {
+		switch entry.source.Delivery {
+		case model.GitSourceDeliveryPush, model.GitSourceDeliveryCache:
 			out = append(out, entry)
+		default:
+			local := entry.source.LocalDirectory != nil && strings.TrimSpace(*entry.source.LocalDirectory) != ""
+			if local && sandboxHasNeverRun(sb.State) {
+				out = append(out, entry)
+			}
 		}
 	}
 	return out
-}
-
-// sourceNeedsPush reports whether a sandbox's source must be delivered by the
-// client pushing into the sandbox's repository, rather than by the sandbox
-// cloning the client's directory through a bind mount.
-//
-// A local source directory is only reachable when the provider exposes that
-// path to its sandboxes *and* the client is on this machine. Neither condition
-// implies the other: a Docker provider on a remote server binds happily, just
-// not to the caller's files, and one on this machine binds only the host
-// directories it was configured with. Comparing host IDs is what separates the
-// first pair, and it works because a co-located CLI and server resolve the same
-// identity from the same file; the provider's local source roots settle the
-// second.
-//
-// Unknowns resolve to true. A needless push is slow; a bind of a path the
-// sandbox cannot see fails outright.
-func sourceNeedsPush(definition sandbox.ProviderDefinition, serverHostID string, origin *model.Origin, source *model.GitSource) bool {
-	if source == nil {
-		return false
-	}
-	if source.LocalDirectory == nil || strings.TrimSpace(*source.LocalDirectory) == "" {
-		// A remote URL is reachable from anywhere the sandbox has network, so
-		// the sandbox clones it directly and no client is involved.
-		return false
-	}
-	if source.NoLocalRepository || source.NoLocalCommits || source.NoLocalGitDirectory {
-		// There is nothing at that path to clone or bind even from this
-		// machine: the directory is in no repository at all, or it is one `git
-		// init` left with no commits, whose base commit the client synthesized
-		// and only the client holds (ADR 0083), or its .git is not the Git
-		// directory — a linked worktree or submodule checkout — and that
-		// directory is the only thing a sandbox's origin may be bound to (ADR
-		// 0093). Each way only a push can deliver it.
-		// This is not the client asking for a push: it reported what its
-		// filesystem holds, which the server cannot see, and the conclusion is
-		// drawn here.
-		return true
-	}
-	if !localSourceRootsCover(definition.LocalSourceRoots, *source.LocalDirectory) {
-		// Either the provider reaches none of this filesystem, or it reaches it
-		// somewhere other than where this directory lives. A provider that
-		// mounts /home cannot clone /workspace/source, and the clone fails in
-		// the pool agent long after this decision if it is made anyway.
-		return true
-	}
-	if strings.TrimSpace(serverHostID) == "" {
-		return true
-	}
-	if origin == nil || strings.TrimSpace(origin.HostID) == "" {
-		// A client that reported no origin cannot be placed on this machine,
-		// so its paths cannot be assumed to resolve here.
-		return true
-	}
-	return strings.TrimSpace(origin.HostID) != strings.TrimSpace(serverHostID)
-}
-
-// localSourceRootsCover reports whether a local source directory lies under one
-// of the host paths a provider exposes to its sandboxes.
-//
-// Containment is by path element, so /home covers /home/darren/src but /home-old
-// is not covered by /home. A root of "/" covers everything, which is how a
-// provider that shares its whole filesystem says so. Anything that is not an
-// absolute path — on either side — is covered by nothing: the comparison is
-// between two host paths, and a relative one names no place.
-func localSourceRootsCover(roots []string, directory string) bool {
-	directory = filepath.Clean(strings.TrimSpace(directory))
-	if !filepath.IsAbs(directory) {
-		return false
-	}
-	for _, root := range roots {
-		root = filepath.Clean(strings.TrimSpace(root))
-		if !filepath.IsAbs(root) {
-			continue
-		}
-		// A root is the whole filesystem when it is a volume's root: "/" on
-		// POSIX, where VolumeName is empty, and "C:\\" on Windows, where a bare
-		// separator is not a root at all.
-		if root == filepath.VolumeName(root)+string(filepath.Separator) || directory == root ||
-			strings.HasPrefix(directory, root+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
 }

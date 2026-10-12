@@ -2199,11 +2199,15 @@ components:
                 checkout:
                     $ref: '#/components/schemas/GitSourceCheckout'
                     description: Immutable checkout target and optional user-facing ref identity
+                cacheKey:
+                    description: The pool's Git cache this source is delivered into, set by the server for a cache-delivered source. It is the source's remote, normalized to host and path, or a key for the client's own directory when the source has no remote. Sources that share it share one object store on a pool, so a delivery sends only what the pool has not been sent before.
+                    type: string
                 delivery:
-                    description: How the source reaches the sandbox. clone means the sandbox fetches it from url or localDirectory. push means the client pushes it into the sandbox's Git repository, for a local directory the provider cannot reach; the sandbox waits in the awaiting_source phase until the push is complete. Defaults to clone.
+                    description: How the source reaches the sandbox, decided by the server and recorded at create. cache is every source created now. A client delivers it into a Git namespace of the pool's cache for the source's remote, and the sandbox clones it from the pool; the sandbox waits in the awaiting_source phase until the delivery is reported complete. clone and push are how earlier discoboxes were delivered and keep their meaning for them. clone means the sandbox fetched it from url, or from localDirectory through its pool. push means the client pushed it into a repository the pool made for that sandbox.
                     enum:
                         - clone
                         - push
+                        - cache
                     type: string
                 destination:
                     $ref: '#/components/schemas/GitSourceDestination'
@@ -2231,7 +2235,7 @@ components:
                     pattern: ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$
                     type: string
                 upstreamUrl:
-                    description: Network URL of the remote the local source's checked-out branch tracks on the client. The sandbox adds it as a remote named upstream when it materializes the source; the branch keeps tracking origin.
+                    description: Network URL of a local source's remote on the client. It is the remote its checked-out branch tracks, else origin, else its only remote. A cache-delivered source has it as the sandbox's origin remote, and it names the pool cache the source is delivered into. A source delivered before that has it as a remote named upstream.
                     type: string
                 url:
                     description: Remote Git source URL

@@ -40,7 +40,6 @@ type Service struct {
 	defaultUserID      string
 	defaultImage       string
 	defaultImageDigest string
-	hostID             string
 	// archiveRetention is the server-wide default retention for archived
 	// sandboxes; zero leaves DefaultArchiveRetention in force.
 	archiveRetention time.Duration
@@ -103,13 +102,6 @@ func (s *Service) SetArchiveRetention(retention time.Duration) {
 // a sandbox is started with; see WithServerPeerID.
 func (s *Service) SetServerPeerID(id string) {
 	s.serverPeerID = strings.TrimSpace(id)
-}
-
-// SetHostID records the machine this server runs on, so a create request whose
-// origin reports the same host is known to come from this filesystem and can
-// bind its source directory instead of pushing it.
-func (s *Service) SetHostID(hostID string) {
-	s.hostID = strings.TrimSpace(hostID)
 }
 
 // SetSecrets gives the service the credential broker a create's grants are
@@ -239,19 +231,7 @@ func (s *Service) CreateSandbox(ctx context.Context, projectID string, input ser
 	if key := model.SandboxOriginKey(origin, source); key != "" {
 		originKey = &key
 	}
-	// A sandbox's origin is its own claim about which machine it is on, and it
-	// can read the user's off any discobox's record; believed, it would have a
-	// source cloned from the server's filesystem. Its sources are pushed
-	// (ADR 26-09-24-630 §3). The origin is still recorded, for listings.
-	// Nor may it name a host path by URL, which the pool agent would clone.
-	deliveryOrigin := origin
-	if createdBySandboxID != nil {
-		deliveryOrigin = nil
-		if err := refuseHostURLs(source, sourceCodeReferences); err != nil {
-			return nil, err
-		}
-	}
-	if err := s.resolveSourceDelivery(ctx, source, sourceCodeReferences, deliveryOrigin, provider); err != nil {
+	if err := resolveSourceDelivery(sandboxID, source, sourceCodeReferences, origin); err != nil {
 		return nil, err
 	}
 	git := services.SandboxGitToModel(config.Git)
@@ -1064,40 +1044,45 @@ func (s *Service) FallbackHarnessConfig(ctx context.Context, projectID string) (
 	return s.fallbackHarnessConfig(ctx, projectID)
 }
 
-// CompleteSandboxSourcePush reports that a client finished pushing into a
-// push-delivered sandbox's repositories, resuming the sandbox that has been
-// parked in awaiting_source since it was provisioned.
+// CompleteSandboxSourcePush reports that a client finished delivering a
+// sandbox's sources, which is what lets the sandbox start on them.
 //
-// The report covers every push-delivered source at once — the primary source
-// and any source code reference the sandbox cannot reach on its own. A sandbox
-// missing one of them would start against an incomplete workspace, so the
-// resume waits for all of them rather than resuming per source.
+// The report covers every client-delivered source at once — the primary
+// source and each source code reference. A sandbox missing one of them would
+// start against an incomplete workspace, so it waits for all of them rather
+// than resuming per source.
+//
+// A delivery does not wait for the sandbox (ADR 26-10-10-545 §3): a client
+// delivers into its pool's cache while the image is pulled and the sandbox
+// boots, so the report usually arrives before the sandbox would have parked
+// in awaiting_source, and a sandbox whose source has landed by then never
+// parks. One that did park is resumed by it.
 //
 // The commits are a confirmation, not an instruction. What to check out was
 // fixed at create, in each source's Checkout.Commit: the client resolved it
-// from its own repository before the sandbox existed, and the push only makes
-// those objects reachable. Accepting a different commit here would let a
-// resumed sandbox run something other than what its source says it runs, so a
-// mismatch is refused rather than recorded.
+// before the sandbox existed, and the delivery only makes those objects
+// reachable. Accepting a different commit here would let a sandbox run
+// something other than what its source says it runs, so a mismatch is refused
+// rather than recorded.
 //
-// The server does not verify the commits are present in the sandbox's
-// repositories: that means a round trip to the pool agent, and the reconcile that
-// follows fails on a missing commit anyway, with a better message than this
-// endpoint could produce.
+// The server does not verify the commits are present on the pool: that means
+// a round trip to the pool agent, and the reconcile that follows fails on a
+// missing commit anyway, with a better message than this endpoint could
+// produce.
 func (s *Service) CompleteSandboxSourcePush(ctx context.Context, projectID, sandboxID string, input services.CompleteSandboxSourcePushBody) (*model.Sandbox, error) {
 	existing, err := s.store.GetSandbox(ctx, projectID, sandboxID)
 	if err != nil {
 		return nil, apperrors.NotFound(err, "sandbox not found")
 	}
-	pending := pushDeliveredSources(existing)
+	pending := clientDeliveredSources(existing)
 	if len(pending) == 0 {
 		return nil, apperrors.NewStatusError(http.StatusConflict,
-			"no sandbox source is push-delivered; nothing is waiting to be pushed")
+			"no sandbox source is delivered by a client; nothing is waiting to be delivered")
 	}
-	// Reject anything but a sandbox that is actually waiting. A completion for
-	// an already-started sandbox would otherwise restart it out from under
-	// whatever is running in it.
-	if existing.State != model.SandboxStateAwaitingSource {
+	// Reject anything but a sandbox still owed its source, which is one that
+	// has not run: created and not yet parked, or parked. A completion for
+	// any other would restart it out from under whatever is running in it.
+	if !awaitingSourcePush(existing) || !sandboxHasNeverRun(existing.State) {
 		return nil, apperrors.NewStatusError(http.StatusConflict,
 			fmt.Sprintf("sandbox is not awaiting its source (state %q)", existing.State))
 	}

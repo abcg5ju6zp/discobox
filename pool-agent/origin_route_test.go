@@ -1,7 +1,9 @@
 package poolagent_test
 
 import (
+	"bytes"
 	"crypto/ed25519"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/discobox-ai/discobox/internal/sourcecache"
 	poolagent "github.com/discobox-ai/discobox/pool-agent"
 	workerclient "github.com/discobox-ai/discobox/pool-agent/api/gen"
 	workerapimodel "github.com/discobox-ai/discobox/pool-agent/api/model"
@@ -20,9 +23,13 @@ import (
 	"github.com/discobox-ai/discobox/proxy"
 )
 
+// originCacheKey is the cache sandbox-1's primary source is delivered into.
+const originCacheKey = "remote/example.com/acme/project"
+
 // originRoute is a pool agent with two sandboxes: sandbox-1's primary is a
-// live origin, the developer's own repository, and its hooks are a bare
-// origin the client pushes into.
+// namespace of the pool's Git cache, which a client delivers into, and its
+// hooks are a bare origin of its own, as a source delivered before the cache
+// has.
 type originRoute struct {
 	runtime          *poolagent.MemorySandboxRuntime
 	server           *httptest.Server
@@ -39,6 +46,7 @@ func newOriginRoute(t *testing.T) *originRoute {
 		t.Skip("requires a POSIX host: git line-ending translation")
 	}
 	runtime := poolagent.NewMemorySandboxRuntime()
+	runtime.SetGitCacheRoot(filepath.Join(t.TempDir(), "git-cache"))
 	for _, id := range []string{"sandbox-1", "sandbox-2"} {
 		if _, err := runtime.CreateSandbox(t.Context(), &workerapimodel.PoolSandboxCreateRequest{
 			SandboxId: id,
@@ -49,7 +57,7 @@ func newOriginRoute(t *testing.T) *originRoute {
 	}
 	developer := filepath.Join(t.TempDir(), "project")
 	initGitRepo(t, developer, "one\n")
-	runtime.SetLiveGitOrigin("sandbox-1", "primary", filepath.Join(developer, ".git"), nil)
+	runtime.SetSourceCache("sandbox-1", "primary", originCacheKey)
 	bare := filepath.Join(t.TempDir(), "hooks.git")
 	git(t, "", "init", "--bare", "-b", "main", bare)
 	runtime.SetGitOriginPath("sandbox-1", "hooks", bare)
@@ -95,12 +103,59 @@ func bearer(token string) string {
 	return "http.extraHeader=Authorization: Bearer " + token
 }
 
+// asControlPlane is the switches a git command reaches a cache route with, as
+// the control plane forwards a client's request: its token for sandboxID, and
+// the cache it names.
+func (o *originRoute) asControlPlane(sandboxID string) []string {
+	token := o.signControlPlane("project-1", "pool-1", sandboxID, poolagentserver.ScopeSandboxRead, poolagentserver.ScopeSandboxWrite)
+	return []string{"-c", bearer(token), "-c", "http.extraHeader=" + sourcecache.KeyHeader + ": " + originCacheKey}
+}
+
+// deliver pushes the developer's HEAD into a sandbox's primary namespace, as
+// a client's delivery does.
+func (o *originRoute) deliver(t *testing.T, sandboxID string) string {
+	t.Helper()
+	git(t, o.developer, append(o.asControlPlane(sandboxID), "push", "-q", o.url(sandboxID, sourcecache.PoolOriginRoute, "primary"), "HEAD:refs/heads/main", "HEAD:refs/remotes/origin/main")...)
+	return gitOutput(t, o.developer, "rev-parse", "HEAD")
+}
+
+// pin asks the pool to create refs in a sandbox's primary namespace from what
+// its cache holds, with the headers given besides the control plane's own.
+func (o *originRoute) pin(t *testing.T, sandboxID string, refs map[string]string, headers map[string]string) (status int, result struct{ Pinned, Missing []string }) {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"refs": refs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, o.url(sandboxID, sourcecache.PoolOriginRoute, "primary")+sourcecache.PinSuffix, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+o.signControlPlane("project-1", "pool-1", sandboxID, poolagentserver.ScopeSandboxRead, poolagentserver.ScopeSandboxWrite))
+	req.Header.Set(sourcecache.KeyHeader, originCacheKey)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return resp.StatusCode, result
+}
+
 // The sandbox clones and fetches its origins with the token its pool issued
-// it, whichever kind of origin answers, and sees the developer's new commits
-// without anyone pushing them.
+// it, whichever kind of origin answers, and sees its client's new commits once
+// the client has pushed them.
 func TestASandboxFetchesItsOriginsWithItsOwnToken(t *testing.T) {
 	o := newOriginRoute(t)
 	token := o.sandboxToken(t, "sandbox-1")
+	o.deliver(t, "sandbox-1")
 
 	clone := filepath.Join(t.TempDir(), "clone")
 	git(t, "", "-c", bearer(token), "clone", "-q", o.url("sandbox-1", "git-origins", "primary"), clone)
@@ -110,8 +165,13 @@ func TestASandboxFetchesItsOriginsWithItsOwnToken(t *testing.T) {
 	git(t, o.developer, "add", "NEW.md")
 	git(t, o.developer, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "two")
 	git(t, clone, "-c", bearer(token), "fetch", "-q", "origin")
-	if got, want := gitOutput(t, clone, "rev-parse", "origin/main"), gitOutput(t, o.developer, "rev-parse", "HEAD"); got != want {
-		t.Fatalf("origin/main = %s, want the developer's new commit %s", got, want)
+	if got, want := gitOutput(t, clone, "rev-parse", "origin/main"), gitOutput(t, o.developer, "rev-parse", "HEAD"); got == want {
+		t.Fatalf("origin/main = %s: the sandbox saw a commit nobody pushed", got)
+	}
+	want := o.deliver(t, "sandbox-1")
+	git(t, clone, "-c", bearer(token), "fetch", "-q", "origin")
+	if got := gitOutput(t, clone, "rev-parse", "origin/main"); got != want {
+		t.Fatalf("origin/main = %s, want the client's new commit %s", got, want)
 	}
 
 	if out := gitOutput(t, "", "-c", bearer(token), "ls-remote", o.url("sandbox-1", "git-origins", "hooks")); out != "" {
@@ -119,29 +179,30 @@ func TestASandboxFetchesItsOriginsWithItsOwnToken(t *testing.T) {
 	}
 }
 
-// The sandbox's token pushes nothing — not into the developer's repository and
-// not into the bare origin the client pushes into — and a control-plane token
-// that may write still cannot push into a live origin.
+// The sandbox's token pushes nothing — not into its namespace of the cache
+// and not into a bare origin — and the origin route serves a namespace
+// fetch-only whoever asks: a delivery arrives on the cache route.
 func TestNothingPushesThroughTheOriginRouteButTheClient(t *testing.T) {
 	o := newOriginRoute(t)
 	token := o.sandboxToken(t, "sandbox-1")
 	write := o.signControlPlane("project-1", "pool-1", "sandbox-1", poolagentserver.ScopeSandboxRead, poolagentserver.ScopeSandboxWrite)
+	delivered := o.deliver(t, "sandbox-1")
 
 	clone := filepath.Join(t.TempDir(), "clone")
 	git(t, "", "-c", bearer(token), "clone", "-q", o.url("sandbox-1", "git-origins", "primary"), clone)
 	git(t, clone, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "sandbox work")
-	before := gitOutput(t, o.developer, "for-each-ref")
 	for name, push := range map[string][]string{
-		"the sandbox's token into the live origin": {"-c", bearer(token), "push", o.url("sandbox-1", "git-origins", "primary"), "HEAD:refs/heads/main"},
-		"a write token into the live origin":       {"-c", bearer(write), "push", o.url("sandbox-1", "git-origins", "primary"), "HEAD:refs/heads/pushed"},
-		"the sandbox's token into the bare origin": {"-c", bearer(token), "push", o.url("sandbox-1", "git-origins", "hooks"), "HEAD:refs/heads/main"},
+		"the sandbox's token into its namespace":      {"-c", bearer(token), "push", o.url("sandbox-1", "git-origins", "primary"), "HEAD:refs/heads/main"},
+		"a write token through the origin route":      {"-c", bearer(write), "push", o.url("sandbox-1", "git-origins", "primary"), "HEAD:refs/heads/pushed"},
+		"the sandbox's token into the bare origin":    {"-c", bearer(token), "push", o.url("sandbox-1", "git-origins", "hooks"), "HEAD:refs/heads/main"},
+		"the sandbox's token through the cache route": {"-c", bearer(token), "-c", "http.extraHeader=" + sourcecache.KeyHeader + ": " + originCacheKey, "push", o.url("sandbox-1", sourcecache.PoolOriginRoute, "primary"), "HEAD:refs/heads/main"},
 	} {
 		if err := gitErr(clone, push...); err == nil {
 			t.Fatalf("%s succeeded", name)
 		}
 	}
-	if after := gitOutput(t, o.developer, "for-each-ref"); after != before {
-		t.Fatalf("the developer's refs changed:\n%s\nwant\n%s", after, before)
+	if got := gitOutput(t, "", "-c", bearer(token), "ls-remote", o.url("sandbox-1", "git-origins", "primary"), "refs/heads/*"); !strings.HasPrefix(got, delivered) || strings.Count(got, "\n") != 0 {
+		t.Fatalf("the namespace's branches changed: %q", got)
 	}
 	if out := gitOutput(t, o.bare, "for-each-ref"); out != "" {
 		t.Fatalf("the bare origin gained refs: %s", out)
@@ -149,6 +210,41 @@ func TestNothingPushesThroughTheOriginRouteButTheClient(t *testing.T) {
 
 	// The client still delivers into the bare origin as it always has.
 	git(t, clone, "-c", bearer(write), "push", "-q", o.url("sandbox-1", "git-origins", "hooks"), "HEAD:refs/heads/main")
+}
+
+// A delivery names its cache and its namespace, and needs nothing else of the
+// pool: no record of the sandbox and no container. The next sandbox from the
+// same commit is a pin, which transfers nothing.
+func TestADeliveryNeedsNoSandboxAndASecondOneIsAPin(t *testing.T) {
+	o := newOriginRoute(t)
+	commit := o.deliver(t, "sandbox-not-created-yet")
+
+	refs := map[string]string{"refs/heads/main": commit, "refs/remotes/origin/main": commit}
+	status, result := o.pin(t, "sandbox-later", refs, nil)
+	if status != http.StatusOK || len(result.Missing) != 0 || len(result.Pinned) != 2 {
+		t.Fatalf("pin = %d %+v, want both refs pinned", status, result)
+	}
+	// What the cache remembers of the remote is a member's to fetch, and
+	// holds no namespace.
+	remote := gitOutput(t, "", append(o.asControlPlane("sandbox-later"), "ls-remote", o.url("sandbox-later", sourcecache.PoolRemoteRoute, "primary"))...)
+	if want := commit + "\trefs/cache/heads/main"; remote != want {
+		t.Fatalf("the cache's record of its remote = %q, want %q", remote, want)
+	}
+
+	// A sandbox delivering to a discobox it created is held to what its own
+	// sources hold: this one has none here, so nothing is pinned for it, and
+	// a cache's record of its remote is not its to fetch.
+	status, result = o.pin(t, "sandbox-child", refs, map[string]string{sourcecache.CallerHeader: "sandbox-2"})
+	if status != http.StatusOK || len(result.Pinned) != 0 {
+		t.Fatalf("a sandbox's pin = %d %+v, want nothing pinned", status, result)
+	}
+	if err := gitErr("", append(o.asControlPlane("sandbox-later"), "-c", "http.extraHeader="+sourcecache.CallerHeader+": sandbox-2", "ls-remote", o.url("sandbox-later", sourcecache.PoolRemoteRoute, "primary"))...); err == nil {
+		t.Fatal("a sandbox fetched a cache's record of its remote")
+	}
+	// Without a cache named there is nothing to serve.
+	if status, _ := o.pin(t, "sandbox-later", refs, map[string]string{sourcecache.KeyHeader: ""}); status != http.StatusBadRequest {
+		t.Fatalf("a pin naming no cache = %d, want 400", status)
+	}
 }
 
 // A sandbox's token is good for its own origins and for nothing else this

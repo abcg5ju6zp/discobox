@@ -3372,10 +3372,18 @@ func (s *ExchangeRecipeHeader) init() ExchangeRecipeHeader {
 type GitSource struct {
 	// Immutable checkout target and optional user-facing ref identity.
 	Checkout OptGitSourceCheckout `json:"checkout"`
-	// How the source reaches the sandbox. clone means the sandbox fetches it from url or localDirectory.
-	// push means the client pushes it into the sandbox's Git repository, for a local directory the
-	// provider cannot reach; the sandbox waits in the awaiting_source phase until the push is complete.
-	// Defaults to clone.
+	// The pool's Git cache this source is delivered into, set by the server for a cache-delivered source.
+	//  It is the source's remote, normalized to host and path, or a key for the client's own directory
+	// when the source has no remote. Sources that share it share one object store on a pool, so a
+	// delivery sends only what the pool has not been sent before.
+	CacheKey OptString `json:"cacheKey"`
+	// How the source reaches the sandbox, decided by the server and recorded at create. cache is every
+	// source created now. A client delivers it into a Git namespace of the pool's cache for the source's
+	// remote, and the sandbox clones it from the pool; the sandbox waits in the awaiting_source phase
+	// until the delivery is reported complete. clone and push are how earlier discoboxes were delivered
+	// and keep their meaning for them. clone means the sandbox fetched it from url, or from
+	// localDirectory through its pool. push means the client pushed it into a repository the pool made
+	// for that sandbox.
 	Delivery OptGitSourceDelivery `json:"delivery"`
 	// Sandbox destination paths for this source.
 	Destination OptGitSourceDestination `json:"destination"`
@@ -3398,9 +3406,10 @@ type GitSource struct {
 	NoLocalRepository OptBool `json:"noLocalRepository"`
 	// Stable URL-safe source slug used to address the source as a sandbox Git repository.
 	Slug OptString `json:"slug"`
-	// Network URL of the remote the local source's checked-out branch tracks on the client. The sandbox
-	// adds it as a remote named upstream when it materializes the source; the branch keeps tracking
-	// origin.
+	// Network URL of a local source's remote on the client. It is the remote its checked-out branch
+	// tracks, else origin, else its only remote. A cache-delivered source has it as the sandbox's origin
+	// remote, and it names the pool cache the source is delivered into. A source delivered before that
+	// has it as a remote named upstream.
 	UpstreamUrl OptString `json:"upstreamUrl"`
 	// Remote Git source URL.
 	URL OptURI `json:"url"`
@@ -3411,6 +3420,11 @@ type GitSource struct {
 // GetCheckout returns the value of Checkout.
 func (s *GitSource) GetCheckout() OptGitSourceCheckout {
 	return s.Checkout
+}
+
+// GetCacheKey returns the value of CacheKey.
+func (s *GitSource) GetCacheKey() OptString {
+	return s.CacheKey
 }
 
 // GetDelivery returns the value of Delivery.
@@ -3471,6 +3485,11 @@ func (s *GitSource) GetWorkspace() OptGitSourceWorkspace {
 // SetCheckout sets the value of Checkout.
 func (s *GitSource) SetCheckout(val OptGitSourceCheckout) {
 	s.Checkout = val
+}
+
+// SetCacheKey sets the value of CacheKey.
+func (s *GitSource) SetCacheKey(val OptString) {
+	s.CacheKey = val
 }
 
 // SetDelivery sets the value of Delivery.
@@ -3568,15 +3587,19 @@ func (s *GitSourceCheckout) SetRefType(val OptString) {
 	s.RefType = val
 }
 
-// How the source reaches the sandbox. clone means the sandbox fetches it from url or localDirectory.
-// push means the client pushes it into the sandbox's Git repository, for a local directory the
-// provider cannot reach; the sandbox waits in the awaiting_source phase until the push is complete.
-// Defaults to clone.
+// How the source reaches the sandbox, decided by the server and recorded at create. cache is every
+// source created now. A client delivers it into a Git namespace of the pool's cache for the source's
+// remote, and the sandbox clones it from the pool; the sandbox waits in the awaiting_source phase
+// until the delivery is reported complete. clone and push are how earlier discoboxes were delivered
+// and keep their meaning for them. clone means the sandbox fetched it from url, or from
+// localDirectory through its pool. push means the client pushed it into a repository the pool made
+// for that sandbox.
 type GitSourceDelivery string
 
 const (
 	GitSourceDeliveryClone GitSourceDelivery = "clone"
 	GitSourceDeliveryPush  GitSourceDelivery = "push"
+	GitSourceDeliveryCache GitSourceDelivery = "cache"
 )
 
 // AllValues returns all GitSourceDelivery values.
@@ -3584,6 +3607,7 @@ func (GitSourceDelivery) AllValues() []GitSourceDelivery {
 	return []GitSourceDelivery{
 		GitSourceDeliveryClone,
 		GitSourceDeliveryPush,
+		GitSourceDeliveryCache,
 	}
 }
 
@@ -3593,6 +3617,8 @@ func (s GitSourceDelivery) MarshalText() ([]byte, error) {
 	case GitSourceDeliveryClone:
 		return []byte(s), nil
 	case GitSourceDeliveryPush:
+		return []byte(s), nil
+	case GitSourceDeliveryCache:
 		return []byte(s), nil
 	default:
 		return nil, errors.Errorf("invalid value: %q", s)
@@ -3607,6 +3633,9 @@ func (s *GitSourceDelivery) UnmarshalText(data []byte) error {
 		return nil
 	case GitSourceDeliveryPush:
 		*s = GitSourceDeliveryPush
+		return nil
+	case GitSourceDeliveryCache:
+		*s = GitSourceDeliveryCache
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)

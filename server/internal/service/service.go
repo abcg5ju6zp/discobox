@@ -191,10 +191,6 @@ func (s *Service) SetDefaultSandboxImage(image, digest string) {
 	s.poolControlPlane.SetDefaultSandboxImage(image)
 }
 
-func (s *Service) SetHostID(hostID string) {
-	s.Service.SetHostID(hostID)
-}
-
 func (s *Service) SetWorkerAgentAuthManager(manager *poolagentauth.Manager) {
 	s.poolControlPlane.SetAgentAuthManager(manager)
 }

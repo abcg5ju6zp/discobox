@@ -227,7 +227,6 @@ func Run(ctx context.Context) error {
 		SandboxReconcileJobConcurrency: cfg.SandboxReconcileJobConcurrency,
 		DefaultSandboxImage:            cfg.DefaultSandboxImage,
 		DefaultSandboxImageDigest:      cfg.DefaultSandboxImageDigest,
-		HostID:                         cfg.HostID,
 		DevelopmentImages:              cfg.DevelopmentImages,
 		HarnessImages:                  cfg.HarnessImages,
 		ListenEndpoints:                cfg.Listen,

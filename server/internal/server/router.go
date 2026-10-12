@@ -80,8 +80,6 @@ type AppOptions struct {
 	// tag currently is, so a sandbox running the default image can tell whether
 	// it is already on it. See config.Config.
 	DefaultSandboxImageDigest string
-	// HostID identifies the machine this server runs on; see config.Config.
-	HostID string
 
 	// DevelopmentImages is the watcher-built image set synchronized to every
 	// Docker daemon used by a pool provider.
@@ -222,7 +220,6 @@ func NewApp(ctx context.Context, writeDB, readDB *gorm.DB, options ...AppOptions
 		OverlayDir:                     opts.OverlayDir,
 	})
 	appServices.SetDefaultSandboxImage(opts.DefaultSandboxImage, opts.DefaultSandboxImageDigest)
-	appServices.SetHostID(opts.HostID)
 	if opts.SecretSealer != nil {
 		appServices.SetSandboxAuthManager(sandboxauth.NewManager(appStore, opts.SecretSealer))
 	}

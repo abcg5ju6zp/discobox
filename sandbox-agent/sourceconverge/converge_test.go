@@ -768,3 +768,143 @@ func TestAPathSharingTheScratchNameIsKept(t *testing.T) {
 		t.Fatalf("an earlier attempt's scratch was left: %v", err)
 	}
 }
+
+// A source delivered into its pool's cache reads as a clone of its own
+// remote: origin is the remote, with the branches the client knew it to have,
+// the pool is the discobox remote, and the branch tracks origin's when the
+// remote has it (ADR 26-10-10-545 §6). Nothing reaches the remote to do it.
+func TestACacheDeliveredSourceReadsAsACloneOfItsRemote(t *testing.T) {
+	o := newOrigin(t)
+	remoteTip := o.commit("README.md", "as the remote has it\n")
+	// The pool's namespace holds the remote's branches beside the source's
+	// own, as the client delivered them: main where the remote is, and the
+	// developer's unpushed work one commit past it.
+	o.publish("main:refs/remotes/origin/main", "main:refs/remotes/origin/release")
+	pinned := o.commit("work.txt", "not pushed to the remote\n")
+	gitT(t, o.work, "tag", "v1")
+	o.publish("refs/tags/v1")
+	const remoteURL = "https://git.invalid/acme/widget.git"
+
+	target := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, sandboxconfig.Source{Slug: "primary", Target: target, RefName: "main", RefType: "branch", UpstreamURL: remoteURL, PoolRemote: "discobox"})
+	source := sandboxconfig.RuntimeSource{Slug: "primary", Target: target, OriginURL: o.url, OriginToken: testToken, Commit: pinned}
+	if state := h.pass(t, document(1, source), "primary"); state.State != StateMaterialized || state.Commit != pinned {
+		t.Fatalf("state = %+v, want materialized at %s", state, pinned)
+	}
+
+	read := func(args ...string) string {
+		t.Helper()
+		out, err := h.git(t, target, args...)
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(out)
+	}
+	if got := read("remote", "get-url", "origin"); got != remoteURL {
+		t.Fatalf("origin = %q, want the source's remote %q", got, remoteURL)
+	}
+	if got := read("remote", "get-url", "discobox"); got != o.url {
+		t.Fatalf("discobox = %q, want the pool's origin %q", got, o.url)
+	}
+	if got := read("remote"); got != "discobox\norigin" {
+		t.Fatalf("remotes = %q, want discobox and origin and no upstream", got)
+	}
+	if got := read("rev-parse", "origin/main"); got != remoteTip {
+		t.Fatalf("origin/main = %s, want where the remote was, %s", got, remoteTip)
+	}
+	if got := read("rev-parse", "origin/release"); got != remoteTip {
+		t.Fatalf("origin/release = %s, want %s", got, remoteTip)
+	}
+	if got := read("rev-parse", "discobox/main"); got != pinned {
+		t.Fatalf("discobox/main = %s, want the delivered commit %s", got, pinned)
+	}
+	if got := read("rev-parse", "--abbrev-ref", "main@{upstream}"); got != "origin/main" {
+		t.Fatalf("main tracks %q, want origin/main", got)
+	}
+	if got := read("rev-parse", "v1^{commit}"); got != pinned {
+		t.Fatalf("tag v1 = %s, want %s", got, pinned)
+	}
+
+	// A client's later push is seen through the discobox remote, with the
+	// token; origin is the sandbox's own from here and is not put back.
+	next := o.commit("later.txt", "pushed by the client\n")
+	if out, err := h.git(t, target, "fetch", "discobox"); err != nil {
+		t.Fatalf("fetch discobox: %v\n%s", err, out)
+	}
+	if got := read("rev-parse", "discobox/main"); got != next {
+		t.Fatalf("discobox/main after a push = %s, want %s", got, next)
+	}
+	read("remote", "set-url", "origin", "https://git.invalid/fork/widget.git")
+	if state := h.pass(t, document(2, source), "primary"); state.State != StateMaterialized {
+		t.Fatalf("state after a later pass = %+v", state)
+	}
+	if got := read("remote", "get-url", "origin"); got != "https://git.invalid/fork/widget.git" {
+		t.Fatalf("a later pass put origin back to %q", got)
+	}
+	if got := read("remote", "get-url", "discobox"); got != o.url {
+		t.Fatalf("discobox = %q after a later pass, want %q", got, o.url)
+	}
+}
+
+// A source with no remote has the pool alone, and its branch tracks that; a
+// branch its remote does not have yet tracks the pool's too.
+func TestACacheDeliveredBranchTheRemoteLacksTracksThePool(t *testing.T) {
+	for name, remoteURL := range map[string]string{"no remote": "", "a remote without the branch": "https://git.invalid/acme/widget.git"} {
+		t.Run(name, func(t *testing.T) {
+			o := newOrigin(t)
+			pinned := o.commit("README.md", "hello\n")
+			target := filepath.Join(t.TempDir(), "workspace")
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			h := newHarness(t, sandboxconfig.Source{Slug: "primary", Target: target, RefName: "main", RefType: "branch", UpstreamURL: remoteURL, PoolRemote: "discobox"})
+			source := sandboxconfig.RuntimeSource{Slug: "primary", Target: target, OriginURL: o.url, OriginToken: testToken, Commit: pinned}
+			if state := h.pass(t, document(1, source), "primary"); state.State != StateMaterialized {
+				t.Fatalf("state = %+v", state)
+			}
+			upstream, err := h.git(t, target, "rev-parse", "--abbrev-ref", "main@{upstream}")
+			if err != nil || strings.TrimSpace(upstream) != "discobox/main" {
+				t.Fatalf("main tracks %q (%v), want discobox/main", upstream, err)
+			}
+			remotes, _ := h.git(t, target, "remote")
+			want := "discobox"
+			if remoteURL != "" {
+				want = "discobox\norigin"
+			}
+			if strings.TrimSpace(remotes) != want {
+				t.Fatalf("remotes = %q, want %q", remotes, want)
+			}
+		})
+	}
+}
+
+// A dirty workspace's snapshot comes from the pool, under whatever name the
+// checkout knows it by.
+func TestACacheDeliveredDirtyWorkspaceIsRestoredFromThePool(t *testing.T) {
+	o := newOrigin(t)
+	base := o.commit("README.md", "committed\n")
+	writeFile(t, filepath.Join(o.work, "README.md"), "uncommitted\n")
+	gitT(t, o.work, "-c", "user.name=dev", "-c", "user.email=dev@example.com", "commit", "--quiet", "-am", "snapshot")
+	gitT(t, o.work, "update-ref", "refs/discobox/run/run-1", "HEAD")
+	gitT(t, o.work, "reset", "--quiet", "--hard", base)
+	o.publish("refs/discobox/run/run-1")
+
+	target := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, sandboxconfig.Source{
+		Slug: "primary", Target: target, RefName: "main", RefType: "branch", PoolRemote: "discobox",
+		Workspace: &sandboxconfig.SourceWorkspace{BaseCommit: base, SnapshotRef: "refs/discobox/run/run-1"},
+	})
+	source := sandboxconfig.RuntimeSource{Slug: "primary", Target: target, OriginURL: o.url, OriginToken: testToken, Commit: base}
+	if state := h.pass(t, document(1, source), "primary"); state.State != StateMaterialized || state.Commit != base {
+		t.Fatalf("state = %+v, want materialized at %s", state, base)
+	}
+	if got, _ := os.ReadFile(filepath.Join(target, "README.md")); string(got) != "uncommitted\n" {
+		t.Fatalf("README.md = %q, want the snapshot's", got)
+	}
+}

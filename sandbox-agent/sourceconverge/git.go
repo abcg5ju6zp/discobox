@@ -36,13 +36,27 @@ const (
 	// has not finished materializing. A .git with neither it nor the
 	// materialized marker is not this agent's to touch.
 	materializingMarker = "discobox-materializing"
-	// upstreamRemote is the remote a source's own upstream is added as. It
-	// cannot be origin, which in a sandbox is the pool's origin route.
+	// originRemote is git's own name for the remote a checkout came from.
+	// For a source delivered into its pool's cache that is the source's real
+	// remote, and the pool is reached under the name the source's manifest
+	// gives (sandboxconfig.Source.PoolRemote, ADR 26-10-10-545 §6). For a
+	// source delivered before that it is the pool itself.
+	originRemote = "origin"
+	// upstreamRemote is the remote a source's own remote is added as when
+	// origin is the pool.
 	upstreamRemote = "upstream"
 )
 
+// poolRemote is the name the checkout of a source reaches its pool under.
+func poolRemote(spec sandboxconfig.Source) string {
+	if spec.PoolRemote != "" {
+		return spec.PoolRemote
+	}
+	return originRemote
+}
+
 // prepare clones source onto the target, checks it out, restores its
-// workspace snapshot and adds its upstream remote — everything but marking it
+// workspace snapshot and sets up its remotes — everything but marking it
 // materialized, which finish does once the converger has checked the document
 // still asks for this. It returns false, having changed nothing, while the
 // origin has nothing in it to clone: a push-delivered source before the
@@ -57,11 +71,12 @@ const (
 // it, so files that were in the target before the clone are never removed,
 // on the first attempt or a retry.
 //
-// helper is empty for an origin that takes no token, so that a remote-URL
-// source keeps whatever credential helper its user configures. progress is
-// told how far the clone has got each time git says.
+// helper is empty for an origin that takes no token, so that a source the
+// sandbox clones from its remote keeps whatever credential helper its user
+// configures. progress is told how far the clone has got each time git says.
 func (r *repository) prepare(ctx context.Context, source sandboxconfig.RuntimeSource, spec sandboxconfig.Source, helper string, progress func(CloneProgress)) (bool, error) {
 	gitDir := filepath.Join(r.dir, ".git")
+	pool := poolRemote(spec)
 	switch _, err := os.Stat(gitDir); {
 	case errors.Is(err, os.ErrNotExist):
 		cloned, err := r.clone(ctx, source.OriginURL, spec, helper, progress)
@@ -82,21 +97,27 @@ func (r *repository) prepare(ctx context.Context, source sandboxconfig.RuntimeSo
 		// finished: the checkout and restore below write the tracked tree
 		// whole again, so it goes on from there — after a fetch, since what
 		// stopped it may have been a pin the origin did not have yet.
-		if err := r.ensureOrigin(ctx, source.OriginURL, helper); err != nil {
+		if err := r.ensurePoolRemote(ctx, pool, source.OriginURL, helper); err != nil {
 			return false, err
 		}
-		if err := r.run(ctx, nil, "fetch", "origin"); err != nil {
+		if err := r.run(ctx, nil, "fetch", pool); err != nil {
 			return false, err
 		}
 	}
-	if err := r.ensureOrigin(ctx, source.OriginURL, helper); err != nil {
+	if err := r.ensurePoolRemote(ctx, pool, source.OriginURL, helper); err != nil {
 		return false, err
 	}
 	if err := r.checkout(ctx, source.Commit, spec); err != nil {
 		return false, err
 	}
-	if err := r.restoreWorkspace(ctx, spec.Workspace); err != nil {
+	if err := r.restoreWorkspace(ctx, pool, spec.Workspace); err != nil {
 		return false, err
+	}
+	if spec.PoolRemote != "" {
+		if err := r.configureOrigin(ctx, spec); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	if err := r.configureUpstream(ctx, spec.UpstreamURL); err != nil {
 		return false, err
@@ -127,17 +148,17 @@ func (r *repository) unmarkedCheckout(ctx context.Context) (string, bool) {
 	return commit, commit != ""
 }
 
-// ensureOriginHeadRef gives the checkout an origin/HEAD when it has none,
-// from what the origin's HEAD names now. A clone of a pushed origin made the
-// moment the push landed, before the pool pointed the origin's HEAD at what
-// arrived, has none, and origin/HEAD is the upstream ref a source checked out
-// at a bare commit or tag tracks. One that cannot be resolved yet is left for
-// a later pass.
-func (r *repository) ensureOriginHeadRef(ctx context.Context) {
-	if err := r.run(ctx, nil, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"); err == nil {
+// ensurePoolHeadRef gives the checkout a HEAD for its pool remote when it has
+// none, from what the pool's origin names now. A clone made the moment a
+// delivery landed, before the pool pointed the origin's HEAD at what arrived,
+// has none, and the pool remote's HEAD is the upstream ref a source checked
+// out at a bare commit or tag tracks. One that cannot be resolved yet is left
+// for a later pass.
+func (r *repository) ensurePoolHeadRef(ctx context.Context, pool string) {
+	if err := r.run(ctx, nil, "rev-parse", "--verify", "--quiet", "refs/remotes/"+pool+"/HEAD"); err == nil {
 		return
 	}
-	_ = r.run(ctx, nil, "remote", "set-head", "origin", "--auto")
+	_ = r.run(ctx, nil, "remote", "set-head", pool, "--auto")
 }
 
 // finish marks a prepared checkout materialized and returns the commit the
@@ -165,7 +186,7 @@ func (r *repository) finish(ctx context.Context) (string, error) {
 func (r *repository) clone(ctx context.Context, originURL string, spec sandboxconfig.Source, helper string, progress func(CloneProgress)) (bool, error) {
 	var credentials []string
 	if helper != "" {
-		// For these two commands only; ensureOrigin then writes the same into
+		// For these two commands only; ensurePoolRemote then writes the same into
 		// the repository for every fetch after them.
 		for _, setting := range credentialConfig(originURL, helper) {
 			for _, value := range setting.values {
@@ -186,7 +207,7 @@ func (r *repository) clone(ctx context.Context, originURL string, spec sandboxco
 	}
 	defer os.RemoveAll(scratch)
 	clone := filepath.Join(scratch, "clone")
-	args := append(credentials, "clone", "--no-checkout", "--progress")
+	args := append(credentials, "clone", "--no-checkout", "--progress", "--origin", poolRemote(spec))
 	if spec.RefName != "" {
 		args = append(args, "--branch", spec.RefName)
 	}
@@ -267,8 +288,9 @@ func (r *repository) checkout(ctx context.Context, commit string, spec sandboxco
 
 // restoreWorkspace applies a dirty workspace's snapshot to the working tree,
 // all unstaged, on top of the branch at its base commit. The snapshot ref is
-// fetched explicitly: a clone brings branches and tags, and it is neither.
-func (r *repository) restoreWorkspace(ctx context.Context, workspace *sandboxconfig.SourceWorkspace) error {
+// fetched explicitly, from the pool: a clone brings branches and tags, and it
+// is neither.
+func (r *repository) restoreWorkspace(ctx context.Context, pool string, workspace *sandboxconfig.SourceWorkspace) error {
 	if workspace == nil {
 		return nil
 	}
@@ -279,7 +301,7 @@ func (r *repository) restoreWorkspace(ctx context.Context, workspace *sandboxcon
 	if err := r.run(ctx, nil, "check-ref-format", snapshot); err != nil {
 		return fmt.Errorf("invalid workspace snapshot ref %q: %w", snapshot, err)
 	}
-	if err := r.run(ctx, nil, "fetch", "origin", "+"+snapshot+":"+snapshot); err != nil {
+	if err := r.run(ctx, nil, "fetch", pool, "+"+snapshot+":"+snapshot); err != nil {
 		return fmt.Errorf("fetch workspace snapshot %q: %w", snapshot, err)
 	}
 	parent, err := r.output(ctx, r.dir, nil, "rev-parse", "--verify", snapshot+"^")
@@ -306,35 +328,76 @@ func (r *repository) restoreWorkspace(ctx context.Context, workspace *sandboxcon
 	return nil
 }
 
-// configureUpstream adds the remote the client's own checkout tracks. It is
-// written once, at materialization: it is a starting point, and whoever works
-// in the sandbox owns it afterwards.
+// configureUpstream adds the source's own remote beside an origin that is the
+// pool. It is written once, at materialization: it is a starting point, and
+// whoever works in the sandbox owns it afterwards.
 func (r *repository) configureUpstream(ctx context.Context, upstreamURL string) error {
 	upstreamURL = strings.TrimSpace(upstreamURL)
 	if upstreamURL == "" {
 		return nil
 	}
-	if err := r.run(ctx, nil, "config", "--replace-all", "remote."+upstreamRemote+".url", upstreamURL); err != nil {
-		return err
-	}
-	return r.run(ctx, nil, "config", "--replace-all", "remote."+upstreamRemote+".fetch", "+refs/heads/*:refs/remotes/"+upstreamRemote+"/*")
+	return r.configureRemote(ctx, upstreamRemote, upstreamURL)
 }
 
-// ensureOrigin points origin at originURL, gives it the default refspec when
-// it has none, and has its credentials read from this agent. It is asserted on
-// every pass, because the remote belongs to the sandbox and not to the clone
-// that made it — and the pool may serve the origin somewhere new. A refspec
-// someone set by hand is theirs and is left alone.
-func (r *repository) ensureOrigin(ctx context.Context, originURL, helper string) error {
-	if err := r.ensureConfig(ctx, configSetting{"remote.origin.url", []string{originURL}}); err != nil {
+// configureOrigin makes a checkout cloned from its pool read as a clone of
+// the source's own remote (ADR 26-10-10-545 §6): origin is that remote, its
+// remote-tracking refs are where the client last knew the remote's branches
+// to be, and the checked-out branch tracks origin's when the remote has it.
+//
+// It is done once, at materialization, and never asserted afterwards: origin
+// belongs to the sandbox from here, and moves when the sandbox fetches the
+// real remote. The refs come from the pool, which holds them beside the
+// source's branches, so nothing here reaches the remote or needs a
+// credential for it. A source with no remote has the pool remote alone, and
+// its branch tracks that, as the clone left it.
+func (r *repository) configureOrigin(ctx context.Context, spec sandboxconfig.Source) error {
+	remote := strings.TrimSpace(spec.UpstreamURL)
+	if remote == "" {
+		return nil
+	}
+	if err := r.run(ctx, nil, "fetch", spec.PoolRemote, "+refs/remotes/"+originRemote+"/*:refs/remotes/"+originRemote+"/*"); err != nil {
+		return fmt.Errorf("fetch the remote's branches from the pool: %w", err)
+	}
+	if err := r.configureRemote(ctx, originRemote, remote); err != nil {
 		return err
 	}
-	fetch, err := r.configValues(ctx, "remote.origin.fetch")
+	if spec.RefType != "branch" || spec.RefName == "" {
+		return nil
+	}
+	tracked := "refs/remotes/" + originRemote + "/" + spec.RefName
+	if err := r.run(ctx, nil, "rev-parse", "--verify", "--quiet", tracked); err != nil {
+		// The remote has no such branch yet — how most work starts. The
+		// branch keeps tracking the pool's.
+		return nil //nolint:nilerr // an absent ref is an answer, not a failure
+	}
+	return r.run(ctx, nil, "branch", "--set-upstream-to="+originRemote+"/"+spec.RefName, spec.RefName)
+}
+
+// configureRemote points the remote name at url and gives it the default
+// refspec.
+func (r *repository) configureRemote(ctx context.Context, name, url string) error {
+	if err := r.run(ctx, nil, "config", "--replace-all", "remote."+name+".url", url); err != nil {
+		return err
+	}
+	return r.run(ctx, nil, "config", "--replace-all", "remote."+name+".fetch", "+refs/heads/*:refs/remotes/"+name+"/*")
+}
+
+// ensurePoolRemote points the remote the checkout reaches its pool under at
+// originURL, gives it the default refspec when it has none, and has its
+// credentials read from this agent. It is asserted on every pass, because the
+// remote belongs to the sandbox and not to the clone that made it — and the
+// pool may serve the origin somewhere new. A refspec someone set by hand is
+// theirs and is left alone.
+func (r *repository) ensurePoolRemote(ctx context.Context, pool, originURL, helper string) error {
+	if err := r.ensureConfig(ctx, configSetting{"remote." + pool + ".url", []string{originURL}}); err != nil {
+		return err
+	}
+	fetch, err := r.configValues(ctx, "remote."+pool+".fetch")
 	if err != nil {
 		return err
 	}
 	if len(fetch) == 0 {
-		if err := r.run(ctx, nil, "config", "--add", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+		if err := r.run(ctx, nil, "config", "--add", "remote."+pool+".fetch", "+refs/heads/*:refs/remotes/"+pool+"/*"); err != nil {
 			return err
 		}
 	}

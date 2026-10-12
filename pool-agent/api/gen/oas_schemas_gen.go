@@ -173,8 +173,13 @@ func (s *ErrorModelStatusCode) SetResponse(val ErrorModel) {
 // Ref: #/components/schemas/GitSource
 type GitSource struct {
 	Checkout OptGitSourceCheckout `json:"checkout"`
-	// How the source reaches the sandbox. clone fetches from url or localDirectory; push initializes an
-	// empty repository for the client to push into. Defaults to clone.
+	// The key of this pool's Git cache a cache-delivered source is delivered into. The source's
+	// namespace in it is the sandbox id and the source slug.
+	CacheKey OptString `json:"cacheKey"`
+	// How the source reaches the sandbox. cache is a namespace of this pool's Git cache named by
+	// cacheKey, which a client delivers into and the sandbox clones. clone and push are sources
+	// delivered before that. clone is fetched by the sandbox from url; push is a bare repository made
+	// for the sandbox, which the client pushes into. Defaults to clone.
 	Delivery OptGitSourceDelivery `json:"delivery"`
 	// Opaque stable key for durable pool-local data shared by sandboxes using this source.
 	DataKey        OptString               `json:"dataKey"`
@@ -183,8 +188,8 @@ type GitSource struct {
 	LocalDirectory OptString               `json:"localDirectory"`
 	// Stable URL-safe source slug used to address the source as a sandbox Git repository.
 	Slug OptString `json:"slug"`
-	// URL to configure as the checkout's upstream remote once the source is materialized. The
-	// checked-out branch keeps tracking origin.
+	// The source's own remote. A cache-delivered source's checkout has it as origin. A source delivered
+	// before that has it as a remote named upstream, and its branch tracks origin, the pool.
 	UpstreamUrl OptString             `json:"upstreamUrl"`
 	URL         OptURI                `json:"url"`
 	Workspace   OptGitSourceWorkspace `json:"workspace"`
@@ -193,6 +198,11 @@ type GitSource struct {
 // GetCheckout returns the value of Checkout.
 func (s *GitSource) GetCheckout() OptGitSourceCheckout {
 	return s.Checkout
+}
+
+// GetCacheKey returns the value of CacheKey.
+func (s *GitSource) GetCacheKey() OptString {
+	return s.CacheKey
 }
 
 // GetDelivery returns the value of Delivery.
@@ -243,6 +253,11 @@ func (s *GitSource) GetWorkspace() OptGitSourceWorkspace {
 // SetCheckout sets the value of Checkout.
 func (s *GitSource) SetCheckout(val OptGitSourceCheckout) {
 	s.Checkout = val
+}
+
+// SetCacheKey sets the value of CacheKey.
+func (s *GitSource) SetCacheKey(val OptString) {
+	s.CacheKey = val
 }
 
 // SetDelivery sets the value of Delivery.
@@ -327,13 +342,16 @@ func (s *GitSourceCheckout) SetRefType(val OptString) {
 	s.RefType = val
 }
 
-// How the source reaches the sandbox. clone fetches from url or localDirectory; push initializes an
-// empty repository for the client to push into. Defaults to clone.
+// How the source reaches the sandbox. cache is a namespace of this pool's Git cache named by
+// cacheKey, which a client delivers into and the sandbox clones. clone and push are sources
+// delivered before that. clone is fetched by the sandbox from url; push is a bare repository made
+// for the sandbox, which the client pushes into. Defaults to clone.
 type GitSourceDelivery string
 
 const (
 	GitSourceDeliveryClone GitSourceDelivery = "clone"
 	GitSourceDeliveryPush  GitSourceDelivery = "push"
+	GitSourceDeliveryCache GitSourceDelivery = "cache"
 )
 
 // AllValues returns all GitSourceDelivery values.
@@ -341,6 +359,7 @@ func (GitSourceDelivery) AllValues() []GitSourceDelivery {
 	return []GitSourceDelivery{
 		GitSourceDeliveryClone,
 		GitSourceDeliveryPush,
+		GitSourceDeliveryCache,
 	}
 }
 
@@ -350,6 +369,8 @@ func (s GitSourceDelivery) MarshalText() ([]byte, error) {
 	case GitSourceDeliveryClone:
 		return []byte(s), nil
 	case GitSourceDeliveryPush:
+		return []byte(s), nil
+	case GitSourceDeliveryCache:
 		return []byte(s), nil
 	default:
 		return nil, errors.Errorf("invalid value: %q", s)
@@ -364,6 +385,9 @@ func (s *GitSourceDelivery) UnmarshalText(data []byte) error {
 		return nil
 	case GitSourceDeliveryPush:
 		*s = GitSourceDeliveryPush
+		return nil
+	case GitSourceDeliveryCache:
+		*s = GitSourceDeliveryCache
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)

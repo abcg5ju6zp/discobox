@@ -844,13 +844,28 @@ func poolGitSource(in model.GitSource, dataKey string) (poolapimodel.GitSource, 
 	if out.Kind == "" {
 		out.Kind = poolclient.GitSourceKindGit
 	}
-	// A push-delivered source names a repository this pool cannot reach. Its
-	// URL and directory are deliberately not forwarded, so the pool cannot
-	// try; the client pushes the commits in instead.
-	push := in.Delivery == model.GitSourceDeliveryPush
-	if push {
+	// A source a client delivers names nothing this pool is asked to reach,
+	// so the client's directory is not forwarded. A cache-delivered source
+	// says which cache; its URL, when it is a remote-URL source, is forwarded
+	// as what to call it while a person waits on it, and as its remote.
+	switch in.Delivery {
+	case model.GitSourceDeliveryCache:
+		out.Delivery = poolclient.NewOptGitSourceDelivery(poolclient.GitSourceDeliveryCache)
+		if in.CacheKey != nil && *in.CacheKey != "" {
+			out.CacheKey = poolclient.NewOptString(*in.CacheKey)
+		}
+		if in.LocalDirectory == nil || strings.TrimSpace(*in.LocalDirectory) == "" {
+			if in.URL != nil && *in.URL != "" {
+				out.UpstreamUrl = poolclient.NewOptString(*in.URL)
+			}
+		} else {
+			// Only the name a person knows the checkout by: the pool reaches
+			// nothing at this path.
+			out.LocalDirectory = poolclient.NewOptString(*in.LocalDirectory)
+		}
+	case model.GitSourceDeliveryPush:
 		out.Delivery = poolclient.NewOptGitSourceDelivery(poolclient.GitSourceDeliveryPush)
-	} else {
+	default:
 		if in.URL != nil && *in.URL != "" {
 			parsed, err := url.Parse(*in.URL)
 			if err != nil {
@@ -862,8 +877,8 @@ func poolGitSource(in model.GitSource, dataKey string) (poolapimodel.GitSource, 
 			out.LocalDirectory = poolclient.NewOptString(*in.LocalDirectory)
 		}
 	}
-	// Forwarded in both delivery modes: it is a network remote the sandbox
-	// itself fetches from, not a location the pool is asked to reach.
+	// Forwarded however the source is delivered: it is a network remote the
+	// sandbox itself fetches from, not a location the pool is asked to reach.
 	if in.UpstreamURL != nil && *in.UpstreamURL != "" {
 		out.UpstreamUrl = poolclient.NewOptString(*in.UpstreamURL)
 	}

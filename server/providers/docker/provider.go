@@ -96,50 +96,18 @@ func newFromInstance(ctx context.Context, instance *model.SandboxProviderInstanc
 		_ = engine.Close()
 		return nil, err
 	}
-	definition := Definition()
-	definition.LocalSourceRoots = localSourceRoots(driver.DaemonHost(), engine.HostMounts())
-	return poolruntime.New(engine, definition, poolManager), nil
-}
-
-// localSourceRoots are the host paths a sandbox on this instance can clone a
-// local source directory from.
-//
-// Two things have to hold, and the host mounts are the second: the daemon must
-// share a filesystem with this process, and the path must be one of the ones
-// this instance carries into its pools. A pool sees a host
-// directory only if it was mounted for it (dockerworker.Engine.containerMounts),
-// so the mounts are the whole answer — the sources are named here rather than
-// their in-container targets, because the caller compares them against a path
-// on this machine.
-//
-// They come from the engine's normalized configuration rather than the raw
-// instance config, so the roots claimed here and the mounts actually made
-// cannot drift.
-func localSourceRoots(daemonHost string, hostMounts []dockerworker.HostMount) []string {
-	if !daemonIsLocal(daemonHost) {
-		return nil
-	}
-	roots := make([]string, 0, len(hostMounts))
-	for _, hostMount := range hostMounts {
-		if source := strings.TrimSpace(hostMount.Source); source != "" {
-			roots = append(roots, source)
-		}
-	}
-	return roots
+	return poolruntime.New(engine, Definition(), poolManager), nil
 }
 
 // daemonIsLocal reports whether the Docker daemon at daemonHost runs on this
-// machine — which decides three separate things: whether a local source
-// directory can be bind-mounted into a sandbox, whether the control plane's own
+// machine — which decides two separate things: whether the control plane's own
 // Unix socket is reachable from a pool container, and whether this process can
 // read the daemon's journal.
 //
 // Only socket transports qualify. A socket means the daemon is on this machine,
 // including Docker Desktop, which shares host paths into its VM transparently.
 // ssh:// and remote tcp:// daemons cannot see these files at all, and a
-// tcp://localhost daemon may be forwarded anywhere, so none of them qualify:
-// binding a path the daemon cannot resolve fails at run time, while declining
-// costs only a source push.
+// tcp://localhost daemon may be forwarded anywhere, so none of them qualify.
 //
 // The rule itself is the engine's, because the image store asks the same
 // question of the same hosts (ADR 0113 §4) and two answers would eventually

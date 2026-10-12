@@ -66,12 +66,23 @@ func TestSandboxReconcileExecutorDelegatesToProvider(t *testing.T) {
 				URL:  serverapi.NewOptURI(sourceURL),
 				Checkout: serverapi.NewOptGitSourceCheckout(serverapi.GitSourceCheckout{
 					RefName: serverapi.NewOptString("main"),
+					Commit:  serverapi.NewOptString(parkedCommit),
 				}),
 			}),
 		},
 	})
 	if err != nil {
 		t.Fatalf("create sandbox: %v", err)
+	}
+	// Its client delivered the source while the sandbox was being made, and
+	// said so before the sandbox could park: it never does (ADR 26-10-10-545
+	// §3).
+	if _, err := svc.CompleteSandboxSourcePush(ctx, projectID, sb.ID,
+		services.CompleteSandboxSourcePushBody{Sources: map[string]string{"primary": parkedCommit}}); err != nil {
+		t.Fatalf("report the source delivered before the sandbox is provisioned: %v", err)
+	}
+	if sb, err = svc.GetSandbox(ctx, projectID, sb.ID); err != nil {
+		t.Fatal(err)
 	}
 	sb.SecretState = []byte("initial")
 	sb.ProviderState = []byte(`{"existing":true}`)

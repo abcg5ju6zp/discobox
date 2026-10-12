@@ -42,6 +42,7 @@ import (
 	"github.com/discobox-ai/discobox/pool-agent/buildkitagent"
 	"github.com/discobox-ai/discobox/pool-agent/childproc"
 	"github.com/discobox-ai/discobox/pool-agent/execidentity"
+	"github.com/discobox-ai/discobox/pool-agent/gitcache"
 	"github.com/discobox-ai/discobox/pool-agent/imagereap"
 	"github.com/discobox-ai/discobox/pool-agent/proxyagent"
 
@@ -141,11 +142,10 @@ type Sandbox struct {
 }
 
 // GitRepositoryLocation is the on-host location of a source's origin
-// repository, together with the OS identity that owns it: the owner of the
-// developer's Git directory for a live origin, the sandbox user for the bare
-// origin the pool holds. The git CGI backend must run as this identity, not as
-// the pool-agent process's own identity, or it trips git's dubious-ownership
-// check against the repository.
+// repository, together with the OS identity that owns it: the sandbox user
+// for the bare origin made for one sandbox, and the pool agent itself for a
+// cache. The git CGI backend must run as this identity, or it trips git's
+// dubious-ownership check against the repository.
 type GitRepositoryLocation struct {
 	Path string
 	// UID and GID are the owning user. A negative value means the caller
@@ -154,12 +154,17 @@ type GitRepositoryLocation struct {
 	// the process (there is no sandbox container user to impersonate).
 	UID int
 	GID int
-	// Live marks the developer's own Git directory served as a source's
-	// origin, rather than a repository this pool owns (ADR 0126 §4): it is
-	// served fetch-only, and advertises HEAD, the branch HEAD names, and Refs.
-	Live bool
-	// Refs are the refs the source declares, for a live origin.
-	Refs []string
+	// Namespace is the Git namespace the repository is served in: a source's
+	// namespace of this pool's cache (ADR 26-10-10-545). Empty for a
+	// repository served whole.
+	Namespace string
+	// FetchOnly serves the repository as a sandbox reaches its own origin in
+	// a shared cache: upload-pack alone, confined to what the namespace
+	// advertises (githttp.ServeBackend).
+	FetchOnly bool
+	// Release, when set, is called once the request has been served: a cache
+	// is held against collection for as long as something reads it.
+	Release func()
 }
 
 // AssignedPort describes a runtime-assigned port mapping.
@@ -249,11 +254,15 @@ type Runtime interface {
 	// sandbox agent has not answered yet: Docker calls it running, and nothing
 	// in it can be reached.
 	SandboxBooting(sandboxID string) bool
-	// GitOriginPath is the repository behind a source's origin route: the
-	// developer's live Git directory when this pool can see it (ADR 0126 §4),
-	// and otherwise the bare origin repository the client pushes into
-	// (ADR 0058 §3).
+	// GitOriginPath is the repository behind a source's origin route, as the
+	// sandbox itself reaches it: its namespace of this pool's cache, served
+	// fetch-only (ADR 26-10-10-545 §7), or the bare origin repository an
+	// earlier pool made for the sandbox, which a client pushes into (ADR
+	// 0058 §3).
 	GitOriginPath(ctx context.Context, sandboxID, slug string) (GitRepositoryLocation, error)
+	// GitCache is this pool's cache of Git, which clients deliver sources
+	// into (ADR 26-10-10-545 §2).
+	GitCache() *gitcache.Store
 	// SandboxServesWorktree is nil when the sandbox's agent serves its own
 	// repository, which the worktree route forwards to (ADR 0126 §4), and
 	// ErrWorktreeUnsupported when the sandbox runs an agent from before it did.
@@ -302,12 +311,14 @@ type DockerSandboxRuntime struct {
 	projectID             string
 	poolID                string
 	controlPlanePublicKey string
-	hostMountPrefix       string
 	// sharedMemoryBytes sizes each sandbox container's /dev/shm; zero is
 	// Docker's 64 MiB default.
 	sharedMemoryBytes int64
 	// root is where this pool's state is, as this process sees it.
 	root layout.Root
+	// gitCache is this pool's cache of Git: one repository per remote, a
+	// namespace per sandbox source (ADR 26-10-10-545 §2).
+	gitCache *gitcache.Store
 	// hostStateRoot is where the daemon sees root's state; empty means it
 	// sees the paths root itself names. It is applied, through root, only where a path is
 	// handed to the daemon (daemonPath), so root and its translation are one.
@@ -348,7 +359,6 @@ type DockerSandboxRuntimeConfig struct {
 	ProjectID             string
 	PoolID                string
 	ControlPlanePublicKey string
-	HostMountPrefix       string
 	// Root is where the runtime reads and writes pool state: the pool
 	// container's, layout.Container().
 	Root layout.Root
@@ -384,8 +394,8 @@ func NewDockerSandboxRuntime(cfg DockerSandboxRuntimeConfig) (*DockerSandboxRunt
 		sandboxIdleTimeout:    cfg.SandboxIdleTimeout,
 		identityKey:           cfg.IdentityKey,
 		sharedMemoryBytes:     cfg.SharedMemoryBytes,
-		hostMountPrefix:       cleanAbsPath(cfg.HostMountPrefix),
 		root:                  cfg.Root,
+		gitCache:              gitcache.New(cfg.Root.PoolGitCache(cfg.ProjectID, cfg.PoolID)),
 		hostStateRoot:         cfg.HostStateRoot,
 	}, nil
 }
@@ -999,18 +1009,13 @@ func (r *DockerSandboxRuntime) prepareSandboxVolumes(ctx context.Context, sandbo
 	sources := sandboxSources(r.paths, req)
 	_, hasPrimary := req.Config.Source.Get()
 	for _, source := range sources {
-		// The origin repository has to exist before the container does: the
+		// A source delivered before the pool cached Git has a bare repository
+		// of its own, which has to exist before the container does: the
 		// client pushes into it while the sandbox parks (ADR 0058 §1).
-		if gitSourceAwaitsPush(source.git) {
+		if gitSourceHasOwnOrigin(source.git) {
 			if err := r.initGitOrigin(ctx, r.sandboxOriginPath(sandboxID, source.slug), gitSourceInitialBranch(source.git), user); err != nil {
 				return nil, fmt.Errorf("prepare source origin %q: %w", source.slug, err)
 			}
-		}
-		// A live origin is served from the developer's own Git directory, which
-		// has to be a real one (ADR 0093); a create says so now rather than the
-		// sandbox's clone answering a missing repository.
-		if err := r.checkLocalGitDirectory(source.git); err != nil {
-			return nil, fmt.Errorf("source %q: %w", source.slug, err)
 		}
 		// The directory boot binds onto the source's target, which it gives to
 		// the sandbox user. It exists from the start, even for a source still
@@ -1028,8 +1033,11 @@ func (r *DockerSandboxRuntime) prepareSandboxVolumes(ctx context.Context, sandbo
 			}
 		}
 	}
-	if err := r.writeLiveOrigins(sandboxID, sources); err != nil {
-		return nil, fmt.Errorf("record live origins: %w", err)
+	if err := r.adoptImportedOrigins(ctx, sandboxID, sources); err != nil {
+		return nil, fmt.Errorf("read imported origins: %w", err)
+	}
+	if err := r.writeSourceCaches(sandboxID, sources); err != nil {
+		return nil, fmt.Errorf("record source caches: %w", err)
 	}
 	// These sources are resolved by the Docker daemon, so they are the only
 	// place a container path has to become a daemon path.
@@ -1327,11 +1335,12 @@ func buildSandboxDocument(paths sandboxpath.Paths, projectID, sandboxID, poolID,
 				RefName:     sourceRefName(source.git),
 				RefType:     sourceRefType(source.git),
 				UpstreamURL: strings.TrimSpace(optString(source.git.UpstreamUrl)),
+				PoolRemote:  sourcePoolRemote(source.git),
 				Workspace:   sourceWorkspace(source.git),
 				// The client still owes this one: the sandbox holds its harness
-				// launch until the push lands and this pool agent reports the
-				// sandbox settled.
-				AwaitsDelivery: gitSourceAwaitsPush(source.git),
+				// launch until the delivery lands and this pool agent reports
+				// the sandbox settled.
+				AwaitsDelivery: gitSourceClientDelivers(source.git),
 			})
 		}
 		if resolved, ok := req.ResolvedHarnessConfig.Get(); ok {
@@ -1584,6 +1593,15 @@ const (
 	// restored database, a bad query — and covers an import whose tree is
 	// restored before its row exists.
 	sandboxVolumeRetention = 24 * time.Hour
+	// gitCacheSweepInterval paces the care of this pool's Git caches: the
+	// namespaces of sandboxes that are gone removed, and every cache
+	// collected, with the cache to itself while it is (ADR 26-10-10-545 §5).
+	// A delivery to a remote waits out its cache's collection, so it is rare.
+	gitCacheSweepInterval = 24 * time.Hour
+	// gitCacheRetention is how long a cache no sandbox uses is kept after its
+	// last delivery. It is what makes the next sandbox from a remote a delta
+	// after the last one was deleted, so it is long.
+	gitCacheRetention = 30 * 24 * time.Hour
 	// sandboxVolumeReapInterval paces the sandbox tree reaper. Each pass asks
 	// the control plane, and nothing it collects is younger than a day.
 	sandboxVolumeReapInterval = 10 * time.Minute
@@ -1687,7 +1705,9 @@ type HeldSandboxes func(ctx context.Context) ([]string, error)
 
 // WatchSandboxVolumes reaps the durable trees
 // (pools/{poolID}/sandboxes/{sandboxID}) of sandboxes the control plane no
-// longer holds, on a slow interval (ADR 26-10-01-876).
+// longer holds, on a slow interval (ADR 26-10-01-876), and on a slower one
+// their namespaces of this pool's Git caches, collecting each cache as it
+// goes (ADR 26-10-10-545 §5).
 //
 // Whether a container exists plays no part. A sandbox the control plane holds
 // — failed and awaiting repair, archived, or on its way out — keeps its tree
@@ -1699,8 +1719,18 @@ func (r *DockerSandboxRuntime) WatchSandboxVolumes(ctx context.Context, logger *
 	}
 	ticker := time.NewTicker(sandboxVolumeReapInterval)
 	defer ticker.Stop()
+	// The first sweep waits a full interval: a pool agent that restarts often
+	// must not repack every cache each time it does.
+	lastGitCacheSweep := time.Now()
 	for {
 		reapUnheldSandboxVolumes(ctx, r.sandboxesRoot(), held, sandboxVolumeRetention, time.Now(), logger)
+		if time.Since(lastGitCacheSweep) >= gitCacheSweepInterval {
+			lastGitCacheSweep = time.Now()
+			r.gitCache.Sweep(ctx, gitcache.Held(held), gitcache.SweepOptions{
+				NamespaceRetention: sandboxVolumeRetention,
+				CacheRetention:     gitCacheRetention,
+			}, time.Now(), logger)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -2038,7 +2068,12 @@ func (r *DockerSandboxRuntime) GitOriginPath(ctx context.Context, sandboxID, slu
 	if err != nil {
 		return GitRepositoryLocation{}, err
 	}
-	return r.originLocation(sandboxID, slug, sb.Env)
+	return r.originLocation(ctx, sandboxID, slug, sb.Env)
+}
+
+// GitCache is this pool's cache of Git.
+func (r *DockerSandboxRuntime) GitCache() *gitcache.Store {
+	return r.gitCache
 }
 
 // sandboxUserFromEnv recovers the sandbox's resolved user from the
@@ -2340,9 +2375,14 @@ type MemorySandboxRuntime struct {
 	sandboxes map[string]*Sandbox
 	// archived stands in for the on-disk marker: an entry here has no sandbox
 	// in the map (archiving drops the container) but is still held as data.
-	archived    map[string]struct{}
-	gitOrigins  map[string]map[string]string
-	liveOrigins map[string]map[string]GitRepositoryLocation
+	archived   map[string]struct{}
+	gitOrigins map[string]map[string]string
+	// sourceCaches is each sandbox's cache-delivered sources, by slug, and
+	// the cache each is in.
+	sourceCaches map[string]map[string]string
+	// gitCache is created on first use, under a temporary directory unless
+	// SetGitCacheRoot named one.
+	gitCache *gitcache.Store
 	// trees stands in for the durable tree on disk: the tar bytes a sandbox was
 	// imported with, handed back by an export.
 	trees map[string][]byte
@@ -2359,7 +2399,7 @@ func NewMemorySandboxRuntime() *MemorySandboxRuntime {
 		sandboxes:    map[string]*Sandbox{},
 		archived:     map[string]struct{}{},
 		gitOrigins:   map[string]map[string]string{},
-		liveOrigins:  map[string]map[string]GitRepositoryLocation{},
+		sourceCaches: map[string]map[string]string{},
 		trees:        map[string][]byte{},
 		harnessModes: map[string]string{},
 	}
@@ -2589,14 +2629,18 @@ func (r *MemorySandboxRuntime) SandboxBooting(string) bool {
 	return false
 }
 
-func (r *MemorySandboxRuntime) GitOriginPath(_ context.Context, sandboxID, slug string) (GitRepositoryLocation, error) {
+func (r *MemorySandboxRuntime) GitOriginPath(ctx context.Context, sandboxID, slug string) (GitRepositoryLocation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sandboxes[sandboxID] == nil {
 		return GitRepositoryLocation{}, ErrNotFound
 	}
-	if live, ok := r.liveOrigins[sandboxID][slug]; ok {
-		return live, nil
+	if key := r.sourceCaches[sandboxID][slug]; key != "" {
+		path, release, err := r.gitCacheLocked().Use(ctx, key)
+		if err != nil {
+			return GitRepositoryLocation{}, err
+		}
+		return GitRepositoryLocation{Path: path, UID: -1, GID: -1, Namespace: gitcache.Namespace(sandboxID, slug), FetchOnly: true, Release: release}, nil
 	}
 	origins := r.gitOrigins[sandboxID]
 	if origins == nil || origins[slug] == "" {
@@ -2700,17 +2744,45 @@ func (r *MemorySandboxRuntime) SetGitOriginPath(sandboxID, slug, path string) {
 	r.gitOrigins[sandboxID][slug] = path
 }
 
-// SetLiveGitOrigin serves path as slug's live origin, advertising refs, ahead
-// of any bare origin SetGitOriginPath gave it.
-func (r *MemorySandboxRuntime) SetLiveGitOrigin(sandboxID, slug, path string, refs []string) {
+// SetGitCacheRoot roots this runtime's Git cache at root, for a test that
+// wants it somewhere it will clean up. It is called before anything uses the
+// cache.
+func (r *MemorySandboxRuntime) SetGitCacheRoot(root string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.liveOrigins[sandboxID] == nil {
-		r.liveOrigins[sandboxID] = map[string]GitRepositoryLocation{}
-	}
-	r.liveOrigins[sandboxID][slug] = GitRepositoryLocation{Path: path, UID: -1, GID: -1, Live: true, Refs: refs}
+	r.gitCache = gitcache.New(root)
 }
 
+// SetSourceCache makes slug a cache-delivered source of sandboxID, whose
+// origin is its namespace of the cache named by key.
+func (r *MemorySandboxRuntime) SetSourceCache(sandboxID, slug, key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sourceCaches[sandboxID] == nil {
+		r.sourceCaches[sandboxID] = map[string]string{}
+	}
+	r.sourceCaches[sandboxID][slug] = key
+}
+
+// GitCache is this runtime's Git cache, under a temporary directory unless
+// SetGitCacheRoot named one.
+func (r *MemorySandboxRuntime) GitCache() *gitcache.Store {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.gitCacheLocked()
+}
+
+// gitCacheLocked is GitCache for a caller holding r.mu.
+func (r *MemorySandboxRuntime) gitCacheLocked() *gitcache.Store {
+	if r.gitCache == nil {
+		root, err := os.MkdirTemp("", "discobox-git-cache-")
+		if err != nil {
+			root = filepath.Join(os.TempDir(), "discobox-git-cache")
+		}
+		r.gitCache = gitcache.New(root)
+	}
+	return r.gitCache
+}
 func sandboxContainerName(poolID, sandboxID string) string {
 	name := "discobox-sandbox-" + poolID + "-" + sandboxID
 	name = strings.Map(func(r rune) rune {
@@ -3140,59 +3212,50 @@ func firstGitBranch(ctx context.Context, repo string, uid, gid int) string {
 	return strings.TrimSpace(string(out))
 }
 
-// localGitDirectory is the Git directory of the repository at local, which is
-// what a clone-delivered source's live origin serves (ADR 0126 §4).
-// Only an absolute path names one: anything else would be resolved against
-// whatever directory the process or the daemon happens to be in.
-func localGitDirectory(local string) (string, error) {
-	if !filepath.IsAbs(local) {
-		return "", fmt.Errorf("source localDirectory %q is not an absolute path", local)
-	}
-	return filepath.Join(filepath.Clean(local), ".git"), nil
-}
-
-// checkLocalGitDirectory refuses a clone-delivered source whose .git is not a
-// real directory, before a sandbox is made to clone from it.
-//
-// A linked worktree or a submodule checkout has a file there naming a Git
-// directory elsewhere, and a symlink resolves wherever it points — the
-// repository root itself included. Either way it would no longer be the
-// repository's own Git directory, which is the whole of what ADR 0093 permits
-// a sandbox to see, and the live origin refuses to serve it. A current client reports such a
-// repository and the server delivers it by push, so reaching this is an older
-// client, and the failure names the path.
-func (r *DockerSandboxRuntime) checkLocalGitDirectory(source workerapimodel.GitSource) error {
-	if gitSourceAwaitsPush(source) {
-		return nil
-	}
-	local := strings.TrimSpace(optString(source.LocalDirectory))
-	if local == "" {
-		return nil
-	}
-	gitDir, err := localGitDirectory(local)
-	if err != nil {
-		return err
-	}
-	info, err := os.Lstat(hostMountedLocalDirectory(gitDir, r.hostMountPrefix))
-	if err != nil {
-		return fmt.Errorf("stat source Git directory %s: %w", gitDir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("source Git directory %s is not a directory (a linked worktree or submodule checkout is delivered by push)", gitDir)
-	}
-	return nil
-}
-
-// gitSourceAwaitsPush reports whether the client delivers this source by
-// pushing it in, rather than the sandbox fetching it.
+// gitSourceClientDelivers reports whether a client delivers this source,
+// rather than the sandbox fetching it from its remote: into this pool's cache
+// (ADR 26-10-10-545), or into the bare repository an earlier pool made for
+// the sandbox (ADR 0058).
 //
 // Delivery is read from the source, never inferred from a missing URL: a source
 // with nothing to clone from is a malformed request, and treating it as "wait
-// for a push" would turn that mistake into a sandbox that silently starts with
-// an empty workspace.
-func gitSourceAwaitsPush(source workerapimodel.GitSource) bool {
+// for a delivery" would turn that mistake into a sandbox that silently starts
+// with an empty workspace.
+func gitSourceClientDelivers(source workerapimodel.GitSource) bool {
 	delivery, ok := source.Delivery.Get()
-	return ok && string(delivery) == string(workerclient.GitSourceDeliveryPush)
+	return ok && (delivery == workerclient.GitSourceDeliveryPush || delivery == workerclient.GitSourceDeliveryCache)
+}
+
+// gitSourceHasOwnOrigin reports whether a source's origin is a bare
+// repository made for its sandbox alone, as it was before a pool cached Git:
+// a push-delivered source's (ADR 0058 §1), and a clone-delivered local
+// source's. The second was served live from the developer's Git directory
+// (ADR 0126 §4), which no pool does now; its sandbox gets a repository that is
+// empty until a client next pushes, and its checkout is untouched (ADR
+// 26-10-10-545 §8).
+func gitSourceHasOwnOrigin(source workerapimodel.GitSource) bool {
+	switch source.Delivery.Or(workerclient.GitSourceDeliveryClone) {
+	case workerclient.GitSourceDeliveryPush:
+		return true
+	case workerclient.GitSourceDeliveryClone:
+		return strings.TrimSpace(optString(source.LocalDirectory)) != ""
+	default:
+		return false
+	}
+}
+
+// poolRemoteName is the remote a cache-delivered source's checkout knows this
+// pool by. Its origin is the source's own remote (ADR 26-10-10-545 §6).
+const poolRemoteName = "discobox"
+
+// sourcePoolRemote is the name of the remote the sandbox's checkout of a
+// source reaches this pool through: poolRemoteName for a cache-delivered
+// source, and empty — origin, as it always was — for one delivered before.
+func sourcePoolRemote(source workerapimodel.GitSource) string {
+	if gitSourceCacheKey(source) == "" {
+		return ""
+	}
+	return poolRemoteName
 }
 
 // initGitOrigin creates the bare repository a client pushes a push-delivered
@@ -3287,21 +3350,30 @@ func sourceWorkspace(source workerapimodel.GitSource) *sandboxconfig.SourceWorks
 	}
 }
 
-// sourceUpstreamRef is the remote-tracking ref the source would fetch upstream
-// into, derived from the branch it was cloned at — the same derivation
-// `discobox diff` uses. Only a clone at a branch names one; anything else falls
-// back to origin's default branch, which the sandbox-agent verifies in the
-// repository before using.
+// sourceUpstreamRef is the remote-tracking ref a sandbox's reported changes
+// are measured against once it has fetched: the pool's copy of the branch the
+// source was cloned at — the same derivation `discobox diff` uses — which a
+// client's push moves. Only a clone at a branch names one; anything else falls
+// back to the pool remote's default branch, which the sandbox-agent verifies
+// in the repository before using.
+//
+// For a cache-delivered source the pool is the discobox remote, not origin:
+// origin is the source's real remote there, and a sandbox follows its client
+// through what the client pushes (ADR 26-10-10-545 §6).
 func sourceUpstreamRef(source workerapimodel.GitSource) string {
+	remote := sourcePoolRemote(source)
+	if remote == "" {
+		remote = "origin"
+	}
 	checkout, ok := source.Checkout.Get()
 	if !ok {
-		return "refs/remotes/origin/HEAD"
+		return "refs/remotes/" + remote + "/HEAD"
 	}
 	refName := strings.TrimSpace(optString(checkout.RefName))
 	if refName == "" || strings.TrimSpace(optString(checkout.RefType)) != "branch" {
-		return "refs/remotes/origin/HEAD"
+		return "refs/remotes/" + remote + "/HEAD"
 	}
-	return "refs/remotes/origin/" + refName
+	return "refs/remotes/" + remote + "/" + refName
 }
 
 // gitSourceInitialBranch returns the branch the client is expected to push, or
@@ -3319,28 +3391,6 @@ func gitSourceInitialBranch(source workerapimodel.GitSource) string {
 		return ""
 	}
 	return branch
-}
-
-func hostMountedLocalDirectory(local, hostMountPrefix string) string {
-	hostMountPrefix = cleanAbsPath(hostMountPrefix)
-	if hostMountPrefix == "" {
-		return local
-	}
-	local = strings.TrimSpace(local)
-	if local == "" {
-		return local
-	}
-	if strings.HasPrefix(local, "file://") {
-		return local
-	}
-	if !filepath.IsAbs(local) {
-		return local
-	}
-	local = cleanAbsPath(local)
-	if local == "" || local == hostMountPrefix || strings.HasPrefix(local, hostMountPrefix+string(filepath.Separator)) {
-		return local
-	}
-	return filepath.Join(hostMountPrefix, strings.TrimPrefix(local, string(filepath.Separator)))
 }
 
 // runGit and its variants run git against dir as uid/gid, or as the calling

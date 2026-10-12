@@ -1,31 +1,13 @@
 package sandboxes
 
 import (
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/discobox-ai/discobox/internal/originkey"
 	"github.com/discobox-ai/discobox/server/internal/model"
-	"github.com/discobox-ai/discobox/server/internal/sandbox"
 )
-
-// hostPath spells a POSIX fixture path the way the machine running the test
-// does. sourceNeedsPush compares a source's directory against the provider's
-// local source roots with filepath containment, which is a question about the
-// host the server runs on — and on Windows "/src/alpha" is not even absolute,
-// so every containment answer flips.
-func hostPath(p string) string {
-	if runtime.GOOS != "windows" {
-		return p
-	}
-	if p == "/" {
-		return `C:\`
-	}
-	return `C:` + filepath.FromSlash(p)
-}
 
 func TestSourceDataKeyUsesHostAndNormalizedSourceRoot(t *testing.T) {
 	directory := "/foo/bar/baz"
@@ -59,147 +41,104 @@ func TestSourceDataFingerprintIsStableAndChangesTheRuntimeSpec(t *testing.T) {
 	}
 }
 
-func TestSourceNeedsPush(t *testing.T) {
-	const serverHost = "host_serveraaaaaaaa"
-	const clientHost = "host_clientbbbbbbbb"
-
-	localSource := func() *model.GitSource {
-		dir := hostPath("/src/alpha")
-		return &model.GitSource{Kind: "git", LocalDirectory: &dir}
-	}
-	directorySource := func() *model.GitSource {
-		source := localSource()
-		source.NoLocalRepository = true
-		return source
-	}
-	unbornSource := func() *model.GitSource {
-		source := localSource()
-		source.NoLocalCommits = true
-		return source
-	}
-	worktreeSource := func() *model.GitSource {
-		source := localSource()
-		source.NoLocalGitDirectory = true
-		return source
-	}
-	remoteSource := func() *model.GitSource {
-		url := "https://github.com/discobox-ai/discobox.git"
-		return &model.GitSource{Kind: "git", URL: &url}
-	}
-	binds := sandbox.ProviderDefinition{LocalSourceRoots: []string{hostPath("/src")}}
-	remoteProvider := sandbox.ProviderDefinition{}
-	// A provider that reaches this filesystem, but not where the source lives.
-	elsewhere := sandbox.ProviderDefinition{LocalSourceRoots: []string{hostPath("/home"), hostPath("/Users")}}
-	everything := sandbox.ProviderDefinition{LocalSourceRoots: []string{hostPath("/")}}
-	sameHost := &model.Origin{HostID: serverHost}
-	otherHost := &model.Origin{HostID: clientHost}
+// Every source is delivered by a client into its pool's cache, whatever it is
+// and wherever it came from; what differs is which cache (ADR 26-10-10-545
+// §§1-2).
+func TestEverySourceIsDeliveredIntoTheCacheOfItsRemote(t *testing.T) {
+	str := func(value string) *string { return &value }
+	origin := &model.Origin{HostID: "host_clientbbbbbbbb"}
+	const directory = "/src/alpha"
 
 	tests := []struct {
-		name       string
-		definition sandbox.ProviderDefinition
-		serverHost string
-		origin     *model.Origin
-		source     *model.GitSource
-		want       bool
-		why        string
+		name   string
+		source model.GitSource
+		origin *model.Origin
+		want   string
+		why    string
 	}{
 		{
-			name: "local source on the same host binds", definition: binds, serverHost: serverHost,
-			origin: sameHost, source: localSource(), want: false,
-			why: "the provider runs here and the client is here, so the files resolve",
+			name:   "a remote URL",
+			source: model.GitSource{Kind: "git", Slug: str("primary"), URL: str("https://github.com/Acme/widget.git")},
+			origin: origin,
+			want:   "remote/github.com/Acme/widget",
+			why:    "a remote-URL source's remote is its URL",
 		},
 		{
-			name: "a directory with no repository pushes even from this host", definition: binds, serverHost: serverHost,
-			origin: sameHost, source: directorySource(), want: true,
-			why: "the path resolves here, but holds no repository to clone from",
+			name:   "a local checkout of the same remote, over SSH",
+			source: model.GitSource{Kind: "git", Slug: str("primary"), LocalDirectory: str(directory), UpstreamURL: str("git@github.com:Acme/widget.git")},
+			origin: origin,
+			want:   "remote/github.com/Acme/widget",
+			why:    "the checkout and the URL share one cache, however the remote is spelled",
 		},
 		{
-			name: "a repository with no commits pushes even from this host", definition: binds, serverHost: serverHost,
-			origin: sameHost, source: unbornSource(), want: true,
-			why: "the repository resolves here and holds nothing to clone; only the client has its base commit",
+			name:   "the same remote from another client",
+			source: model.GitSource{Kind: "git", Slug: str("primary"), LocalDirectory: str("/home/other/widget"), UpstreamURL: str("https://github.com/Acme/widget")},
+			origin: &model.Origin{HostID: "host_someoneelse"},
+			want:   "remote/github.com/Acme/widget",
+			why:    "the host identity is deliberately not part of a remote's key",
 		},
 		{
-			name: "a repository whose .git is not a directory pushes even from this host", definition: binds, serverHost: serverHost,
-			origin: sameHost, source: worktreeSource(), want: true,
-			why: "the repository resolves here, but its Git directory is elsewhere, and only that directory may be bound as an origin",
+			name:   "a local checkout with no remote",
+			source: model.GitSource{Kind: "git", Slug: str("primary"), LocalDirectory: str(directory)},
+			origin: origin,
+			want:   "directory/" + originkey.Of(origin.HostID, directory),
+			why:    "with no remote the cache is the directory's on its client's host",
 		},
 		{
-			name: "local source from another host pushes", definition: binds, serverHost: serverHost,
-			origin: otherHost, source: localSource(), want: true,
-			why: "the provider can bind, but not to a path that only exists on the client",
+			name:   "a remote that is a path on the client",
+			source: model.GitSource{Kind: "git", Slug: str("primary"), LocalDirectory: str(directory), UpstreamURL: str("/srv/git/alpha.git")},
+			origin: origin,
+			want:   "directory/" + originkey.Of(origin.HostID, directory),
+			why:    "a path names a repository only on the machine it is a path on",
 		},
 		{
-			name: "local source on a non-binding provider pushes", definition: remoteProvider, serverHost: serverHost,
-			origin: sameHost, source: localSource(), want: true,
-			why: "the client is here, but the provider runs sandboxes elsewhere",
-		},
-		{
-			name: "local source outside the provider's roots pushes", definition: elsewhere, serverHost: serverHost,
-			origin: sameHost, source: localSource(), want: true,
-			why: "the provider runs here, but carries no host mount the directory sits under",
-		},
-		{
-			name: "a provider that shares the whole filesystem binds", definition: everything, serverHost: serverHost,
-			origin: sameHost, source: localSource(), want: false,
-			why: "a root of / covers every path on this machine",
-		},
-		{
-			name: "a root is not a prefix match on the name", definition: sandbox.ProviderDefinition{LocalSourceRoots: []string{hostPath("/src-old")}},
-			serverHost: serverHost, origin: sameHost, source: localSource(), want: true,
-			why: "/src-old does not contain /src/alpha, however alike the two spell",
-		},
-		{
-			name: "the root itself is covered", definition: sandbox.ProviderDefinition{LocalSourceRoots: []string{hostPath("/src/alpha")}},
-			serverHost: serverHost, origin: sameHost, source: localSource(), want: false,
-			why: "a directory mounted exactly is reachable at itself",
-		},
-		{
-			name: "a relative root covers nothing", definition: sandbox.ProviderDefinition{LocalSourceRoots: []string{"src"}},
-			serverHost: serverHost, origin: sameHost, source: localSource(), want: true,
-			why: "a relative path names no place on this machine",
-		},
-		{
-			name: "remote source never pushes", definition: remoteProvider, serverHost: serverHost,
-			origin: otherHost, source: remoteSource(), want: false,
-			why: "the sandbox clones the URL itself; no client is involved",
-		},
-		{
-			name: "remote source on a binding provider never pushes", definition: binds, serverHost: serverHost,
-			origin: sameHost, source: remoteSource(), want: false,
-			why: "a reachable provider does not make a URL a local directory",
-		},
-		{
-			name: "no source never pushes", definition: binds, serverHost: serverHost,
-			origin: sameHost, source: nil, want: false,
-			why: "there is nothing to deliver",
-		},
-		{
-			name: "missing origin pushes", definition: binds, serverHost: serverHost,
-			origin: nil, source: localSource(), want: true,
-			why: "a client that reported no origin cannot be proven to be on this machine",
-		},
-		{
-			name: "empty origin host pushes", definition: binds, serverHost: serverHost,
-			origin: &model.Origin{}, source: localSource(), want: true,
-			why: "an origin without a host identifies no machine",
-		},
-		{
-			name: "unknown server host pushes", definition: binds, serverHost: "",
-			origin: sameHost, source: localSource(), want: true,
-			why: "a server that cannot identify itself cannot claim the client's files",
-		},
-		{
-			name: "empty local directory is not a local source", definition: remoteProvider, serverHost: serverHost,
-			origin: otherHost, source: &model.GitSource{Kind: "git", LocalDirectory: new(string)}, want: false,
-			why: "an empty path is not a directory to deliver",
+			name:   "no remote and no host identity",
+			source: model.GitSource{Kind: "git", Slug: str("primary"), LocalDirectory: str(directory)},
+			origin: nil,
+			want:   "sandbox/sbx-1/primary",
+			why:    "with neither the source has a cache of its own, removed with the sandbox",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sourceNeedsPush(tc.definition, tc.serverHost, tc.origin, tc.source); got != tc.want {
-				t.Fatalf("sourceNeedsPush = %t, want %t: %s", got, tc.want, tc.why)
+			source := tc.source
+			if err := resolveSourceDelivery("sbx-1", &source, nil, tc.origin); err != nil {
+				t.Fatal(err)
+			}
+			if source.Delivery != model.GitSourceDeliveryCache {
+				t.Fatalf("delivery = %q, want cache", source.Delivery)
+			}
+			if source.CacheKey == nil || *source.CacheKey != tc.want {
+				t.Fatalf("cache key = %v, want %q: %s", source.CacheKey, tc.want, tc.why)
 			}
 		})
+	}
+}
+
+// The delivery and the cache are the server's record, for a source code
+// reference as for the primary source: a client names neither.
+func TestAClientNamesNeitherADeliveryNorACache(t *testing.T) {
+	str := func(value string) *string { return &value }
+	for _, delivery := range []string{model.GitSourceDeliveryPush, model.GitSourceDeliveryClone, model.GitSourceDeliveryCache} {
+		source := &model.GitSource{Kind: "git", Slug: str("primary"), URL: str("https://github.com/acme/widget"), Delivery: delivery}
+		if err := resolveSourceDelivery("sbx-1", source, nil, nil); err == nil {
+			t.Fatalf("a client's delivery %q was accepted", delivery)
+		}
+	}
+
+	forged := "remote/github.com/someone/else"
+	source := &model.GitSource{Kind: "git", Slug: str("primary"), URL: str("https://github.com/acme/widget"), CacheKey: &forged}
+	refs := model.SourceCodeReferences{
+		"/src/lib": {Kind: "git", Slug: str("lib"), URL: str("https://github.com/acme/lib"), CacheKey: &forged},
+	}
+	if err := resolveSourceDelivery("sbx-1", source, refs, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := *source.CacheKey; got != "remote/github.com/acme/widget" {
+		t.Fatalf("primary cache key = %q, want the server's", got)
+	}
+	if got := refs["/src/lib"]; got.Delivery != model.GitSourceDeliveryCache || got.CacheKey == nil || *got.CacheKey != "remote/github.com/acme/lib" {
+		t.Fatalf("reference = %+v, want cache-delivered into its own remote's cache", got)
 	}
 }
 
@@ -228,10 +167,44 @@ func TestAwaitingSourcePush(t *testing.T) {
 			why:     "the client reported the push complete",
 		},
 		{
+			name:    "a cache-delivered source with no delivery reported waits",
+			sandbox: &model.Sandbox{SandboxManifest: model.SandboxManifest{Source: &model.GitSource{Kind: "git", Delivery: model.GitSourceDeliveryCache}}},
+			want:    true,
+			why:     "its namespace of the pool's cache is empty until a client delivers",
+		},
+		{
+			name:    "a cache-delivered source reported delivered proceeds",
+			sandbox: &model.Sandbox{SourceDeliveredAt: &delivered, SandboxManifest: model.SandboxManifest{Source: &model.GitSource{Kind: "git", Delivery: model.GitSourceDeliveryCache}}},
+			want:    false,
+			why:     "the client reported the delivery complete, however early",
+		},
+		{
 			name:    "clone source never waits",
 			sandbox: &model.Sandbox{SandboxManifest: model.SandboxManifest{Source: &model.GitSource{Kind: "git", Delivery: model.GitSourceDeliveryClone}}},
 			want:    false,
 			why:     "the sandbox fetches a clone-delivered source itself",
+		},
+		{
+			name: "a local source once served live, in a sandbox that has not run, waits",
+			sandbox: func() *model.Sandbox {
+				directory := "/src/alpha"
+				sb := &model.Sandbox{SandboxManifest: model.SandboxManifest{Source: &model.GitSource{Kind: "git", Delivery: model.GitSourceDeliveryClone, LocalDirectory: &directory}}}
+				sb.State = model.SandboxStatePending
+				return sb
+			}(),
+			want: true,
+			why:  "no pool serves the developer's directory now, so there is nothing to clone until a client pushes",
+		},
+		{
+			name: "a local source once served live, in a sandbox that ran, does not wait",
+			sandbox: func() *model.Sandbox {
+				directory := "/src/alpha"
+				sb := &model.Sandbox{SandboxManifest: model.SandboxManifest{Source: &model.GitSource{Kind: "git", Delivery: model.GitSourceDeliveryClone, LocalDirectory: &directory}}}
+				sb.State = model.SandboxStateReady
+				return sb
+			}(),
+			want: false,
+			why:  "it cloned its source long ago, and parking it would stop a working sandbox",
 		},
 		{
 			name:    "source without delivery never waits",
@@ -361,7 +334,7 @@ func TestVerifySourcePushCommits(t *testing.T) {
 	slug := func(value string) *string { return &value }
 
 	pending := func() []gitSourceEntry {
-		return pushDeliveredSources(&model.Sandbox{SandboxManifest: model.SandboxManifest{
+		return clientDeliveredSources(&model.Sandbox{SandboxManifest: model.SandboxManifest{
 			Source: &model.GitSource{
 				Kind: "git", Slug: slug("primary"), Delivery: model.GitSourceDeliveryPush,
 				Checkout: &model.GitSourceCheckout{Commit: slug(primaryCommit)},

@@ -269,11 +269,6 @@ func TestHostShareIsOneDecision(t *testing.T) {
 	if mounts[0].Source != share.HostPath || !mounts[0].ReadOnly {
 		t.Errorf("engine host mount = %+v, want a read-only bind of %q", mounts[0], share.HostPath)
 	}
-
-	roots := localSourceRoots()
-	if len(roots) != len(shares) || roots[0] != share.HostPath {
-		t.Errorf("local source roots = %v, want %v", roots, []string{share.HostPath})
-	}
 }
 
 // The tag is a contract with a separately released guest image, and the

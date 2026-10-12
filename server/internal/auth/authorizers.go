@@ -129,6 +129,11 @@ var sandboxRole = []sandboxRoleRoute{
 	// from an origin is not delivery, and is not here.
 	{method: http.MethodGet, path: "sandboxes/*/git-origins/*/info/refs", service: "git-receive-pack", owner: createdSandbox},
 	{method: http.MethodPost, path: "sandboxes/*/git-origins/*/git-receive-pack", owner: createdSandbox},
+	// The pin that precedes that push: the refs of the delivery the pool's
+	// cache already holds, where the caller's own sources reach them (ADR
+	// 26-10-10-545 §§3, 7). What a cache remembers of a remote is a project
+	// member's to fetch, and is not here.
+	{method: http.MethodPost, path: "sandboxes/*/git-origins/*/pin", owner: createdSandbox},
 	{method: http.MethodPost, path: "sandboxes/*/complete-source-push", owner: createdSandbox},
 	// Reading and typing into the terminals of a discobox the sandbox created,
 	// one judged call at a time (ADR 26-10-01-397 §1). Attaching, and creating

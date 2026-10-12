@@ -197,9 +197,11 @@ type Source struct {
 	// into, derived from the branch it was cloned at. Once the sandbox has
 	// fetched, the diff stat's base moves forward to the merge base with this
 	// ref, so commits the sandbox pulled rather than wrote stop counting as
-	// its changes — the same rule `discobox diff` resolves with. The ref is
+	// its changes — the same rule `discobox diff` resolves with. It is the
+	// pool's copy of the branch, which a client's push moves: under the
+	// PoolRemote when there is one, and under origin otherwise. The ref is
 	// verified in the repository rather than assumed, so naming one that does
-	// not exist (a push-delivered source has no remote at all) costs nothing.
+	// not exist costs nothing.
 	UpstreamRef string `json:"upstreamRef,omitempty"`
 	// RefName and RefType are the branch or tag the source is checked out
 	// at, as the create request named them; RefType is "branch" or "tag".
@@ -208,10 +210,18 @@ type Source struct {
 	// branch is created at the pin, anything else is a detached checkout.
 	RefName string `json:"refName,omitempty"`
 	RefType string `json:"refType,omitempty"`
-	// UpstreamURL is the remote the client's own checkout of this source
-	// tracks. A clone adds it as the "upstream" remote once, so the
-	// project's real remote is known inside the sandbox.
+	// UpstreamURL is the source's own remote: a remote-URL source's URL, and
+	// for a local checkout the remote its client reported. A clone
+	// configures it once, so the project's real remote is known inside the
+	// sandbox: as origin when PoolRemote is set, and otherwise as a remote
+	// named upstream.
 	UpstreamURL string `json:"upstreamUrl,omitempty"`
+	// PoolRemote names the remote the checkout reaches its pool through,
+	// for a source delivered into the pool's cache (ADR 26-10-10-545 §6):
+	// the sandbox clones from the pool under this name, and origin is the
+	// source's own remote. Absent is a source delivered before that, whose
+	// origin is the pool.
+	PoolRemote string `json:"poolRemote,omitempty"`
 	// Workspace is the client's uncommitted work, delivered as a snapshot
 	// commit on the source's origin and restored into the working tree, all
 	// unstaged, by the clone. Absent for a clean checkout.
