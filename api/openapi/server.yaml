@@ -1742,7 +1742,7 @@ components:
             description: A change to a sandbox's meta, applied to the meta file in the sandbox. What the change does not name is left as it is, including what the sandbox wrote itself.
             properties:
                 name:
-                    description: Replaces the name, with the space around it trimmed. An empty string clears it, and the sandbox is listed by its harness's title again; omit it to leave the name alone. A name is one line of at most 128 bytes.
+                    description: Replaces the name, with the space around it trimmed and any other kind of space in it made a plain one. An empty string clears it, and the sandbox is listed by its harness's title again; omit it to leave the name alone. A name is one line of printable characters, at most 128 bytes.
                     type: string
                 description:
                     description: Replaces the description. An empty string clears it; omit it to leave the description alone.

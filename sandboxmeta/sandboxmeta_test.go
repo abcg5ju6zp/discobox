@@ -33,6 +33,19 @@ func TestParse(t *testing.T) {
 			want: Meta{Name: strings.Repeat("n", MaxNameLength), Tags: map[string]string{}},
 		},
 		{name: "a line break in the name is refused", data: `{"name": "a\nb"}`, wantErr: "one line"},
+		{
+			name: "an ideographic or no-break space in the name is a space",
+			data: `{"name": "\u3000日次\u3000チェック\u00a0x "}`,
+			want: Meta{Name: "日次 チェック x", Tags: map[string]string{}},
+		},
+		{name: "a line separator in the name is refused", data: `{"name": "a\u2028b"}`, wantErr: "one line"},
+		{name: "a bidirectional override in the name is refused", data: `{"name": "a\u202eb"}`, wantErr: "invisible format"},
+		{name: "an escape in the name is refused", data: `{"name": "a\u001b[2Jb"}`, wantErr: "one line"},
+		{
+			name: "a name in another script, with an emoji",
+			data: `{"name": "日次チェック ✳ café"}`,
+			want: Meta{Name: "日次チェック ✳ café", Tags: map[string]string{}},
+		},
 		{name: "a name too long is refused", data: `{"name": "` + strings.Repeat("n", MaxNameLength+1) + `"}`, wantErr: "longer than"},
 		{name: "a list is not meta", data: `["wip"]`, wantErr: "JSON object"},
 		{name: "an unknown field is refused", data: `{"title": "x"}`, wantErr: "unknown field"},
@@ -148,7 +161,7 @@ func TestApply(t *testing.T) {
 		t.Fatalf("Apply() clearing the description = %q", got.Description)
 	}
 
-	named := "  Daily GH Check In  "
+	named := "\u3000Daily GH\u00a0Check In  "
 	got, err = Apply(current, Change{Name: &named})
 	if err != nil || got.Name != "Daily GH Check In" || got.Description != "old" || !reflect.DeepEqual(got.Tags, current.Tags) {
 		t.Fatalf("Apply() of a name = %v, %v; want it trimmed and the rest kept", got, err)

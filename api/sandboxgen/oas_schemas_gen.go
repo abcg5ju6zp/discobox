@@ -6036,9 +6036,9 @@ func (s StreamSandboxExecResourcesOK) Read(p []byte) (n int, err error) {
 type UpdateSandboxMetaBody struct {
 	// Replaces the description. An empty string clears it; omit it to leave the description alone.
 	Description OptString `json:"description"`
-	// Replaces the name, with the space around it trimmed. An empty string clears it, and the sandbox is
-	// listed by its harness's title again; omit it to leave the name alone. A name is one line of at
-	// most 128 bytes.
+	// Replaces the name, with the space around it trimmed and any other kind of space in it made a plain
+	// one. An empty string clears it, and the sandbox is listed by its harness's title again; omit it to
+	// leave the name alone. A name is one line of printable characters, at most 128 bytes.
 	Name OptString `json:"name"`
 	// Tag keys to delete. Naming a key the sandbox does not have is not an error. A key may not be both
 	// set and removed.

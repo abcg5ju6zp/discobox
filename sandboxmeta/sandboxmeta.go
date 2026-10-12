@@ -86,10 +86,10 @@ func Parse(data []byte) (Meta, error) {
 	if meta.Tags == nil {
 		meta.Tags = map[string]string{}
 	}
-	// The name is read trimmed, as a change trims the one it sets (Apply): a
-	// name padded by whoever wrote the file is the same name, and is held to
-	// the same length.
-	meta.Name = strings.TrimSpace(meta.Name)
+	// The name is read as a change sets it (Apply, NormalizeName): a name
+	// padded by whoever wrote the file is the same name, and is held to the
+	// same length.
+	meta.Name = NormalizeName(meta.Name)
 	if err := meta.Validate(); err != nil {
 		return Meta{}, err
 	}
@@ -117,8 +117,29 @@ func (m Meta) Validate() error {
 	return ValidateTags(m.Tags)
 }
 
+// NormalizeName is a name as it is kept: every space in it the plain one, and
+// none around it. An input method's space bar types an ideographic space
+// (U+3000) and a pasted name may hold a no-break one; either is a space to
+// whoever typed it, and is not a rune ValidateName could let through as it is
+// — a terminal draws only the plain one reliably, and the listing escapes the
+// rest. A change and the file's reader both normalize before they validate.
+func NormalizeName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Zs, r) {
+			return ' '
+		}
+		return r
+	}, name)
+	return strings.TrimSpace(name)
+}
+
 // ValidateName checks a name. It is one line a listing draws in a column, so
-// it holds no control characters at all, line breaks and tabs included.
+// every rune of it is one a terminal shows: no control characters, line
+// breaks and tabs included, and no invisible format characters either — a
+// bidirectional override in a name would reorder the row it is drawn on.
+// That also refuses a zero-width joiner, and so the emoji built with one.
+// Spaces other than the plain one are refused here too, which is why a name
+// is normalized first (NormalizeName).
 func ValidateName(name string) error {
 	switch {
 	case !utf8.ValidString(name):
@@ -127,8 +148,8 @@ func ValidateName(name string) error {
 		return fmt.Errorf("the name is longer than %d bytes", MaxNameLength)
 	}
 	for _, r := range name {
-		if unicode.IsControl(r) {
-			return errors.New("the name is one line and cannot contain control characters")
+		if !unicode.IsPrint(r) {
+			return errors.New("the name is one line of printable characters: it cannot contain control or invisible format characters")
 		}
 	}
 	return nil
@@ -216,8 +237,9 @@ func ValidateValue(key, value string) error {
 // Change is an edit to meta. Whatever it does not name is left as it is,
 // including what the sandbox wrote itself.
 type Change struct {
-	// Name, when set, replaces the name, with the space around it trimmed; an
-	// empty one clears it.
+	// Name, when set, replaces the name, normalized (NormalizeName): the
+	// space around it trimmed, and every space in it the plain one. An empty
+	// one clears it.
 	Name *string
 	// Description, when set, replaces the description; an empty one clears it.
 	Description *string
@@ -242,7 +264,7 @@ func Apply(meta Meta, change Change) (Meta, error) {
 	out := Meta{Name: meta.Name, Description: meta.Description, Tags: make(map[string]string, len(meta.Tags)+len(change.SetTags))}
 	maps.Copy(out.Tags, meta.Tags)
 	if change.Name != nil {
-		out.Name = strings.TrimSpace(*change.Name)
+		out.Name = NormalizeName(*change.Name)
 	}
 	if change.Description != nil {
 		out.Description = *change.Description

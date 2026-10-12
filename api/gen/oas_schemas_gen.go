@@ -27438,9 +27438,9 @@ func (s *UpdateSandboxBody) SetConfig(val OptSandboxUpdateConfig) {
 // name is left as it is, including what the sandbox wrote itself.
 // Ref: #/components/schemas/UpdateSandboxMetaBody
 type UpdateSandboxMetaBody struct {
-	// Replaces the name, with the space around it trimmed. An empty string clears it, and the sandbox is
-	// listed by its harness's title again; omit it to leave the name alone. A name is one line of at
-	// most 128 bytes.
+	// Replaces the name, with the space around it trimmed and any other kind of space in it made a plain
+	// one. An empty string clears it, and the sandbox is listed by its harness's title again; omit it to
+	// leave the name alone. A name is one line of printable characters, at most 128 bytes.
 	Name OptString `json:"name"`
 	// Replaces the description. An empty string clears it; omit it to leave the description alone.
 	Description OptString `json:"description"`

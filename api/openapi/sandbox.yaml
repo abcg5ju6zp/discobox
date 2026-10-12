@@ -1442,7 +1442,7 @@ components:
                     description: Replaces the description. An empty string clears it; omit it to leave the description alone.
                     type: string
                 name:
-                    description: Replaces the name, with the space around it trimmed. An empty string clears it, and the sandbox is listed by its harness's title again; omit it to leave the name alone. A name is one line of at most 128 bytes.
+                    description: Replaces the name, with the space around it trimmed and any other kind of space in it made a plain one. An empty string clears it, and the sandbox is listed by its harness's title again; omit it to leave the name alone. A name is one line of printable characters, at most 128 bytes.
                     type: string
                 removeTags:
                     description: Tag keys to delete. Naming a key the sandbox does not have is not an error. A key may not be both set and removed.
