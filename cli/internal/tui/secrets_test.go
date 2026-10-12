@@ -1349,3 +1349,34 @@ func TestTheGateSaysWhatItIsOnTheSecretsScreen(t *testing.T) {
 		t.Fatalf("frame does not mark the gate:\n%s", body)
 	}
 }
+
+// Requests that arrive while the secrets screen is open are drawn: the table
+// grows to the rows it is allowed, without waiting for a key or the pointer to
+// lay the window out again.
+func TestRequestsArrivingOnTheSecretsScreenAreDrawn(t *testing.T) {
+	t.Parallel()
+	m, ds := secretsFixture(t)
+	requests := make([]CredentialRequest, 30)
+	for i := range requests {
+		r := waitingRequest()
+		r.ID = fmt.Sprintf("sreq_%02d", i)
+		r.Name = fmt.Sprintf("cred-%02d", i)
+		r.Created = r.Created.Add(time.Duration(i) * time.Minute)
+		requests[i] = r
+	}
+	ds.mu.Lock()
+	ds.requests = requests
+	ds.mu.Unlock()
+	// The poll, and nothing else: no key, no mouse.
+	send(t, m, tickMsg{})
+
+	text := frameText(m)
+	if !strings.Contains(text, "30 waiting") {
+		t.Fatalf("the poll did not deliver the requests:\n%s", text)
+	}
+	// A third of a 40-row window's room is ten rows.
+	want := 10
+	if got := strings.Count(text, "cred-"); got != want {
+		t.Fatalf("the requests table drew %d of 30 waiting requests, want %d:\n%s", got, want, text)
+	}
+}

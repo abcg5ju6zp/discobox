@@ -135,9 +135,16 @@ func (m *Model) syncRequestRows() {
 			rows = append(rows, req)
 		}
 	}
+	had := len(m.requestRows.all)
 	m.requestRows.setAll(rows)
 	if len(rows) == 0 {
 		m.onRequests = false
+	}
+	// The table is as tall as its rows, up to its share of the screen, and
+	// layout is where that is counted. A poll is not a key: without this the
+	// requests it brought waited behind one row for the next one pressed.
+	if len(rows) != had {
+		m.layout()
 	}
 }
 
