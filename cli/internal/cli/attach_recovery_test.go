@@ -130,6 +130,38 @@ func TestSandboxExecAttachDoneEndsWhenSandboxStops(t *testing.T) {
 	}
 }
 
+// A discobox being repaired reads failed, with its container gone, until the
+// repair lands. That is a rebuild the attach reconnects across, not a sandbox
+// that took the terminal with it (ADR 26-10-12-711 §8).
+func TestSandboxExecAttachDoneKeepsReconnectingThroughARepair(t *testing.T) {
+	const sandboxID = "sbx_9qk5n25t2hh2rv00"
+	repairing := strings.Replace(runTestSandboxJSON(sandboxID, "failed"),
+		`"displayState":"error"`, `"displayState":"repairing","runtimeState":"stopped"`, 1)
+	if !strings.Contains(repairing, `"displayState":"repairing"`) {
+		t.Fatalf("fixture = %s, want a sandbox being repaired", repairing)
+	}
+	server := httptest.NewServer(ignoringPortProbe(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/execs/primary"):
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":"it has no container on its pool"}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, sandboxID):
+			_, _ = w.Write([]byte(repairing))
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	app := &App{serverURL: server.URL, autoStart: autoStartServerFalse}
+	done, err := app.sandboxExecAttachDone(t.Context(), "project-1", sandboxID, primaryExecID)
+	if done {
+		t.Fatalf("done = true, want the attach to keep reconnecting; err = %v", err)
+	}
+}
+
 // A read failure that does not resolve to a stopped sandbox is transient: keep
 // reconnecting rather than ending the session on a control-plane blip.
 func TestSandboxExecAttachDoneRetriesTransientReadFailure(t *testing.T) {

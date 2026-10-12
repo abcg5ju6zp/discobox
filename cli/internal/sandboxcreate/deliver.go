@@ -307,6 +307,11 @@ func awaitSourceRequested(ctx context.Context, client sourceDeliveryClient, proj
 		case apiclientgen.SandboxRuntimeStateAwaitingSource:
 			return false, nil
 		case apiclientgen.SandboxRuntimeStateFailed:
+			// A repair in flight still reads failed, and is waited on like any
+			// other rebuild: the failure is the one it is answering.
+			if Repairing(sandbox) {
+				break
+			}
 			return false, fmt.Errorf("discobox failed before it could receive its source: %s", sandbox.Runtime.ErrorMessage.Or("unknown error"))
 		}
 		// A sandbox with nothing left to provision reports no phase, which

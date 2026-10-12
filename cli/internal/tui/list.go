@@ -546,7 +546,7 @@ func (l *sandboxList) stateStyle(st *styles, s Sandbox) lipgloss.Style {
 	switch s.State {
 	case StateRunning:
 		return st.stateRun
-	case StateStarting:
+	case StateStarting, StateRepairing:
 		return st.stateBusy
 	case StateError:
 		return st.stateErr
@@ -559,7 +559,7 @@ func stateDot(s Sandbox) string {
 	switch s.State {
 	case StateRunning:
 		return "●"
-	case StateStarting:
+	case StateStarting, StateRepairing:
 		return "◐"
 	case StateError:
 		return "✗"
@@ -856,7 +856,8 @@ func (l *sandboxList) row(st *styles, z *zones, s Sandbox, i, y int, focused boo
 	addCol := cols.add
 
 	if !glyph {
-		addCol("  "+pad(string(s.State), 8), 10)
+		// As wide as the longest state, `repairing`.
+		addCol("  "+pad(string(s.State), 9), 11)
 	}
 
 	up := " "
@@ -906,7 +907,9 @@ func (l *sandboxList) row(st *styles, z *zones, s Sandbox, i, y int, focused boo
 	}
 	nameW := max(l.width-lipgloss.Width(head)-lipgloss.Width(tail), 4)
 	name := s.Name
-	if s.State == StateError && s.Message != "" && atCursor {
+	// Under the cursor the name gives way to what the state is about: the
+	// error a box settled on, or what a repair nobody typed is answering.
+	if (s.State == StateError || s.State == StateRepairing) && s.Message != "" && atCursor {
 		name = s.Message
 	}
 

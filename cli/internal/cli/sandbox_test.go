@@ -3,6 +3,7 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -199,5 +200,53 @@ func TestSandboxFailureReasonSaysWhatToDoAboutAnUnavailableImage(t *testing.T) {
 	}
 	if got := sandboxFailureReason(failed(apiclientgen.OptSandboxRuntimeErrorReason{}, true)); got != `"harness:local" is not on this pool` {
 		t.Fatalf("an unclassified failure = %q, want the message alone", got)
+	}
+}
+
+// A failure that is an automatic repair's own is the end of what happens by
+// itself — there is one per failure (ADR 26-10-12-711 §4) — so it carries the
+// failure the repair was answering and the command that tries again. A failure
+// with no such repair behind it, and a message that already names the command,
+// are left alone.
+func TestSandboxFailureReasonSendsAFailedAutomaticRepairToRepair(t *testing.T) {
+	failed := func(message string, generation, repairGeneration int64) *apimodel.Sandbox {
+		sb := &apimodel.Sandbox{ID: "sbx_1"}
+		sb.Runtime.State = apiclientgen.SandboxRuntimeStateFailed
+		sb.Runtime.ErrorMessage = apiclientgen.NewOptString(message)
+		sb.Runtime.Generation, sb.Runtime.ObservedGeneration = generation, generation
+		if repairGeneration != 0 {
+			sb.Runtime.AutomaticRepair = apiclientgen.NewOptSandboxAutomaticRepair(apimodel.SandboxAutomaticRepair{
+				Generation: repairGeneration,
+				Trigger:    "exec attach",
+				Failure:    apiclientgen.NewOptString("create container: EOF"),
+			})
+		}
+		return sb
+	}
+
+	want := "pull image: not found\n" +
+		"That is the one automatic repair of it failing; it had already failed with: create container: EOF\n" +
+		"Run `discobox admin box repair sbx_1` to repair it again."
+	if got := sandboxFailureReason(failed("pull image: not found", 5, 5)); got != want {
+		t.Fatalf("reason = %q, want %q", got, want)
+	}
+	if got := sandboxFailureReason(failed("pull image: not found", 5, 0)); got != "pull image: not found" {
+		t.Fatalf("a failure nothing repaired = %q, want the message alone", got)
+	}
+	if got := sandboxFailureReason(failed("pull image: not found", 6, 5)); got != "pull image: not found" {
+		t.Fatalf("a failure after an earlier repair = %q, want the message alone", got)
+	}
+	// A repair that landed is not this failure's: the box failed again later,
+	// on the same generation.
+	again := failed("no space left on device", 5, 5)
+	repair := again.Runtime.AutomaticRepair.Value
+	repair.LandedAt = apiclientgen.NewOptDateTime(time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC))
+	again.Runtime.AutomaticRepair = apiclientgen.NewOptSandboxAutomaticRepair(repair)
+	if got := sandboxFailureReason(again); got != "no space left on device" {
+		t.Fatalf("a failure after the repair landed = %q, want the message alone", got)
+	}
+	said := "the one automatic repair of it failed too; run `discobox admin box repair sbx_1`"
+	if got := sandboxFailureReason(failed(said, 5, 5)); got != said {
+		t.Fatalf("a message naming the command = %q, want it said once", got)
 	}
 }

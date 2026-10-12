@@ -239,6 +239,13 @@ sandbox create requests.
   attach watch and the wait for a provisioned sandbox — render from it too.
   A discobox with nothing left to provision renders nothing, which leaves the
   caller's own step standing rather than blanking it.
+- A repair in flight (`Repairing`: `displayState` is `repairing`,
+  ADR 26-10-12-711 §8) is rendered ahead of the state, which reads `failed`
+  until the repair lands. The line is `StepRepairing`, then the rebuild's fresh
+  phase, else `AutomaticRepairCause`: the trigger and the failure of a repair
+  nobody typed, taken from `runtime.automaticRepair` only while its generation
+  is the sandbox's — the record outlives its repair. `awaitSourceRequested`
+  waits through a repair rather than reporting its `failed` as the answer.
 - Waits on a discobox are bounded by silence, not total time (`StallClock`):
   the deadline restarts whenever the reported status changes.
   `awaitSourceRequested` gives up after five minutes with no progress, and

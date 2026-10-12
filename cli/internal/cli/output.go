@@ -229,11 +229,15 @@ func sandboxSource(sandbox apimodel.Sandbox) string {
 	return "-"
 }
 
+// sandboxMessage is what a listing says beside a sandbox's state: the error it
+// settled on, or, while a repair nobody typed is running, what set it off and
+// the failure it answers — recording the repair cleared that error from the
+// row, and `repairing` alone does not say why (ADR 26-10-12-711 §8).
 func sandboxMessage(sandbox apimodel.Sandbox) string {
 	if message, ok := sandbox.Runtime.ErrorMessage.Get(); ok && strings.TrimSpace(message) != "" {
 		return message
 	}
-	return ""
+	return sandboxcreate.AutomaticRepairCause(&sandbox)
 }
 
 func sandboxDisplayState(sandbox apimodel.Sandbox) string {

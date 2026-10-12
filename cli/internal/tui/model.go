@@ -3493,7 +3493,37 @@ func (m *Model) statusIdentity() string {
 	if box.Description != "" {
 		out += "  " + m.st.dimText.Render(box.Description)
 	}
+	// The repair nobody typed. It is said here because a repair that worked
+	// cleared the failure from the row, and this is all that is left of it
+	// (ADR 26-10-12-711 §8).
+	if note := box.Repaired.note(m.now()); note != "" {
+		out += "  " + m.st.dimText.Render(note)
+	}
 	return out
+}
+
+// repairFailureWidth is how much of the failure a repair answered the
+// identity says. It shares a row with the keys, and a failure is as long as
+// whatever failed made it: enough to recognize it by, and `discobox ls -o json`
+// has the rest.
+const repairFailureWidth = 40
+
+// note is the automatic repair in a clause, or "" when there was none.
+func (r AutomaticRepair) note(now time.Time) string {
+	if r.At.IsZero() {
+		return ""
+	}
+	note := "repaired automatically"
+	if r.Failed {
+		note = "automatic repair failed"
+	}
+	if when := ago(r.At, now); when != "" {
+		note += " " + when
+	}
+	if r.Failure != "" {
+		note += "; it had failed with: " + truncate(r.Failure, repairFailureWidth)
+	}
+	return note
 }
 
 // statusMessage is what the message row of any screen says, in the room it

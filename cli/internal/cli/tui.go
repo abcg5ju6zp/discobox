@@ -862,6 +862,26 @@ func toTUISandbox(sb apimodel.Sandbox, hostID string) tui.Sandbox {
 	if upgrade, ok := sb.Runtime.Upgrade.Get(); ok {
 		row.Upgrade = upgrade.Available
 	}
+	// The last repair nobody typed, once it is over. One still running is the
+	// row's state and its message; this is the record that outlives it, which
+	// is the only thing left saying the box was rebuilt once the repair has
+	// cleared the failure it answered (ADR 26-10-12-711 §8).
+	if repair, ok := sb.Runtime.AutomaticRepair.Get(); ok && row.State != tui.StateRepairing {
+		// A repair that landed says when. One that did not, on a box settled
+		// in error on the generation it was recorded as, failed. Anything
+		// else was overtaken by newer intent before it finished, and is not
+		// worth a line.
+		_, landed := repair.LandedAt.Get()
+		failed := !landed && row.State == tui.StateError && repair.Generation == sb.Runtime.Generation
+		if landed || failed {
+			row.Repaired = tui.AutomaticRepair{
+				At:      repair.LandedAt.Or(repair.StartedAt),
+				Trigger: strings.TrimSpace(repair.Trigger),
+				Failure: strings.Join(strings.Fields(repair.Failure.Or("")), " "),
+				Failed:  failed,
+			}
+		}
+	}
 	row.ImageUnavailable = sb.Runtime.ErrorReason.Or("") == apiclientgen.SandboxRuntimeErrorReasonImageUnavailable
 	row.Usage = toTUIUsage(sb)
 	if source, ok := sb.Config.Source.Get(); ok {
@@ -922,10 +942,12 @@ func toTUISandbox(sb apimodel.Sandbox, hostID string) tui.Sandbox {
 	return row
 }
 
-// toTUIState narrows the server's lifecycle states to the five the launcher
+// toTUIState narrows the server's lifecycle states to the six the launcher
 // draws. The transitional ones read as the state they are heading for, because
 // that is the one that answers "can I act on this": a stopping sandbox takes
-// the same actions a running one does until it is off.
+// the same actions a running one does until it is off. Repairing is the
+// exception and keeps its own: where it is heading is a box that works, where
+// it came from is one that had failed, and neither is what it is.
 func toTUIState(state string) tui.State {
 	switch state {
 	case "running":
@@ -934,6 +956,8 @@ func toTUIState(state string) tui.State {
 		return tui.StateStarting
 	case "stopping":
 		return tui.StateRunning
+	case "repairing":
+		return tui.StateRepairing
 	case "archived", "archiving":
 		return tui.StateArchived
 	case "error":

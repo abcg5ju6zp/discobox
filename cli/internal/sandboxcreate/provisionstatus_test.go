@@ -113,6 +113,82 @@ func TestProvisionStatusReportsAFailureWithItsReason(t *testing.T) {
 	}
 }
 
+// repairing is a failed sandbox a repair has been recorded for and has not
+// landed on: the state still reads failed, the message went with the intent,
+// and the generation is one nothing has observed.
+func repairing(repair apiclientgen.OptSandboxAutomaticRepair) apimodel.SandboxRuntime {
+	return apimodel.SandboxRuntime{
+		State:              apiclientgen.SandboxRuntimeStateFailed,
+		DisplayState:       apiclientgen.NewOptSandboxRuntimeDisplayState(apiclientgen.SandboxRuntimeDisplayStateRepairing),
+		Generation:         5,
+		ObservedGeneration: 4,
+		AutomaticRepair:    repair,
+	}
+}
+
+// automaticRepair is the record of a repair nobody typed.
+func automaticRepair(generation int64, failure string) apiclientgen.OptSandboxAutomaticRepair {
+	repair := apimodel.SandboxAutomaticRepair{Generation: generation, StartedAt: time.Now(), Trigger: "exec attach"}
+	if failure != "" {
+		repair.Failure = apiclientgen.NewOptString(failure)
+	}
+	return apiclientgen.NewOptSandboxAutomaticRepair(repair)
+}
+
+// A repair in flight is not the failure it is answering. The state still reads
+// failed until the repair lands, and saying "the discobox failed" over an
+// attach that is about to connect is the one line that would be wrong
+// (ADR 26-10-12-711 §8).
+func TestProvisionStatusSaysARepairIsRunningRatherThanThatItFailed(t *testing.T) {
+	got := ProvisionStatus(provisioning(repairing(apiclientgen.OptSandboxAutomaticRepair{})))
+	if got != "repairing the discobox" {
+		t.Fatalf("status = %q, want a typed repair said plainly", got)
+	}
+}
+
+// A repair nobody typed says what set it off and the failure it answers:
+// nobody asked for it, so the line is the only place it is explained.
+func TestProvisionStatusNamesWhatAnAutomaticRepairAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		repair apiclientgen.OptSandboxAutomaticRepair
+		want   Step
+	}{
+		{"with the failure", automaticRepair(5, "create container:\n EOF"), "repairing the discobox: exec attach found it failed with no container (create container: EOF)"},
+		{"with no failure recorded", automaticRepair(5, ""), "repairing the discobox: exec attach found it failed with no container"},
+		// The record is kept after its repair lands, so one from an earlier
+		// generation describes a repair that is over: this one was typed.
+		{"an earlier repair's record", automaticRepair(3, "EOF"), "repairing the discobox"},
+	} {
+		if got := ProvisionStatus(provisioning(repairing(tc.repair))); got != tc.want {
+			t.Errorf("%s: status = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The rebuild a repair runs reports its phases like any other, and the phase
+// is what is happening now. It stays one line, and still says it is a repair.
+func TestProvisionStatusShowsARepairsPhase(t *testing.T) {
+	runtime := repairing(automaticRepair(5, "EOF"))
+	runtime.ProvisionProgress = apiclientgen.NewOptSandboxProvisionProgress(
+		apimodel.SandboxProvisionProgress{Phase: apiclientgen.SandboxProvisionPhaseCreatingContainer},
+	)
+	runtime.ProvisionProgressAt = apiclientgen.NewOptDateTime(time.Now())
+	if got := ProvisionStatus(provisioning(runtime)); got != "repairing the discobox: creating the container" {
+		t.Fatalf("status = %q, want the repair's phase", got)
+	}
+}
+
+// The cause is only a repair in flight's. Once it has landed the record is
+// history, and a line built from it would describe a repair that is over.
+func TestAutomaticRepairCauseIsOnlyARepairInFlights(t *testing.T) {
+	landed := repairing(automaticRepair(5, "EOF"))
+	landed.DisplayState = apiclientgen.NewOptSandboxRuntimeDisplayState(apiclientgen.SandboxRuntimeDisplayStateRunning)
+	if got := AutomaticRepairCause(provisioning(landed)); got != "" {
+		t.Fatalf("cause = %q, want none for a repair that has landed", got)
+	}
+}
+
 // A sandbox parked waiting for its push says so. Nothing server-side can move
 // it along — the client owes it the source (ADR 0039) — so this is the one
 // phase a user can act on.

@@ -1002,10 +1002,23 @@ guards, so the row keeps the power axis beside it. `HasRuntime` is the presence
 of `runtimeState` on the wire, which the API omits until the pool agent has
 reported (absent is not `stopped`).
 
+`StateRepairing` is a repair recorded and not yet landed, typed or automatic
+(ADR 26-10-12-711 §8). It is drawn as `StateStarting` is — the busy glyph and
+color — and guarded as it is: attachable, because the server holds an action
+until the repair lands, and not repairable, because one is already running.
+For a repair nobody typed, `Sandbox.Message` says what set it off and the
+failure it answers, and the row under the cursor shows it in place of the name,
+as it shows an error's. Once that repair is over the row keeps it as
+`Sandbox.Repaired` (`AutomaticRepair`), and `statusIdentity` says so after the
+description — `repaired automatically 5m ago; it had failed with: …`, or
+`automatic repair failed …` for a box in error on the generation of a repair
+that never landed —
+because a repair that worked cleared the failure from everywhere else.
+
 `attachable` asks that axis, not the state name: anything with a container can be
 joined, because the pool agent starts a stopped one on demand when the attach
 arrives (ADR 0017 §12), and only archived — no container by intent — and a box
-nothing ever reported on are refused. An errored discobox with a live container
+nothing ever reported on that is neither starting nor being repaired are refused. An errored discobox with a live container
 attaches, and `attachWhy` sends the one that has nothing behind it to repair
 (ADR 0035) rather than naming its state back at it. Guards written as a list of
 states are the wedge ADR 0017 §4 describes.

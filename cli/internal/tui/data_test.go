@@ -68,6 +68,7 @@ func TestSandboxAttachable(t *testing.T) {
 		{"errored with a container", Sandbox{State: StateError, HasRuntime: true}, true},
 		{"errored with no container", Sandbox{State: StateError}, false},
 		{"starting, before any agent has reported", Sandbox{State: StateStarting}, true},
+		{"repairing, with the container gone", Sandbox{State: StateRepairing}, true},
 		{"archived, whatever a stale report said", Sandbox{State: StateArchived, HasRuntime: true}, false},
 		{"nothing has reported at all", Sandbox{State: StateStopped}, false},
 	}
@@ -124,6 +125,7 @@ func TestRepairableIsTheWedge(t *testing.T) {
 		{"running", Sandbox{State: StateRunning, HasRuntime: true}, false},
 		{"stopped, with a container", Sandbox{State: StateStopped, HasRuntime: true}, false},
 		{"starting is a create in flight, not a wedge", Sandbox{State: StateStarting}, false},
+		{"repairing is a repair already running", Sandbox{State: StateRepairing}, false},
 		{"archived is unarchived instead", Sandbox{State: StateArchived}, false},
 		{"archived and errored is still unarchived", Sandbox{State: StateArchived, HasRuntime: true}, false},
 	}
