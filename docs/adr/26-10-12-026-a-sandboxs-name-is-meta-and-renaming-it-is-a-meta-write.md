@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-10-12
-- **Amends**:
+- **Supersedes**, in part:
   [0136](0136-a-sandboxs-meta-lives-in-the-sandbox-and-the-server-caches-it.md)
   §1's "exactly two fields" (a third, `name`, joins them);
   [26-10-08-447](26-10-08-447-a-discobox-tags-the-discoboxes-it-creates.md)

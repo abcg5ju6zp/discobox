@@ -1236,7 +1236,8 @@ and `Sandbox.ConfigName` the configured one (`toTUISandbox`, trimmed the way
 the server trims it before falling back to the id). Its status line says the
 configured name under the cursor, since that is the handle the discobox was
 created with and the row has usually stopped showing it. Rename sets the meta
-name, which the row then shows, so it is offered on every row.
+name, which the row then shows, so it is offered on every row but an archived
+one, which cannot be started to take the write.
 
 ## Choosing a Sandbox Interactively
 
