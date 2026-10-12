@@ -94,7 +94,7 @@ func TestAnIssueKeepsWhatAPageIsWrittenWith(t *testing.T) {
 			Files: []github.File{{Path: "a/\u200bb.go", Patch: "+a\u200db\r\n+c\u200bd"}},
 		},
 		Timeline: []github.Event{{
-			Kind: "reviewed", Body: path, Subject: "bo\u200bb",
+			Kind: "reviewed", Body: path, Subject: "bo\u200bb", From: "old\u200b title", To: "new\u200b title",
 			Threads: []github.Thread{{Path: "a/\u200bb.go", Hunk: "+x\u200by", Comments: []github.ThreadComment{{Body: path}}}},
 		}},
 	})
@@ -106,6 +106,9 @@ func TestAnIssueKeepsWhatAPageIsWrittenWith(t *testing.T) {
 		if !strings.Contains(value, want) {
 			t.Errorf("the %s shows its break hints: %q", name, value)
 		}
+	}
+	if renamed := issue.Timeline[0]; renamed.From != "old title" || renamed.To != "new title" {
+		t.Errorf("a rename's titles = %q, %q; want them as the title is", renamed.From, renamed.To)
 	}
 	if issue.Title != "softhyphen "+family {
 		t.Errorf("title = %q", issue.Title)

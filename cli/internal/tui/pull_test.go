@@ -759,6 +759,18 @@ func TestAPushWhileTheTabIsOpenIsSaid(t *testing.T) {
 		t.Errorf("the merge question does not name the commit and the push:\n%s", frame)
 	}
 	d.key("esc")
+	// A read asked for that fails has shown them nothing: the notice stays.
+	ds.mu.Lock()
+	ds.issueErr = errors.New("boom")
+	ds.mu.Unlock()
+	d.key("r")
+	d.wait("the failed read", func() bool { return v.err != "" && !v.loading })
+	if v.pushed == "" || !strings.Contains(plainFrame(m), "commits were pushed") {
+		t.Errorf("a read that failed took the notice down (pushed %q):\n%s", v.pushed, plainFrame(m))
+	}
+	ds.mu.Lock()
+	ds.issueErr = nil
+	ds.mu.Unlock()
 	// A read the person asks for is what they have seen, a head newer still
 	// included: the notice goes and is not raised again by that read.
 	again := readyPull()

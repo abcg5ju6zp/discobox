@@ -109,16 +109,17 @@ func tuiIssue(in github.Issue) tui.Issue {
 	}
 	for _, e := range in.Timeline {
 		event := tui.IssueEvent{
-			Kind:        safe(e.Kind),
-			Actor:       safe(e.Actor),
-			At:          e.At,
-			Body:        pageBlock(e.Body),
-			Reactions:   tui.IssueReactions(e.Reactions),
-			Subject:     safe(e.Subject),
-			Message:     page(e.Message),
-			Review:      safe(e.Review),
-			From:        safe(e.From),
-			To:          safe(e.To),
+			Kind:      safe(e.Kind),
+			Actor:     safe(e.Actor),
+			At:        e.At,
+			Body:      pageBlock(e.Body),
+			Reactions: tui.IssueReactions(e.Reactions),
+			Subject:   safe(e.Subject),
+			Message:   page(e.Message),
+			Review:    safe(e.Review),
+			// A rename's titles, old and new: the title's rule.
+			From:        page(e.From),
+			To:          page(e.To),
 			StateReason: safe(e.StateReason),
 		}
 		if e.Label != nil {
