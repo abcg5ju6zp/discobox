@@ -24,6 +24,7 @@ func (d *apiDataSource) PushSources(ctx context.Context, sandboxID string, held 
 		out = append(out, tui.SourcePush{
 			Slug:     push.Slug,
 			Branch:   push.Branch,
+			Remote:   push.Remote,
 			Commit:   push.Commit,
 			Pushed:   push.Pushed,
 			UpToDate: push.UpToDate,

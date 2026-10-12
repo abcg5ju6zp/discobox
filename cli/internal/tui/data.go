@@ -1659,6 +1659,9 @@ type Approval struct {
 type SourcePush struct {
 	Slug   string
 	Branch string
+	// Remote is the remote the discobox's checkout sees Branch under:
+	// discobox, or origin in a discobox created before a pool cached Git.
+	Remote string
 	// Commit is the local tip resolved for this source, whether or not it was
 	// sent. It is what the window records against a failure, so the same
 	// refused push is not attempted again every beat.

@@ -1,6 +1,9 @@
 // Package sandboxpush implements ADR 0058's `discobox push`: sending a local
-// branch's commits into the origin repository a push-delivered source's sandbox
-// fetches from, so the sandbox can rebase onto work done since it was created.
+// branch's commits into the origin on its pool that a source's sandbox fetches
+// from, so the sandbox can rebase onto work done since it was created. For a
+// source delivered into its pool's cache that origin is its namespace there,
+// which the sandbox knows as its discobox remote (ADR 26-10-10-545 §6); for
+// one delivered before, it is a repository of its own, the sandbox's origin.
 //
 // It is transport only. No phase, no completion call, nothing about the
 // sandbox's state changes: the sandbox rebases when whoever is working in it
@@ -19,17 +22,17 @@ import (
 	"github.com/discobox-ai/x/gitutil"
 )
 
-// ErrNotPushDelivered reports a source whose origin is not a pushed repository,
-// so there is nothing here to push into. The two ways that happens read
-// differently to a user, so the message says which.
-var ErrNotPushDelivered = errors.New("source origin is not delivered by push")
+// ErrNotPushDelivered reports a source with no checkout on a client's machine
+// to push commits from: a remote, which its discobox fetches from itself.
+var ErrNotPushDelivered = errors.New("source did not come from a local directory")
 
 // Result is what one source's push did, or would have done. Every field is set
 // whether or not the push ran, so a no-op reports as much context as a push.
 type Result struct {
 	Slug string
 	// Branch is the branch in the origin repository the commits land on, which
-	// the sandbox sees as origin/<Branch>.
+	// the sandbox sees as discobox/<Branch> — or origin/<Branch>, in a
+	// discobox created before a pool cached Git.
 	Branch string
 	// LocalRev is the local revision that was resolved, as named.
 	LocalRev string
@@ -181,19 +184,37 @@ func pushTo(ctx context.Context, repoRoot, originURL, token, sandboxID string, s
 	return result, nil
 }
 
-// CheckPushDelivered rejects a source whose origin the sandbox already reaches
-// on its own. Neither case is a failure of the user's: the answer is that there
-// is nothing to push, and why. It is exported because a caller pushing every
-// source needs to tell "nothing to send here" from a real failure before it
-// starts resolving directories.
+// CheckPushDelivered rejects a source this client has nothing to push into:
+// one that is a remote and no directory on this machine. That is not a failure
+// of the user's: the answer is that there is nothing to push, and why. It is
+// exported because a caller pushing every source needs to tell "nothing to
+// send here" from a real failure before it starts resolving directories.
+//
+// Every source that came from a directory on a client's machine has an origin
+// on its pool that a client pushes into: its namespace of the pool's cache
+// (ADR 26-10-10-545), or the repository an earlier pool made for its sandbox.
+// That includes a local source recorded as cloned, which the pool once served
+// live from the developer's directory and no longer does (§8): a push is now
+// how that discobox sees new commits too.
 func CheckPushDelivered(source apimodel.GitSource) error {
+	if strings.TrimSpace(source.LocalDirectory.Or("")) != "" {
+		return nil
+	}
 	if delivery, ok := source.Delivery.Get(); ok && delivery == apiclientgen.GitSourceDeliveryPush {
 		return nil
 	}
-	if strings.TrimSpace(source.LocalDirectory.Or("")) == "" {
-		return fmt.Errorf("%w: the discobox clones it from a remote, which it can fetch from directly", ErrNotPushDelivered)
+	return fmt.Errorf("%w: its source is a remote, which the discobox fetches from itself", ErrNotPushDelivered)
+}
+
+// PoolRemote is the remote a source's checkout in the discobox reaches its
+// pool's origin through, which is where a push shows up there: discobox for a
+// source delivered into its pool's cache, whose origin is its own remote (ADR
+// 26-10-10-545 §6), and origin for one delivered before that.
+func PoolRemote(source apimodel.GitSource) string {
+	if delivery, ok := source.Delivery.Get(); ok && delivery == apiclientgen.GitSourceDeliveryCache {
+		return "discobox"
 	}
-	return fmt.Errorf("%w: the discobox reads your directory live, so `git fetch origin` inside it already sees new commits", ErrNotPushDelivered)
+	return "origin"
 }
 
 // pushRefs is the local revision to push and the origin branch it lands on.

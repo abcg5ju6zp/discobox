@@ -52,7 +52,10 @@ func TestDeliverableHereIsThisMachinesParkedDiscoboxes(t *testing.T) {
 		{"parked, delivery already reported", reported, thisHost, false},
 		{"parked, created on another machine", elsewhere, thisHost, false},
 		{"parked, no recorded origin", noOrigin, thisHost, false},
-		{"parked with nothing to push", bound, thisHost, false},
+		// A local source an earlier pool served live from the developer's
+		// directory has nothing to clone now: a parked discobox holding one
+		// waits for this machine's push (ADR 26-10-10-545 §8).
+		{"parked, its source once served live", bound, thisHost, true},
 		{"this machine has no identity", parked, "", false},
 	} {
 		if got := deliverableHere(tc.sandbox, tc.hostID); got != tc.want {

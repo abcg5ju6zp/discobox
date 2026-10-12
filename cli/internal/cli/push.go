@@ -26,31 +26,34 @@ func (a *App) newPushCommand() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "push [DISCOBOX_ID] [flags]",
-		Short: "Push local commits into a discobox's origin, to rebase onto there",
-		Long: `Send this machine's commits into the origin repository a discobox fetches from,
-per docs/adr/0058.
+		Short: "Push local commits to a discobox, to rebase onto there",
+		Long: `Send this machine's commits to the pool a discobox fetches from, per
+docs/adr/0058 and docs/adr/26-10-10-545.
 
-Commits only ever move local -> the discobox's origin. Nothing in the discobox
+Commits only ever move local -> the discobox's pool. Nothing in the discobox
 moves: no branch of its own changes, nothing is rebased, nothing is checked out.
-Inside the discobox the new commits show up as origin/<branch>, to be picked up
-whenever the work there is ready for them:
+Inside the discobox the pool is the remote named discobox, and the new commits
+show up as discobox/<branch>, to be picked up whenever the work there is ready
+for them:
 
-    git fetch origin && git rebase origin/<branch>
+    git fetch discobox && git rebase discobox/<branch>
+
+The discobox's origin is the source's own remote, and a push here does not
+touch it. (In a discobox created before 26-10-10-545 the pool is origin, and
+the remote is upstream; push prints the command for the discobox it pushed to.)
 
 Without DISCOBOX_ID the discobox is taken from the ones "discobox ls" shows for the
 current project directory: the only one when there is one, otherwise you are
 asked to pick.
 
-This applies to each source that was delivered by pushing it — one on a machine
-or a provider that cannot read its directory. Every push-delivered source of the
-discobox is pushed; --source narrows to one, named by its slug. A source the
-discobox reads live already shows new commits without any push, and one cloned
-from a remote URL fetches that remote itself; either way there is nothing to send
-and push says so.
+This applies to each source that came from a directory on a machine. Every
+such source of the discobox is pushed; --source narrows to one, named by its
+slug. A source that is a remote URL has no checkout to push from: the discobox
+fetches that remote itself, there is nothing to send, and push says so.
 
 For each source, the branch it was created from is pushed by default. --branch pushes a
 different local branch instead, landing under its own name, which the discobox
-then sees as origin/<that branch> — useful for offering it a branch to rebase
+then sees as discobox/<that branch> — useful for offering it a branch to rebase
 onto or cherry-pick from without touching the one it tracks.
 
 Uncommitted changes are never pushed; only commits. They are reported so it is
@@ -105,11 +108,15 @@ type pushReport struct {
 }
 
 type pushSourceReport struct {
-	Slug       string `json:"slug"`
-	Status     string `json:"status"`
-	HostPath   string `json:"hostPath,omitempty"`
-	LocalRev   string `json:"localRev,omitempty"`
-	Branch     string `json:"branch,omitempty"`
+	Slug     string `json:"slug"`
+	Status   string `json:"status"`
+	HostPath string `json:"hostPath,omitempty"`
+	LocalRev string `json:"localRev,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	// Remote is the remote the discobox's checkout sees the pushed branch
+	// under: discobox, or origin in a discobox created before a pool cached
+	// Git.
+	Remote     string `json:"remote,omitempty"`
 	Commit     string `json:"commit,omitempty"`
 	Previous   string `json:"previous,omitempty"`
 	Forced     bool   `json:"forced,omitempty"`
@@ -246,6 +253,7 @@ func pushOneSource(ctx context.Context, projectID, sandboxID string, sandbox *ap
 
 	result, err := sandboxpush.Push(ctx, repoRoot, gitServerURL, projectID, sandboxID, token, entry.source, sandboxpush.Options{Branch: branch, Force: force})
 	report.LocalRev, report.Branch, report.Commit = result.LocalRev, result.Branch, result.Commit
+	report.Remote = sandboxpush.PoolRemote(entry.source)
 	report.Previous, report.Forced, report.DirtyFiles = result.Lease, result.Forced, result.DirtyFiles
 	if err != nil {
 		return fail("%v", err)
@@ -320,6 +328,13 @@ func (a *App) deliverParkedSource(ctx context.Context, client *apiclientgen.Clie
 	roots := make(map[string]string, len(pending))
 	sources := make([]pushSourceReport, 0, len(pending))
 	for _, entry := range pending {
+		if entry.Remote != "" {
+			// A source that is a remote: nothing on this machine holds it or
+			// has to, and whichever client can read the URL delivers it.
+			commit, deliveredBranch := deliveredRefs(entry.Source)
+			sources = append(sources, pushSourceReport{Slug: entry.Slug, Status: pushStatusDelivered, Branch: deliveredBranch, Commit: commit})
+			continue
+		}
 		hostDir, _, err := resolveApplyHostDir(sandbox, hostID, applySourceEntry{slug: entry.Slug, source: entry.Source}, dirOverrides)
 		if err != nil {
 			return nil, err
@@ -372,7 +387,11 @@ func printPushSource(cmd *cobra.Command, report pushSourceReport) {
 	case pushStatusPushed:
 		fmt.Fprintf(out, "  local     %s %s\n", report.HostPath, report.LocalRev)
 		fmt.Fprintf(out, "  origin    %s -> %s\n", shortCommit(report.Previous), shortCommit(report.Commit))
-		fmt.Fprintf(out, "  in the discobox: git fetch origin && git rebase origin/%s\n", report.Branch)
+		remote := report.Remote
+		if remote == "" {
+			remote = "origin"
+		}
+		fmt.Fprintf(out, "  in the discobox: git fetch %s && git rebase %s/%s\n", remote, remote, report.Branch)
 		if report.Forced {
 			fmt.Fprintf(out, "  forced\n")
 		}

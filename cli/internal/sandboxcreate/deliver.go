@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	apiclientgen "github.com/discobox-ai/discobox/api/gen"
 	apimodel "github.com/discobox-ai/discobox/api/model"
 	"github.com/discobox-ai/discobox/cli/internal/sandboxgit"
 	"github.com/discobox-ai/x/gitutil"
+	"golang.org/x/sync/errgroup"
 )
 
 // sourceDeliveryClient is the control-plane surface a push needs: the phase to
@@ -38,27 +40,28 @@ const (
 	awaitSourceStall = 5 * time.Minute
 )
 
-// pushDeliveredSource is one source of a sandbox the server expects this client
-// to push, and the key it was created under: empty for the primary source, and
-// the source code reference key for a reference.
+// pushDeliveredSource is one source of a sandbox the server expects a client
+// to deliver, and the key it was created under: empty for the primary source,
+// and the source code reference key for a reference.
 type pushDeliveredSource struct {
 	key    string
 	source apimodel.GitSource
 }
 
-// pushDeliveredSources are the sandbox's sources the server expects this client
-// to deliver by pushing them, primary first.
+// pushDeliveredSources are the sandbox's sources the server expects a client
+// to deliver, primary first.
 //
-// The server decides this, not the client: it knows whether the sandbox's
-// provider can reach the caller's filesystem, and it decides it per source — a
-// reference can need a push while the primary source is bound, and the other
-// way round. The client only reads the answers.
+// The server records this, not the client, and records it per source. Every
+// source created now is delivered into its pool's cache (ADR 26-10-10-545 §1);
+// a discobox created before that may hold one pushed into a repository of its
+// own, or one it cloned itself, which nobody delivers.
 func pushDeliveredSources(sandbox *apimodel.Sandbox) []pushDeliveredSource {
 	if sandbox == nil {
 		return nil
 	}
+	awaiting := sandbox.Runtime.State == apiclientgen.SandboxRuntimeStateAwaitingSource
 	var out []pushDeliveredSource
-	if source, ok := sandbox.Config.Source.Get(); ok && sourceAwaitsPush(source) {
+	if source, ok := sandbox.Config.Source.Get(); ok && sourceAwaitsDelivery(source, awaiting) {
 		out = append(out, pushDeliveredSource{source: source})
 	}
 	references, ok := sandbox.Config.SourceCodeReferences.Get()
@@ -71,48 +74,86 @@ func pushDeliveredSources(sandbox *apimodel.Sandbox) []pushDeliveredSource {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		if source := references[key]; sourceAwaitsPush(source) {
+		if source := references[key]; sourceAwaitsDelivery(source, awaiting) {
 			out = append(out, pushDeliveredSource{key: key, source: source})
 		}
 	}
 	return out
 }
 
-func sourceAwaitsPush(source apimodel.GitSource) bool {
-	delivery, ok := source.Delivery.Get()
-	return ok && delivery == apiclientgen.GitSourceDeliveryPush
+// sourceAwaitsDelivery reports whether a client delivers source: one recorded
+// as delivered into a pool cache or pushed, and — in a discobox that is
+// parked waiting for it — a local source recorded as cloned. That last one was
+// served live from the developer's own Git directory, which no pool does now
+// (ADR 26-10-10-545 §8); a discobox created then and never run has nothing to
+// clone until a client pushes.
+func sourceAwaitsDelivery(source apimodel.GitSource, awaiting bool) bool {
+	switch source.Delivery.Or(apiclientgen.GitSourceDeliveryClone) {
+	case apiclientgen.GitSourceDeliveryPush, apiclientgen.GitSourceDeliveryCache:
+		return true
+	default:
+		return awaiting && strings.TrimSpace(source.LocalDirectory.Or("")) != ""
+	}
 }
 
-// DeliverSource pushes a sandbox's push-delivered sources into the origin
-// repositories they will fetch from and reports the pushes complete, returning
-// once the sandbox is free to start. Each push runs out of the local source the create resolved,
-// which is the only place a throwaway repository's commits exist.
+// DeliverSource delivers a sandbox's sources and reports them delivered,
+// returning once the sandbox is free to start on them. Each source out of a
+// repository on this machine is delivered from the local source the create
+// resolved, which is the only place a throwaway repository's commits exist;
+// a remote-URL source is delivered by whichever client can read the URL.
 //
-// Every push-delivered source is pushed before any of them is reported: the
-// sandbox resumes on that report, and resuming it while a source is still
-// missing would start the harness against an incomplete workspace.
+// Every source is delivered before any of them is reported: the sandbox
+// starts on that report, and starting it while a source is still missing
+// would run the harness against an incomplete workspace.
 //
-// It is a no-op unless the server asked for a push, so callers can invoke it
+// A source delivered into its pool's cache does not wait for the sandbox, so
+// a create's sources are on their way while its image is pulled (ADR
+// 26-10-10-545 §3). One pushed into a repository of its own — a discobox
+// created before a pool cached Git — waits for the sandbox to park, because
+// that repository is made with it.
+//
+// It is a no-op unless the server expects a delivery, so callers can invoke it
 // unconditionally after create.
 func DeliverSource(ctx context.Context, client sourceDeliveryClient, projectID string, sandbox *apimodel.Sandbox, local *LocalSources, serverURL, token string, report Report) error {
 	pending := pushDeliveredSources(sandbox)
 	if len(pending) == 0 {
 		return nil
 	}
-	// The origin repositories only exist once the sandbox is provisioned, so
-	// there is nothing to push into until it parks.
-	report.step(StepAwaitingSource)
-	delivered, err := awaitSourceRequested(ctx, client, projectID, sandbox.ID, report)
-	if err != nil || delivered {
-		// Delivered already is delivered: whoever reported it pushed the same
-		// pinned commits this would (ADR 26-09-24-005).
-		return err
+	if sandbox.Runtime.SourceDeliveredAt.IsSet() {
+		// Delivered already is delivered: whoever reported it delivered the
+		// same pinned commits this would (ADR 26-09-24-005).
+		return nil
 	}
-	// One step for the push as a whole rather than one per repository: a
-	// sandbox cut from several sources pushes them back to back, and naming
+	parked := false
+	for _, entry := range pending {
+		parked = parked || !deliveredToCache(entry.source)
+	}
+	if parked {
+		// A repository made for one sandbox only exists once the sandbox is
+		// provisioned, so there is nothing to push into until it parks.
+		report.step(StepAwaitingSource)
+		delivered, err := awaitSourceRequested(ctx, client, projectID, sandbox.ID, report)
+		if err != nil || delivered {
+			return err
+		}
+	}
+	// One step for the delivery as a whole rather than one per repository: a
+	// sandbox cut from several sources delivers them together, and naming
 	// each would be a line that changes faster than it can be read.
 	report.step(StepPushingSource)
+	// Deliveries run together, and a frontend's line is not theirs to write
+	// to at once.
+	var reporting sync.Mutex
+	serialized := Report(func(step Step) {
+		reporting.Lock()
+		defer reporting.Unlock()
+		report.step(step)
+	})
+	cache := cacheDelivery{client: client, serverURL: serverURL, projectID: projectID, sandboxID: sandbox.ID, token: token, report: serialized}
 	pushed := make(apiclientgen.CompleteSandboxSourcePushBodySources, len(pending))
+	// Sources delivered into a cache go all at once: each is its own
+	// namespace, in its own cache or the same one, and nothing orders them.
+	var group errgroup.Group
 	for _, entry := range pending {
 		commit, branch, snapshotRef, err := pushRefs(entry.source)
 		if err != nil {
@@ -121,6 +162,11 @@ func DeliverSource(ctx context.Context, client sourceDeliveryClient, projectID s
 		slug := strings.TrimSpace(entry.source.Slug.Or(""))
 		if slug == "" {
 			return fmt.Errorf("discobox source has no slug to address its repository")
+		}
+		pushed[slug] = commit
+		if deliveredToCache(entry.source) {
+			group.Go(func() error { return cache.deliver(ctx, entry, local) })
+			continue
 		}
 		repoRoot, err := local.pushRoot(entry.key)
 		if err != nil {
@@ -149,7 +195,9 @@ func DeliverSource(ctx context.Context, client sourceDeliveryClient, projectID s
 				return err
 			}
 		}
-		pushed[slug] = commit
+	}
+	if err := group.Wait(); err != nil {
+		return err
 	}
 	if err := completeSourcePush(ctx, client, projectID, sandbox.ID, pushed); err != nil {
 		// The same overlap as a refused push, one step later: the other
@@ -204,10 +252,10 @@ func pushRefs(source apimodel.GitSource) (commit, branch, snapshotRef string, er
 	return commit, branch, snapshotRef, nil
 }
 
-// pushRoot is the repository a push of the source filed under key runs out of.
-// Only a local source is ever pushed — a remote one is cloned by the sandbox
-// itself and resolves no repository here — so a source without one is a sandbox
-// that should never have been asked for a push.
+// pushRoot is the repository a delivery of the source filed under key runs out
+// of. Only a source from a directory on this machine has one — a remote-URL
+// source is delivered out of this client's cache of its remote — so a local
+// source without one is a delivery this client cannot make.
 func (s *LocalSources) pushRoot(key string) (string, error) {
 	if s != nil {
 		for _, source := range s.sources {
@@ -381,16 +429,21 @@ type PendingSourcePush struct {
 	// Source is what the discobox was created against: the commit it will check
 	// out, and the workspace snapshot it will restore on top of it.
 	Source apimodel.GitSource
+	// Remote is the URL of a source that is a remote and no directory on any
+	// machine. Such a source needs no repository here: any client that can
+	// read the URL delivers it (ADR 26-10-10-545 §1).
+	Remote string
 }
 
-// PendingSourcePushes are the sources a discobox expects this client to deliver
-// by pushing them, primary first. It is empty for a discobox that reads or
-// clones everything it needs, which is every discobox with nothing to wait for.
+// PendingSourcePushes are the sources a discobox expects a client to deliver,
+// primary first. It is empty for a discobox created before a pool cached Git
+// whose sources it cloned itself.
 //
 // A create delivers these itself, out of the repositories it just resolved.
 // This is for the other way in: a discobox parked in awaiting_source long after
-// that create — because the push failed, or the pool was wedged when it ran —
-// which can be delivered again from the repositories still on this machine.
+// that create — because the delivery failed, or the pool was wedged when it
+// ran — which can be delivered again from the repositories still on this
+// machine, or from its remote.
 func PendingSourcePushes(sandbox *apimodel.Sandbox) []PendingSourcePush {
 	pending := pushDeliveredSources(sandbox)
 	if len(pending) == 0 {
@@ -398,11 +451,15 @@ func PendingSourcePushes(sandbox *apimodel.Sandbox) []PendingSourcePush {
 	}
 	out := make([]PendingSourcePush, 0, len(pending))
 	for _, entry := range pending {
-		out = append(out, PendingSourcePush{
+		push := PendingSourcePush{
 			Key:    entry.key,
 			Slug:   strings.TrimSpace(entry.source.Slug.Or("")),
 			Source: entry.source,
-		})
+		}
+		if deliveredToCache(entry.source) {
+			push.Remote = remoteURLSource(entry.source)
+		}
+		out = append(out, push)
 	}
 	return out
 }

@@ -13,9 +13,10 @@ import (
 	"strings"
 
 	apimodel "github.com/discobox-ai/discobox/api/model"
+	"github.com/discobox-ai/discobox/internal/sourcecache"
 )
 
-// SourcePushBranch is the branch a push-delivered source's commits land on when
+// SourcePushBranch is the branch a delivered source's commits land on when
 // the source names no branch of its own — a checkout at a bare commit or tag. The
 // sandbox checks out the commit itself; this only gives the push somewhere to
 // land, and gives the origin repository a HEAD to point at.
@@ -28,11 +29,31 @@ func RepositoryURL(serverURL, projectID, sandboxID string, source apimodel.GitSo
 	return repositoryURL(serverURL, projectID, sandboxID, "git-repositories", source)
 }
 
-// OriginURL is the proxy to the origin repository of a push-delivered source:
-// the bare repository the client pushes into and the sandbox fetches from (ADR
-// 0058 §3). It is a different repository from RepositoryURL's, on its own route.
+// OriginURL is the proxy to the origin a client delivers a source into and the
+// sandbox fetches from: the source's namespace of its pool's cache (ADR
+// 26-10-10-545), or the bare repository an earlier pool made for the sandbox
+// (ADR 0058 §3). It is a different repository from RepositoryURL's, on its own
+// route.
 func OriginURL(serverURL, projectID, sandboxID string, source apimodel.GitSource) (string, error) {
 	return repositoryURL(serverURL, projectID, sandboxID, "git-origins", source)
+}
+
+// PinURL is where a client asks the pool to create the refs of a delivery its
+// cache already holds, before it sends anything (ADR 26-10-10-545 §3).
+func PinURL(serverURL, projectID, sandboxID string, source apimodel.GitSource) (string, error) {
+	origin, err := OriginURL(serverURL, projectID, sandboxID, source)
+	if err != nil {
+		return "", err
+	}
+	return origin + sourcecache.PinSuffix, nil
+}
+
+// CacheRemoteURL is the proxy to what the pool's cache remembers of a
+// cache-delivered source's remote: its branches and tags as project members
+// last delivered them, under refs/cache. A client fetches it before it fetches
+// the remote itself, so each leg carries only what the next host lacks.
+func CacheRemoteURL(serverURL, projectID, sandboxID string, source apimodel.GitSource) (string, error) {
+	return repositoryURL(serverURL, projectID, sandboxID, "git-caches", source)
 }
 
 func repositoryURL(serverURL, projectID, sandboxID, kind string, source apimodel.GitSource) (string, error) {

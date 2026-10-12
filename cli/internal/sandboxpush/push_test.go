@@ -339,25 +339,44 @@ func TestPushOfAnotherBranchLandsUnderItsOwnName(t *testing.T) {
 	}
 }
 
-// A source the sandbox reaches on its own has no origin repository to push into,
-// and the two ways that happens read differently.
-func TestCheckPushDeliveredExplainsWhyThereIsNothingToPush(t *testing.T) {
-	live := apimodel.GitSource{
-		Slug:           apiclientgen.NewOptString("primary"),
-		Delivery:       apiclientgen.NewOptGitSourceDelivery(apiclientgen.GitSourceDeliveryClone),
-		LocalDirectory: apiclientgen.NewOptString("/home/me/project"),
+// Every source that came from a directory on a client's machine has an origin
+// on its pool to push into, however it was first delivered: into the pool's
+// cache, into a repository of its own, or — once — read live off the
+// directory, which no pool does now (ADR 26-10-10-545 §8). Only a source that
+// is a remote has nothing to push, and the refusal says why.
+func TestOnlyASourceThatIsARemoteHasNothingToPush(t *testing.T) {
+	for name, delivery := range map[string]apiclientgen.GitSourceDelivery{
+		"delivered into the pool's cache":  apiclientgen.GitSourceDeliveryCache,
+		"pushed into its own repository":   apiclientgen.GitSourceDeliveryPush,
+		"once read live off the directory": apiclientgen.GitSourceDeliveryClone,
+	} {
+		local := apimodel.GitSource{
+			Slug:           apiclientgen.NewOptString("primary"),
+			Delivery:       apiclientgen.NewOptGitSourceDelivery(delivery),
+			LocalDirectory: apiclientgen.NewOptString("/home/me/project"),
+		}
+		if err := CheckPushDelivered(local); err != nil {
+			t.Errorf("a local source %s: %v", name, err)
+		}
 	}
-	err := CheckPushDelivered(live)
-	if err == nil || !strings.Contains(err.Error(), "reads your directory live") {
-		t.Fatalf("clone-delivered local source error = %v", err)
+	for name, delivery := range map[string]apiclientgen.GitSourceDelivery{
+		"cloned by the discobox":          apiclientgen.GitSourceDeliveryClone,
+		"delivered into the pool's cache": apiclientgen.GitSourceDeliveryCache,
+	} {
+		remote := apimodel.GitSource{
+			Slug:     apiclientgen.NewOptString("primary"),
+			Delivery: apiclientgen.NewOptGitSourceDelivery(delivery),
+		}
+		err := CheckPushDelivered(remote)
+		if !errors.Is(err, ErrNotPushDelivered) || !strings.Contains(err.Error(), "is a remote") {
+			t.Errorf("a remote source %s: error = %v", name, err)
+		}
 	}
-	remote := apimodel.GitSource{
-		Slug:     apiclientgen.NewOptString("primary"),
-		Delivery: apiclientgen.NewOptGitSourceDelivery(apiclientgen.GitSourceDeliveryClone),
+	if got := PoolRemote(apimodel.GitSource{Delivery: apiclientgen.NewOptGitSourceDelivery(apiclientgen.GitSourceDeliveryCache)}); got != "discobox" {
+		t.Errorf("a cache-delivered source's pool remote = %q, want discobox", got)
 	}
-	err = CheckPushDelivered(remote)
-	if err == nil || !strings.Contains(err.Error(), "from a remote") {
-		t.Fatalf("remote source error = %v", err)
+	if got := PoolRemote(apimodel.GitSource{Delivery: apiclientgen.NewOptGitSourceDelivery(apiclientgen.GitSourceDeliveryPush)}); got != "origin" {
+		t.Errorf("a pushed source's pool remote = %q, want origin", got)
 	}
 }
 
@@ -404,12 +423,13 @@ func TestResolveAnswersWhetherThereIsAnythingToSend(t *testing.T) {
 	}
 }
 
-// A source the discobox reaches on its own has nothing to resolve, so the
-// answer is the same refusal the push gives rather than a commit.
-func TestResolveRefusesASourceThatIsNotPushDelivered(t *testing.T) {
+// A source that is a remote has nothing to resolve, so the answer is the same
+// refusal the push gives rather than a commit.
+func TestResolveRefusesASourceThatIsARemote(t *testing.T) {
 	root, base := clientRepo(t, "main")
 	source := pushDeliveredSource("main", base)
 	source.Delivery.Reset()
+	source.LocalDirectory.Reset()
 
 	if _, err := Resolve(context.Background(), root, testSandbox, source, Options{}); !errors.Is(err, ErrNotPushDelivered) {
 		t.Fatalf("resolve = %v, want it to say there is nothing to push into", err)
