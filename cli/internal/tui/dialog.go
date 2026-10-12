@@ -783,8 +783,21 @@ func (d *dialog) itemWindow(room int) int {
 // above, which is what the blank row over the question is measured against.
 func (d *dialog) viewFoot(st *styles, z *zones, top, inner, avail, itemRoom int, body bool) string {
 	var b strings.Builder
-	// row is where the next thing written lands, as a cell of the frame.
-	row := func() int { return top + strings.Count(b.String(), "\n") + dialogPadTop }
+	// row is where the next thing written lands, as a cell of the frame. It
+	// counts the rows above it as the box wraps them, the way rowsOf does: an
+	// answer line or a field wider than a narrow card takes two rows, and a
+	// mark placed by counting lines would sit a row above the key it is for.
+	row := func() int {
+		drawn := b.String()
+		if drawn == "" {
+			return top + dialogPadTop
+		}
+		rows := lipgloss.Height(lipgloss.NewStyle().Width(inner).Render(strings.TrimSuffix(drawn, "\n")))
+		if !strings.HasSuffix(drawn, "\n") {
+			rows--
+		}
+		return top + rows + dialogPadTop
+	}
 
 	if d.emphasis != "" {
 		b.WriteString("\n")
