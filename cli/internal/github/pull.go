@@ -51,8 +51,11 @@ type Pull struct {
 	// Reviewers are the people the page's sidebar lists: who was asked, and
 	// what the last review of each who answered said.
 	Reviewers []Reviewer
-	// Checks are the head commit's check runs and commit statuses.
-	Checks []Check
+	// Checks are the head commit's check runs and commit statuses, and
+	// ChecksPartial is set when not all of them could be read: a request for
+	// them failed, or there are more than are read.
+	Checks        []Check
+	ChecksPartial bool
 	// Files are the changes, in the order the page lists them, as far as
 	// they were read; FilesTruncated is set when ChangedFiles is more.
 	Files          []File
@@ -185,8 +188,14 @@ func (c *Client) readPull(ctx context.Context, owner, name string, issue *Issue,
 	}
 	// GitHub works out whether a pull request can merge when it is first
 	// asked, and answers "unknown" until it has: asked again in a moment, it
-	// usually knows.
-	for try := 0; try < mergeSettleTries && issue.State == "open" && (raw.Mergeable == "unknown" || raw.Mergeable == ""); try++ {
+	// usually knows. Not with no token: it answers "unknown" to a reader it
+	// does not know however often it is asked, and there are 60 requests an
+	// hour to ask with.
+	tries := mergeSettleTries
+	if c.bearer(ctx) == "" {
+		tries = 0
+	}
+	for try := 0; try < tries && issue.State == "open" && (raw.Mergeable == "unknown" || raw.Mergeable == ""); try++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -224,7 +233,7 @@ func (c *Client) readPull(ctx context.Context, owner, name string, issue *Issue,
 	issue.Timeline = spokenReviews(issue.Timeline)
 	pull.Reviewers = reviewers(issue.Author, issue.Timeline, raw)
 
-	pull.Checks = c.checks(ctx, repo, pull.HeadSHA)
+	pull.Checks, pull.ChecksPartial, _ = c.checks(ctx, repo, pull.HeadSHA)
 
 	next := base + "/files?per_page=100"
 	for page := 0; next != ""; page++ {
@@ -252,15 +261,22 @@ func (c *Client) readPull(ctx context.Context, owner, name string, issue *Issue,
 // checks are a commit's check runs and then its commit statuses, the two ways
 // a check reports. They are not the pull request: a token that may not read
 // them — a fine-grained one without the permission — leaves the page without
-// them rather than unreadable.
-func (c *Client) checks(ctx context.Context, repo, sha string) []Check {
+// them rather than unreadable. So a failure is not the read's: partial says
+// the list is not all of them — a request failed, or there are more pages than
+// are read — and a caller that had them before keeps what it had (ok false)
+// when not one could be read now.
+func (c *Client) checks(ctx context.Context, repo, sha string) (checks []Check, partial, ok bool) {
 	if sha == "" {
-		return nil
+		return nil, false, true
 	}
-	var checks []Check
 	commit := repo + "/commits/" + url.PathEscape(sha)
 	next := commit + "/check-runs?per_page=100"
-	for page := 0; next != "" && page < checkPages; page++ {
+	read := 0
+	for page := 0; next != ""; page++ {
+		if page == checkPages {
+			partial = true
+			break
+		}
 		var runs struct {
 			CheckRuns []struct {
 				Name       string `json:"name"`
@@ -271,8 +287,10 @@ func (c *Client) checks(ctx context.Context, repo, sha string) []Check {
 		}
 		link, err := c.get(ctx, next, &runs)
 		if err != nil {
+			partial = true
 			break
 		}
+		read++
 		for _, run := range runs.CheckRuns {
 			state := "pending"
 			if run.Status == "completed" {
@@ -289,12 +307,15 @@ func (c *Client) checks(ctx context.Context, repo, sha string) []Check {
 			TargetURL string `json:"target_url"`
 		} `json:"statuses"`
 	}
-	if _, err := c.get(ctx, commit+"/status?per_page=100", &combined); err == nil {
-		for _, status := range combined.Statuses {
-			checks = append(checks, Check{Name: status.Context, State: checkState(status.State), URL: status.TargetURL})
-		}
+	link, err := c.get(ctx, commit+"/status?per_page=100", &combined)
+	if err != nil {
+		return checks, true, read > 0
 	}
-	return checks
+	for _, status := range combined.Statuses {
+		checks = append(checks, Check{Name: status.Context, State: checkState(status.State), URL: status.TargetURL})
+	}
+	// The statuses are read as one page of a hundred.
+	return checks, partial || nextPage(link) != "", true
 }
 
 // checkState is a check run's conclusion or a commit status's state as one of

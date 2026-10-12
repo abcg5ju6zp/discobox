@@ -31,7 +31,9 @@ import (
 const DefaultAPI = "https://api.github.com"
 
 // AnonymousRefresh is how often an issue is read again with no token. GitHub
-// allows 60 requests an hour without one, and a re-read is at least one.
+// allows 60 requests an hour without one; a re-read of an issue or a pull
+// request nothing has happened to is one, so a tab spends twelve an hour and
+// leaves the rest for the full reads (a pull request's is eight or more).
 const AnonymousRefresh = 5 * time.Minute
 
 // keptFor is how long a full read is trusted on the issue's updated_at alone.
@@ -246,9 +248,10 @@ var ErrNoToken = errors.New("not logged in to GitHub: run gh auth login, or set 
 //
 // A re-read is cheap when nothing happened: the issue is read first, and when
 // GitHub says it has not been updated since a full read less than keptFor ago,
-// that read is the answer — with an open pull request's checks read again,
-// since a check finishing moves nothing else. With no token an issue read less
-// than AnonymousRefresh ago is not read again at all. full asks for a full read
+// that read is the answer — with an open pull request's checks, and whether it
+// can merge, read again when there is a token, since a check finishing moves
+// nothing else. With no token an issue read less than AnonymousRefresh ago is
+// not read again at all, and a re-read after that is the one request. full asks for a full read
 // whatever was kept — someone asked to see it now — and a comment or a change
 // of state made here drops what was kept, so the next read is full anyway.
 func (c *Client) Issue(ctx context.Context, owner, name string, number int, full bool) (Issue, error) {
@@ -269,15 +272,19 @@ func (c *Client) Issue(ctx context.Context, owner, name string, number int, full
 		return Issue{}, err
 	}
 	if ok && raw.UpdatedAt.Equal(cached.updated) {
-		if cached.issue.checksMove() {
+		// With no token neither is asked: the three requests they cost, every
+		// AnonymousRefresh, are most of the 60 an hour on their own, and
+		// whether it can merge is "unknown" to a reader GitHub does not know.
+		// A read the person asks for (full) reads them.
+		if cached.issue.checksMove() && !anonymous {
 			// A copy: the read handed out before still points at the old one.
 			pull := *cached.issue.Pull
-			pull.Checks = c.checks(ctx, repoPath(owner, name), pull.HeadSHA)
-			// Whether it can merge moves the same way. With no token the
-			// request is spent only while GitHub has yet to say.
-			if !anonymous || pull.Mergeable == "unknown" || pull.Mergeable == "" {
-				c.mergeState(ctx, owner, name, number, &pull)
+			// A read of them that failed leaves the ones known.
+			if checks, partial, ok := c.checks(ctx, repoPath(owner, name), pull.HeadSHA); ok {
+				pull.Checks, pull.ChecksPartial = checks, partial
 			}
+			// Whether it can merge moves the same way.
+			c.mergeState(ctx, owner, name, number, &pull)
 			cached.issue.Pull = &pull
 		}
 		cached.at = c.clock()

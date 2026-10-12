@@ -372,24 +372,65 @@ func TestAPullRequestIsMerged(t *testing.T) {
 	}
 }
 
-// With no token, whether it can merge is asked again only while GitHub has
-// yet to say: there are 60 requests an hour to spend.
-func TestAnAnonymousReReadSparesTheMergeState(t *testing.T) {
+// With no token an unchanged re-read is the one request: GitHub allows 60 an
+// hour, the checks and the merge state would be three more every time, and
+// whether it can merge is "unknown" to a reader it does not know anyway — so
+// a full read does not wait for that answer either.
+func TestAnAnonymousReReadIsOneRequest(t *testing.T) {
 	t.Parallel()
-	fake := &fakePull{}
+	fake := &fakePull{mergeable: "clean", unsettled: 100}
 	now := time.Now()
 	c := client(fake.serve(t), "")
 	c.now = func() time.Time { return now }
 	if _, err := c.Issue(t.Context(), "acme", "foo", 9, false); err != nil {
 		t.Fatal(err)
 	}
-	fake.requests()
+	asked := 0
+	for _, path := range fake.requests() {
+		if path == "GET /repos/acme/foo/pulls/9" {
+			asked++
+		}
+	}
+	if asked != 1 {
+		t.Errorf("an anonymous full read asked for the pull request %d times, want once", asked)
+	}
 	now = now.Add(AnonymousRefresh + time.Second)
 	if _, err := c.Issue(t.Context(), "acme", "foo", 9, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := fake.requests(); slices.Contains(got, "GET /repos/acme/foo/pulls/9") || len(got) != 3 {
-		t.Errorf("an anonymous re-read asked for %v, want the issue and its checks only", got)
+	if got := fake.requests(); !slices.Equal(got, []string{"GET /repos/acme/foo/issues/9"}) {
+		t.Errorf("an anonymous re-read asked for %v, want the issue only", got)
+	}
+}
+
+// A re-read whose checks could not be read keeps the ones it knew: a request
+// that failed is not a pull request with no checks. A full read that cannot
+// read them says the list is not whole.
+func TestChecksThatCouldNotBeReadAreNotNoChecks(t *testing.T) {
+	t.Parallel()
+	fake := &fakePull{}
+	c := client(fake.serve(t), "tok")
+	first, err := c.Issue(t.Context(), "acme", "foo", 9, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Pull.Checks) == 0 || first.Pull.ChecksPartial {
+		t.Fatalf("checks = %+v, partial %v, want all of them", first.Pull.Checks, first.Pull.ChecksPartial)
+	}
+	fake.set(func() { fake.refuse = "/commits/" })
+	again, err := c.Issue(t.Context(), "acme", "foo", 9, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Pull.Checks) != len(first.Pull.Checks) {
+		t.Errorf("a failed read of the checks left %d of them, want the %d known", len(again.Pull.Checks), len(first.Pull.Checks))
+	}
+	full, err := c.Issue(t.Context(), "acme", "foo", 9, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.Pull.Checks) != 0 || !full.Pull.ChecksPartial {
+		t.Errorf("a full read refused its checks: %d checks, partial %v, want none and said so", len(full.Pull.Checks), full.Pull.ChecksPartial)
 	}
 }
 
