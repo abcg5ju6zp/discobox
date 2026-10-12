@@ -85,7 +85,9 @@ together with two blank rows between them. What is left over falls below them
 both rather than between: the window keeps its full height without putting a
 screen of nothing between two tables that are read as one. A request row says what is being asked for, where it may go, who is
 waiting (an agent, the proxy on a discobox's behalf, or a person) and for how
-long; Enter answers that one, while `C` answers the oldest from anywhere.
+long; Enter answers that one, while `C` answers the oldest from anywhere. The
+lower table's height is counted from its rows, so `syncRequestRows` lays the
+window out again whenever a poll changes how many there are.
 
 A secret row is what tells one credential from another: its name, the host it is
 bound to — spelled `any host` rather than left blank, because blank reads as
