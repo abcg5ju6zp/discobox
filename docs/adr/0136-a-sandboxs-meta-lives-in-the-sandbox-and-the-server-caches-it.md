@@ -1,6 +1,6 @@
 # 0136 — A sandbox's meta lives in the sandbox, and the server caches it
 
-- **Status**: Accepted (§1's two fields amended by
+- **Status**: Accepted (§1's two fields superseded by
   [26-10-12-026](26-10-12-026-a-sandboxs-name-is-meta-and-renaming-it-is-a-meta-write.md))
 - **Date**: 2026-09-18
 
