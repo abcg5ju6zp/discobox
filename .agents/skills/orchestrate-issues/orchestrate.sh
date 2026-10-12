@@ -24,6 +24,13 @@ W=$ORCH_DIR/workers.tsv
 P=$ORCH_DIR/pool.tsv
 touch "$W" "$P" "$ORCH_DIR/tried.txt" "$ORCH_DIR/rebased.txt" "$ORCH_DIR/retired.txt"
 
+# A box's harness says whether it is working in the title of its primary terminal (Claude Code leads
+# it with "✳" when idle). That is not .displayName: a box that has been given a name is listed by the
+# name instead (ADR 26-10-12-026), so the title is read from where the server reads it, the newest
+# primary session that has one.
+JQ_TITLE='def title: ([(.runtime.agentStatus.sessions // [])[] | select(.primary and ((.title // "") != ""))]
+	| sort_by(.startedAt // "") | last | .title) // "";'
+
 # use <credential-name> <regex>: the live use ID whose description matches.
 # The listing fails now and then for a moment, so an empty answer is asked again before it counts.
 use() {
@@ -52,9 +59,9 @@ cmd_status() {
 	local j
 	j=$(box ls -o json 2>/dev/null) || { echo "$j"; return 1; }
 	boxes | while IFS=$'\t' read -r n id pr; do
-		echo "$j" | jq -r --arg id "$id" --arg n "$n" --arg pr "$pr" '(.sandboxes // .)[] | select(.id==$id) |
+		echo "$j" | jq -r --arg id "$id" --arg n "$n" --arg pr "$pr" "$JQ_TITLE"'(.sandboxes // .)[] | select(.id==$id) |
 			(((.runtime.agentStatus.sources // []) | map(select(.slug=="primary" or .slug==null))) + [{}])[0] as $g |
-			"\($n) pr=\($pr) \(.id) \(.runtime.runtimeState) \(if (.displayName|startswith("✳")) then "idle" else "busy" end) head=\(($g.headCommit // "?")[0:8]) clean=\($g.clean)\((.meta.tags // {}) | if has("ready") then " #ready" elif has("blocked") then " #blocked" elif has("merged") then " #merged" else "" end)"'
+			"\($n) pr=\($pr) \(.id) \(.runtime.runtimeState) \(if (title|startswith("✳")) then "idle" else "busy" end) head=\(($g.headCommit // "?")[0:8]) clean=\($g.clean)\((.meta.tags // {}) | if has("ready") then " #ready" elif has("blocked") then " #blocked" elif has("merged") then " #merged" else "" end)"'
 	done
 }
 
@@ -260,10 +267,10 @@ cmd_idle() {
 	local j now
 	touch "$ORCH_DIR/idle-seen.txt" "$ORCH_DIR/idle-reported.txt"
 	j=$(box ls -o json 2>/dev/null) || return 0
-	now=$(echo "$j" | jq -r '(.sandboxes // .)[] | select(.runtime.runtimeState=="running" and (.displayName|startswith("✳"))) | .id')
+	now=$(echo "$j" | jq -r "$JQ_TITLE"'(.sandboxes // .)[] | select(.runtime.runtimeState=="running" and (title|startswith("✳"))) | .id')
 	# A worker seen busy (or stopped) clears its report, so its next idle stretch is reported again.
 	local busy
-	busy=$(echo "$j" | jq -r '(.sandboxes // .)[] | select(.runtime.runtimeState=="running" and (.displayName|startswith("✳")|not)) | .id')
+	busy=$(echo "$j" | jq -r "$JQ_TITLE"'(.sandboxes // .)[] | select(.runtime.runtimeState=="running" and (title|startswith("✳")|not)) | .id')
 	# Only a worker still running and now working has resumed; one that stopped has not.
 	grep -vFxf <(echo "$now") "$ORCH_DIR/idle-reported.txt" | grep -Fxf <(echo "$busy") | while read -r id; do
 		echo "RESUMED $(boxes | awk -F'\t' -v i="$id" '$2==i{print $1}') $id"
