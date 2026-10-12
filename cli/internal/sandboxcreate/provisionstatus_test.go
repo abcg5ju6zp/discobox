@@ -276,3 +276,17 @@ func TestPullLineHandlesAnUnsizedPull(t *testing.T) {
 		t.Fatalf("pull line = %q", line)
 	}
 }
+
+// A recorded failure is whatever the thing that failed printed, and it is
+// shown on a status line, in a table cell, and in the console. A sequence in
+// it must reach the screen as text, not as an instruction to the terminal.
+func TestOneLineEscapesWhatATerminalWouldActOn(t *testing.T) {
+	got := OneLine("pull \x1b[2Kimage:\n  \u202enot\u009bfound \tdone")
+	want := `pull \x1b[2Kimage: \u202enot\u009bfound done`
+	if got != want {
+		t.Fatalf("OneLine = %q, want %q", got, want)
+	}
+	if plain := "do request: Post \"http://127.0.0.1:32892/sandboxes\": EOF — café"; OneLine(plain) != plain {
+		t.Fatalf("OneLine(%q) = %q, want ordinary text untouched", plain, OneLine(plain))
+	}
+}

@@ -235,7 +235,9 @@ func TestSessionSaysARepairItCaused(t *testing.T) {
 				landed := time.Now().Add(-tc.landedAgo)
 				sandbox.AutomaticRepair = &model.AutomaticRepair{
 					Generation: 4, StartedAt: time.Now().Add(-2 * time.Hour), LandedAt: &landed,
-					Trigger: "http", Failure: "create failed: EOF",
+					// As a runtime might print it: over two lines, with a
+					// sequence that would clear the row it lands on.
+					Trigger: "http", Failure: "create failed:\n  \x1b[2KEOF",
 				}
 				return lease, sandbox, err
 			}
@@ -258,7 +260,10 @@ func TestSessionSaysARepairItCaused(t *testing.T) {
 				t.Fatalf("stdout = %q, err = %v; want the command's own output untouched", out, err)
 			}
 			notice := stderr.String()
-			if said := strings.Contains(notice, "was repaired") && strings.Contains(notice, "create failed: EOF"); said != tc.wantNotice {
+			if strings.ContainsRune(notice, '\x1b') || strings.Count(notice, "\n") > 1 {
+				t.Fatalf("stderr = %q, want the failure on the notice's one line with nothing a terminal would act on", notice)
+			}
+			if said := strings.Contains(notice, "was repaired") && strings.Contains(notice, `create failed: \x1b[2KEOF`); said != tc.wantNotice {
 				t.Fatalf("stderr = %q, want a repair notice: %v", notice, tc.wantNotice)
 			}
 

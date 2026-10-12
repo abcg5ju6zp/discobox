@@ -876,8 +876,8 @@ func toTUISandbox(sb apimodel.Sandbox, hostID string) tui.Sandbox {
 		if landed || failed {
 			row.Repaired = tui.AutomaticRepair{
 				At:      repair.LandedAt.Or(repair.StartedAt),
-				Trigger: strings.TrimSpace(repair.Trigger),
-				Failure: strings.Join(strings.Fields(repair.Failure.Or("")), " "),
+				Trigger: sandboxcreate.OneLine(repair.Trigger),
+				Failure: sandboxcreate.OneLine(repair.Failure.Or("")),
 				Failed:  failed,
 			}
 		}

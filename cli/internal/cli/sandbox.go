@@ -811,7 +811,7 @@ func failedAutomaticRepairHint(sandbox *apimodel.Sandbox, message string) string
 		return ""
 	}
 	hint := "\nThat is the one automatic repair of it failing"
-	if failure := strings.TrimSpace(repair.Failure.Or("")); failure != "" {
+	if failure := sandboxcreate.OneLine(repair.Failure.Or("")); failure != "" {
 		hint += "; it had already failed with: " + failure
 	}
 	return hint + "\nRun `" + command + "` to repair it again."

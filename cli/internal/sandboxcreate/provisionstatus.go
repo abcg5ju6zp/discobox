@@ -125,19 +125,35 @@ func AutomaticRepairCause(sandbox *apimodel.Sandbox) string {
 		return ""
 	}
 	cause := "it had failed with no container"
-	if trigger := oneLine(repair.Trigger); trigger != "" {
+	if trigger := OneLine(repair.Trigger); trigger != "" {
 		cause = trigger + " found it failed with no container"
 	}
-	if failure := oneLine(repair.Failure.Or("")); failure != "" {
+	if failure := OneLine(repair.Failure.Or("")); failure != "" {
 		cause += " (" + failure + ")"
 	}
 	return cause
 }
 
-// oneLine folds a recorded message onto one line: a status has one, and a
-// failure is whatever the thing that failed printed.
-func oneLine(value string) string {
-	return strings.Join(strings.Fields(value), " ")
+// OneLine makes a recorded message fit to show on one row of a terminal: its
+// white space is folded, and every rune a terminal would act on rather than
+// show — a control, ESC among them, or an invisible format character such as a
+// bidirectional override — is written as its Go escape.
+//
+// A status has one line, and a failure is whatever the thing that failed
+// printed: a container runtime's error can quote an image name or a path as it
+// was given. Shown raw, a sequence in it is an instruction to the reader's
+// terminal.
+func OneLine(value string) string {
+	var b strings.Builder
+	for _, r := range strings.Join(strings.Fields(value), " ") {
+		if unicode.IsPrint(r) {
+			b.WriteRune(r)
+			continue
+		}
+		quoted := strconv.QuoteRune(r)
+		b.WriteString(quoted[1 : len(quoted)-1])
+	}
+	return b.String()
 }
 
 // provisioned reports whether the sandbox has nothing left to provision: the
