@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -658,8 +659,7 @@ func (s *Store) Import(ctx context.Context, path, sandboxID, slug, src string) e
 			tips.WriteString(object + "\n")
 			fmt.Fprintf(&updates, "update %s %s\n", namespaceRef(namespace, ref), object)
 		}
-		lend := []string{"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + imported.objects}
-		if _, err := git(ctx, path, tips.Bytes(), lend, "pack-objects", "--revs", "--quiet", filepath.Join(path, "objects", "pack", "pack")); err != nil {
+		if err := packImported(ctx, path, imported.objects, tips.Bytes()); err != nil {
 			return fmt.Errorf("import origin: %w", err)
 		}
 		// Without the loan: a ref is created only at what the cache now holds.
@@ -671,6 +671,50 @@ func (s *Store) Import(ctx context.Context, path, sandboxID, slug, src string) e
 		return err
 	}
 	return s.Delivered(ctx, path, sandboxID, slug, false, "")
+}
+
+// packImported copies into the cache at path everything tips reach, out of an
+// imported repository's object directory.
+//
+// The loan is for reading only. What is read is packed to a file and then
+// indexed into the cache without the loan and strictly, which hashes every
+// object and checks every link: an object store out of an archive can hold
+// anything under any name, and a cache shared by every sandbox of a remote
+// must not take a blob on the archive's word for which blob it is. The
+// imported store's commit-graph and multi-pack-index are not believed either.
+func packImported(ctx context.Context, path, objects string, tips []byte) error {
+	pack, err := os.CreateTemp(filepath.Join(path, "objects", "pack"), "tmp_import_")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = pack.Close()
+		_ = os.Remove(pack.Name())
+	}()
+	//nolint:gosec // The executable and switches are fixed; the tips are validated object ids.
+	read := exec.CommandContext(ctx, "git", "-c", "core.commitGraph=false", "-c", "core.multiPackIndex=false",
+		"pack-objects", "--revs", "--stdout", "--quiet")
+	read.Env = append(gitbackend.BaseEnv(), "GIT_DIR="+path, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+objects)
+	read.Stdin = bytes.NewReader(tips)
+	read.Stdout = pack
+	var stderr bytes.Buffer
+	read.Stderr = &stderr
+	if err := childproc.Run(read); err != nil {
+		return fmt.Errorf("read the imported objects: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if _, err := pack.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	//nolint:gosec // The executable and switches are fixed.
+	index := exec.CommandContext(ctx, "git", "index-pack", "--stdin", "--strict")
+	index.Env = append(gitbackend.BaseEnv(), "GIT_DIR="+path)
+	index.Stdin = pack
+	stderr.Reset()
+	index.Stderr = &stderr
+	if err := childproc.Run(index); err != nil {
+		return fmt.Errorf("the imported objects are not what their names say: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // git runs git in dir — a cache, or nowhere — in the environment every git
