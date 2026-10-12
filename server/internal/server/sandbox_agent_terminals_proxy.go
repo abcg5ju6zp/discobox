@@ -46,6 +46,7 @@ func registerSandboxAgentTerminalRoutes(router chi.Router, service services.Sand
 	observe, inspect, read, action := services.SandboxObserve, services.SandboxInspect, services.SandboxRead, services.SandboxAction
 	attach := action("exec attach")
 	attach.Attach = true
+	createExec := action("exec create")
 	for _, route := range []struct {
 		method, path string
 		use          services.SandboxUse
@@ -53,7 +54,7 @@ func registerSandboxAgentTerminalRoutes(router chi.Router, service services.Sand
 		{http.MethodGet, "/harness-hooks", observe},
 		{http.MethodGet, "/exec-events", observe},
 		{http.MethodGet, "/execs", inspect},
-		{http.MethodPost, "/execs", action("exec create")},
+		{http.MethodPost, "/execs", createExec},
 		{http.MethodGet, "/execs/{execId}", inspect},
 		{http.MethodDelete, "/execs/{execId}", action("exec delete")},
 		{http.MethodGet, "/execs/{execId}/logs", read},
@@ -77,11 +78,13 @@ func registerSandboxAgentTerminalRoutes(router chi.Router, service services.Sand
 		{http.MethodPost, "/services/{serviceId}/stop", action("service stop")},
 		{http.MethodPost, "/services/{serviceId}/restart", action("service restart")},
 	} {
-		router.Method(route.method, base+route.path, sandboxAgentTerminalProxyHandler(service, route.use))
+		router.Method(route.method, base+route.path, sandboxAgentTerminalProxyHandler(service, route.use, route.use == createExec))
 	}
 }
 
-func sandboxAgentTerminalProxyHandler(service services.SandboxService, use services.SandboxUse) http.Handler {
+// createsExec marks the exec create route, which is the one that takes this
+// server's own `wait` option.
+func sandboxAgentTerminalProxyHandler(service services.SandboxService, use services.SandboxUse, createsExec bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeSandboxAgentProxyError(w, http.StatusServiceUnavailable, "sandbox service is not configured")
@@ -147,10 +150,12 @@ func sandboxAgentTerminalProxyHandler(service services.SandboxService, use servi
 				sandboxPoolProxyError(w, r, err)
 			}
 		}
-		if r.URL.Query().Has("wait") && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/execs") {
+		if createsExec && r.URL.Query().Get("wait") == "ready" {
 			// `wait=ready` asked an exec create to wait for its sandbox,
 			// before every action did. It was this server's option and never
-			// the sandbox agent's, so it is still not forwarded.
+			// the sandbox agent's, so it is still taken here and not
+			// forwarded. Any other value is not this server's to accept: it
+			// goes on as it came, for the sandbox agent to refuse.
 			query := r.URL.Query()
 			query.Del("wait")
 			r.URL.RawQuery = query.Encode()
