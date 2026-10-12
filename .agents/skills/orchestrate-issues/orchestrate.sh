@@ -295,7 +295,7 @@ cmd_idle() {
 }
 
 # github: one line per issue and PR the lead cares about, "issue <n> open|closed" and
-# "pr <n> issue-<n> open|merged|closed", and "ci main <sha> <result>": every worker's issue and PR, and any issue listed in
+# "pr <n> issue-<n> open|merged|closed", and "ci main <sha> <result>" (latest finished run): every worker's issue and PR, and any issue listed in
 # watch-issues.txt (ones the lead filed or was told about). A worker PR GitHub lists that
 # workers.tsv does not know yet is recorded there. Closed issues are cached in
 # closed-issues.txt, so a pass costs one PR list call and one call per open issue; "github prs"
@@ -314,11 +314,13 @@ cmd_github() {
 	done
 	echo "$prs" | grep -Fwf <(workers | awk -F'\t' '{print "issue-"$1}') | sed 's/^/pr /'
 	[ "${1:-}" = prs ] && return 0
-	# main's latest CI run, "ci main <sha> running|success|failure|...", so a red main is seen.
+	# main's latest finished CI run, "ci main <sha> success|failure|...", so a red main is seen. A run
+	# still going is left out, and so is one cancelled by a newer push: on a busy main either would
+	# wake the lead for nothing.
 	local uc
 	uc=$(use github 'actions/runs \(with query'); need "$uc" "CI reads" || return 1
-	discobox-access run --use "$uc" -- gh api "repos/$REPO/actions/runs?branch=main&per_page=1" \
-		--jq '.workflow_runs[0] | "ci main \(.head_sha[0:8]) \(if .status == "completed" then .conclusion else "running" end)"' </dev/null 2>/dev/null | tail -1
+	discobox-access run --use "$uc" -- gh api "repos/$REPO/actions/runs?branch=main&status=completed&per_page=10" \
+		--jq '[.workflow_runs[] | select(.conclusion != "cancelled")][0] | "ci main \(.head_sha[0:8]) \(.conclusion)"' </dev/null 2>/dev/null | tail -1
 	{ workers | cut -f1; cat "$ORCH_DIR/watch-issues.txt"; } | grep -E '^[0-9]+$' | sort -un | while read -r n; do
 		if grep -qx "$n" "$ORCH_DIR/closed-issues.txt"; then echo "issue $n closed"; continue; fi
 		st=$(discobox-access run --use "$u" -- gh api "repos/$REPO/issues/$n" --jq .state </dev/null 2>/dev/null | tail -1)
@@ -334,6 +336,9 @@ cmd_watch() { # watch [minutes]: approve, kick, and exit on an issue or PR chang
 	local end=$((SECONDS + ${1:-30} * 60)) tick=0 prev cur out free idle
 	snap() { awk '{m=$5; if (m!="dirty") m="ok"; print $1, $3, $4, m}' | sort; }
 	local prs gh0 gh1 pr0 pr1 i
+	# The lead needs no dev loop, but a session restart brings task dev's image watcher back, and
+	# it builds into a cache of tens of GB on the pool's one disk. Stop it here, every watch.
+	pkill -f '[d]iscobox-docker-image-watch' 2>/dev/null || true
 	prs=$(cmd_prs) || { echo "$prs"; exit 0; }
 	prev=$(echo "$prs" | snap)
 	# The baseline is the last state a watch reported, kept in github.last, so a merge or close

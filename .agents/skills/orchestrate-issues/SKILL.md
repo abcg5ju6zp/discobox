@@ -128,7 +128,8 @@ and keep its request ID (do not filter the `progress` line out), so
   in its own cache (tens of GB each, never shared) and the host disk is one
   device for the whole pool. More than four has filled it. The user may raise
   the cap when disk holds up; six ran with 300G+ free once each worker kept to
-  one Docker build at a time and the lead's own image watcher was off.
+  one Docker build at a time and the lead's own image watcher was off (`watch`
+  stops it each time it starts, since a session restart brings it back).
 
 ## 3. Launch
 
@@ -159,7 +160,7 @@ exits on:
   answered it in the box. Re-post the table.
 - **`GITHUB:`** — an issue or PR you track changed on GitHub: a worker's PR
   opened, merged or closed (one PR list call every 15s), an issue closed or
-  reopened, or `main`'s latest CI run started or finished (read once a pass).
+  reopened, or `main`'s latest finished CI run changed (read once a pass).
   A red `main` goes at the top of the table. The baseline is the last state
   reported (`github.last`), so nothing that changed between watches is
   missed. The tracked set is every worker's issue and PR, plus the issues in
@@ -188,6 +189,9 @@ exits on:
 - **Low disk** — `say <id> "…free this box's Docker build cache with docker
   builder prune -a -f (build cache only, keep the images)…"` to running
   workers, stop finished ones (`power stop`), and prune your own build cache.
+  Check Go's build cache too (`du -sh ~/.cache/go-build`): the lead's reached
+  84G after a `ci:test` and CLI rebuilds, and `go clean -cache` frees it; ask
+  idle workers for the same.
   Never ask for `docker image prune -a` (it deletes the dev images `verify`
   needs) or for shared caches to be deleted. On a full disk, write command
   output to `/dev/shm`.
@@ -200,11 +204,16 @@ exits on:
 
 Keep one table for the user, re-posted whenever a row changes. It is status
 and to-do in one. Rows are ranked by priority with a `#` column, and the columns
-are the issue, the worker's box, what its agent is doing (working, waiting for
-you, waiting on CI or review, done; never whether the box is running), the
-user's move, and why that row is at that rank. Issue and PR numbers in the
-table are plain text; under the table, list each one's GitHub URL, one per
-line, because a link inside a table cell renders with its URL in a terminal.
+are `# | Item | Agent | Issue | PR | Doing | Your move | Why this rank`: Item is
+a plain description with no numbers, Agent the box ID, Issue and PR bare
+numbers, each `-` when it does not apply. Doing is what its agent is doing
+(working, waiting for you, waiting on CI or review, done; never whether the box
+is running). Your move stays `–` for a PR until every check on its head is
+green, and only then reads "Review and merge"; the exception is a failing PR
+its worker cannot make green, which reads "Look at it". Issue and PR numbers
+in the table are plain text; under the table, list each one's GitHub URL, one
+per line, because a link inside a table cell renders with its URL in a
+terminal.
 Rank by what unblocks the most, then by how hard a decision is to reverse.
 A worker's `ready`, `blocked` or `merged` tag (deliver-issue §7) is its own
 verdict; `status` prints it as `#ready`, `#blocked` or `#merged`. Read it
