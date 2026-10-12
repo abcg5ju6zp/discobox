@@ -878,8 +878,9 @@ teach these forms.
 
 Which *name* that is, is `nameMatch` (`internal/cli/shell.go`), and `rm` is the
 command that made the distinction necessary. The NAME column is
-`SandboxDisplayName`: the primary terminal's window title once something has set
-one, and the configured name only until then — and the configured name is
+`SandboxDisplayName`: the name the discobox was given when it has one
+(`discobox rename`), else the primary terminal's window title once something
+has set one, and the configured name only until then — and the configured name is
 generated (`randomname.Generate`; `new` has no `--name`), so it is a string the
 listing has usually stopped printing.
 
@@ -902,9 +903,13 @@ fails. Archiving is reversible, but archiving the wrong discobox still takes a
 running agent out from under somebody.
 
 `discobox tag DISCOBOX [KEY[=VALUE]...] [--rm KEY]... [--description TEXT]`
-(`internal/cli/tag.go`) is the CLI's one writer of a discobox's meta, over
-`update-sandbox-meta` (ADR 0136). It is a root command beside `ls --tag`, which
-filters on what it sets, and has no `admin box` twin: there is no raw option
+(`internal/cli/tag.go`) writes a discobox's tags and description, over
+`update-sandbox-meta` (ADR 0136), and `discobox rename DISCOBOX [NAME]`
+(`internal/cli/rename.go`) writes its name over the same call
+(ADR 26-10-12-026) — a command of its own because a name is not what anyone
+looks under `tag` for. No `NAME` clears it. Both go through
+`changeSandboxMeta`, and the console's rename is the same write. `tag` is a
+root command beside `ls --tag`, which filters on what it sets, and has no `admin box` twin: there is no raw option
 to carry, and `admin box get` already prints the record, meta included. It
 resolves its one discobox by the power commands' rule, full ID skipping the
 listing, because a lead tags the workers it created under the sandbox role
@@ -1221,15 +1226,17 @@ as the table: the order is the CLI's answer, not a table-rendering detail.
 The NAME a sandbox listing shows is `Sandbox.displayName`, computed by the
 server (`services.SandboxDisplayName`) and read verbatim here — `discobox ls`, the
 console, and any other client name a sandbox the same way because none of them
-derives it. Display only — name *resolution* (`matchSandboxArg`, `--name`
-updates) still works on the configured name.
+derives it. A name set with `discobox rename` (the discobox's meta name,
+ADR 26-10-12-026) leads it, and resolves as any listed name does
+(`listedName`); `admin box update --name` still edits the configured name,
+which `configuredName` arguments match.
 
 The console's row therefore carries both: `Sandbox.Name` is the display name
 and `Sandbox.ConfigName` the configured one (`toTUISandbox`, trimmed the way
 the server trims it before falling back to the id). Its status line says the
-configured name under the cursor, since that is the handle every other command
-takes, and rename is refused on a row where the two differ (`nameIsTitle`) —
-the name on screen is the terminal's, and a rename would change nothing there.
+configured name under the cursor, since that is the handle the discobox was
+created with and the row has usually stopped showing it. Rename sets the meta
+name, which the row then shows, so it is offered on every row.
 
 ## Choosing a Sandbox Interactively
 

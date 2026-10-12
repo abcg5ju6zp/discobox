@@ -1035,10 +1035,17 @@ name typed first — so `e` opens the input dialog on the name the discobox
 *already has*: the usual edit is a word added to a name that is nearly right,
 and a blank line would make that a retype. Enter on the unchanged name is the
 same as Esc, since neither asked for anything. It takes exactly one discobox,
-because a name is a name and a selection cannot share one. A row named by its
-primary terminal's window title (`Sandbox.nameIsTitle`) refuses rename with the
-reason: the configured name is not the one on screen there, so accepting a new
-one would visibly change nothing. It is deliberately
+because a name is a name and a selection cannot share one. The name it sets is
+the one in the discobox's meta (`DataSource.Rename`, the write `discobox rename`
+makes, ADR 26-10-12-026), which the row shows from then on in place of the
+title its harness set — so a row showing a title can be renamed, where it could
+not while rename edited the configured name the row was not showing. A stopped
+discobox is started to take it, as it is for a tag, so an archived one, which
+cannot be started, refuses it with the reason. Enter on what is shown is still
+"unchanged" on a box nobody has named: that text is the harness's title,
+spinner glyph and all, and accepting it would freeze it as the name. An empty
+line clears a name that was given (`Sandbox.GivenName`), which puts the title
+back, as `discobox rename` with no name does. It is deliberately
 absent from `verbs`/`interactions`, which is what keeps it off the workspace
 screen: rename needs a name typed into a dialog, and a discobox you are
 already looking at is one you know the name of.
@@ -1046,12 +1053,11 @@ already looking at is one you know the name of.
 **The status line's right end names the discobox under the cursor**
 (`statusIdentity`): its id, and the name it is configured with. Neither is on
 the row. The name a row shows is the server's display name, which is the
-primary terminal's window title as soon as the harness has set one — so the
-configured name, the one rename edits and every `discobox` command takes, is
-exactly what goes missing while a box is working; and the id was on no screen
-but the workspace banner, which meant attaching to read it. The row carries
-both names (`Sandbox.Name`, `Sandbox.ConfigName`), which is also what the
-rename guard asks rather than a flag computed for it on the way in.
+name it was given or, until it has one, the primary terminal's window title —
+so the configured name, the handle the box was created with and a `discobox`
+command still takes, is exactly what goes missing while a box is working; and
+the id was on no screen but the workspace banner, which meant attaching to read
+it. The row carries both names (`Sandbox.Name`, `Sandbox.ConfigName`).
 
 The id leads and the name follows, in the banner's own colors — muted for the
 id, which is there to be looked up rather than read, plain text for the name —

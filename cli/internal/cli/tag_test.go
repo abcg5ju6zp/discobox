@@ -12,9 +12,11 @@ import (
 )
 
 // tagTestServer serves rmTestServer's listing and the meta change, applying
-// each change to the tags the docs discobox holds — wip, to begin with — the
-// way the sandbox does, and answering with the sandbox. It records "list" for
-// the listing and "meta sandboxID change" for each change.
+// each change to the tags the docs discobox holds — wip, to begin with — and
+// to its name, the way the sandbox does, and answering with the sandbox: a
+// meta holding only what is set, and listed by its name when it has one and by
+// "docs" when it does not. It records "list" for the listing and "meta
+// sandboxID change" for each change.
 func tagTestServer(t *testing.T, calls *[]string) *httptest.Server {
 	t.Helper()
 	t.Setenv(hostid.EnvVar, "host_0123456789abcdef")
@@ -23,6 +25,7 @@ func tagTestServer(t *testing.T, calls *[]string) *httptest.Server {
 		namedSandboxJSON(rmAPIID, "api", "api", "present")
 	tags := map[string]string{"wip": ""}
 	description := "Fixing the flaky test"
+	name := ""
 	server := httptest.NewServer(ignoringPortProbe(func(w http.ResponseWriter, r *http.Request) {
 		const collection = "/projects/project-1/sandboxes"
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -33,6 +36,7 @@ func tagTestServer(t *testing.T, calls *[]string) *httptest.Server {
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, collection+"/") && strings.HasSuffix(r.URL.Path, "/meta"):
 			sandboxID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, collection+"/"), "/meta")
 			var change struct {
+				Name        *string           `json:"name,omitempty"`
 				Description *string           `json:"description,omitempty"`
 				SetTags     map[string]string `json:"setTags,omitempty"`
 				RemoveTags  []string          `json:"removeTags,omitempty"`
@@ -51,8 +55,15 @@ func tagTestServer(t *testing.T, calls *[]string) *httptest.Server {
 			if change.Description != nil {
 				description = *change.Description
 			}
-			meta, _ := json.Marshal(map[string]any{"description": description, "tags": tags})
-			sandbox := strings.TrimSuffix(namedSandboxJSON(sandboxID, "docs", "docs", "present"), "}") + `,"meta":` + string(meta) + `}`
+			if change.Name != nil {
+				name = strings.TrimSpace(*change.Name)
+			}
+			held, listed := map[string]any{"description": description, "tags": tags}, "docs"
+			if name != "" {
+				held["name"], listed = name, name
+			}
+			meta, _ := json.Marshal(held)
+			sandbox := strings.TrimSuffix(namedSandboxJSON(sandboxID, "docs", listed, "present"), "}") + `,"meta":` + string(meta) + `}`
 			_, _ = w.Write([]byte(sandbox))
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)

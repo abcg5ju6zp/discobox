@@ -1,6 +1,6 @@
 ---
 name: discobox
-description: You are running inside a discobox — a disposable sandbox holding the user's source, where you have root over everything inside and can reach nothing of theirs outside. Use when orienting, when something outside the box seems missing or unreachable, before telling the user how to reach what you built or ran, when asked to describe, tag or label this box (its description and tags live in ~/.discobox/meta.json), or to answer a question about discobox itself.
+description: You are running inside a discobox — a disposable sandbox holding the user's source, where you have root over everything inside and can reach nothing of theirs outside. Use when orienting, when something outside the box seems missing or unreachable, before telling the user how to reach what you built or ran, when asked to name, rename, describe, tag or label this box (its name, description and tags live in ~/.discobox/meta.json), or to answer a question about discobox itself.
 ---
 
 # You are in a discobox
@@ -226,10 +226,11 @@ Do not regenerate the file. Edits are surgical so that your replies and their
 notes both survive; rewriting it from what you parsed deletes whatever you did
 not.
 
-## This box's description and tags
+## This box's name, description and tags
 
-`~/.discobox/meta.json` is what the user sees this box as: a description of
-what it is for, and tags that label it. It is yours to read and edit, and it is
+`~/.discobox/meta.json` is what the user sees this box as: the name it is
+listed by, a description of what it is for, and tags that label it. It is yours
+to read and edit, and it is
 the only place they live — the user's `discobox ls` and window show what it
 held when the box last reported, within about fifteen seconds of a change, and filter
 on its tags (`discobox ls --tag wip`). When the user changes them from outside,
@@ -237,21 +238,28 @@ the change is written into this same file.
 
 ```json
 {
+  "name": "Reaper race",
   "description": "Fix the reaper race in pool sync.\nRepro in pool_sync_test.go.",
   "tags": {"wip": "", "ticket": "ENG-12", "area": "pool"}
 }
 ```
 
+- `name` — what the box is called: one line, at most 128 bytes. When set it is
+  the NAME the user's `discobox ls` and window show, in place of the title
+  your own session set. This is how you rename the box when asked to; a
+  session title (`/rename` and the like) does not last. Leave it out, or empty,
+  and the box is listed by that title again.
 - `description` — what the box is for. The listing shows its first line, so
   make that line stand on its own; more lines are for detail.
 - `tags` — key to value. An empty value makes a plain label (`"wip": ""`).
   Keys have no spaces, `=` or `,`; values are one line with no `,`. At most
   64 tags.
-- No other fields. A file that is not exactly this shape is reported as invalid
+- All three are optional, and there are no other fields. A file that is not
+  this shape is reported as invalid
   and ignored — the user keeps seeing the last valid version — and a change
   from outside is refused until it is fixed, so check it parses after editing
   (`jq . ~/.discobox/meta.json`).
-- No file means no description and no tags. To clear them, write `{}` rather
+- No file means no name, no description and no tags. To clear them, write `{}` rather
   than deleting the file: a missing file may be refilled with the description
   the box was created with the next time it starts.
 
@@ -406,6 +414,7 @@ discobox rm         archive boxes (alias: delete)
 discobox start      start boxes
 discobox stop       stop boxes
 discobox restart    restart boxes
+discobox rename     name a box
 discobox attach     open a box's window
 discobox shell      a command, or a login shell, in a box
 discobox apply      cherry-pick a box's commits onto the working tree
@@ -429,7 +438,8 @@ guessed at. `discobox admin box purge` destroys one and its data.
 `discobox start`, `stop`, and `restart` take boxes the same way.
 `discobox tag BOX KEY[=VALUE]... [--rm KEY]...` sets and removes a box's tags
 from outside it (starting it if it is stopped), and `discobox ls --tag KEY`
-lists by them.
+lists by them. `discobox rename BOX [NAME]` names a box the same way, and with
+no NAME clears the name.
 
 Do not invent flags for them. Name the command and say to check `--help`.
 
@@ -446,7 +456,7 @@ With it, you may create discoboxes with `discobox new`, cut from the directory
 you run it in; list and read them (`admin box ls`, `admin box get`); read
 and type into the terminals of the ones you created (`admin terminal screen`,
 `input`, `wait`); start, stop, and restart the ones you created
-(`discobox start`, `stop`, `restart`); tag them (`discobox tag`); and list and answer credential
+(`discobox start`, `stop`, `restart`); tag and name them (`discobox tag`, `discobox rename`); and list and answer credential
 requests (`discobox secret request ls`, `approve`, `deny`). Nothing else: the
 user's other commands above need their machine or reach further than a box
 may, and are refused. A box you create is the user's,

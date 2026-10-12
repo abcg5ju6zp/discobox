@@ -845,6 +845,7 @@ func toTUISandbox(sb apimodel.Sandbox, hostID string) tui.Sandbox {
 	row.Tags = sandboxmeta.TagStrings(sandboxTags(sb))
 	if meta, ok := sb.Meta.Get(); ok {
 		row.Description = sandboxmeta.Summary(meta.Description.Or(""))
+		row.GivenName = strings.TrimSpace(meta.Name.Or(""))
 	}
 	if cfg, ok := sb.HarnessConfig.Get(); ok {
 		row.Harness = cfg.Slug
@@ -1312,15 +1313,15 @@ func (d *apiDataSource) Do(ctx context.Context, verb tui.Verb, sandboxID string)
 	}
 }
 
-// Rename gives a sandbox a new name — the one piece of its config the window
-// edits, through the same PATCH `discobox admin box update --name` uses.
+// Rename gives a sandbox a new name, through the meta write `discobox rename`
+// makes (ADR 26-10-12-026): the name is the sandbox's own, in its meta file,
+// and is what a listing shows for it from then on. It is not the configured
+// name, which `discobox admin box update --name` edits and a row stops showing
+// as soon as the harness titles its terminal.
 func (d *apiDataSource) Rename(ctx context.Context, sandboxID, name string) error {
 	d = d.at(sandboxID)
-	body := &apimodel.UpdateSandboxBody{}
-	body.SetConfig(apiclientgen.NewOptSandboxUpdateConfig(apimodel.SandboxUpdateConfig{
-		Name: apiclientgen.NewOptString(name),
-	}))
-	res, err := d.client.UpdateSandbox(ctx, body, apiclientgen.UpdateSandboxParams{ProjectId: d.projectID, SandboxId: sandboxID})
+	body := &apimodel.UpdateSandboxMetaBody{Name: apiclientgen.NewOptString(name)}
+	res, err := d.client.UpdateSandboxMeta(ctx, body, apiclientgen.UpdateSandboxMetaParams{ProjectId: d.projectID, SandboxId: sandboxID})
 	if err != nil {
 		return err
 	}

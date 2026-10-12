@@ -255,8 +255,11 @@ type fakeSource struct {
 	// every server, folder and tag rather than on its own folder.
 	freshFolder bool
 	runs        []RunRequest
-	did         []string     // "verb id"
-	renames     []string     // "id name"
+	did         []string // "verb id"
+	renames     []string // "id name"
+	// titles is what each renamed box was showing before it was given a name,
+	// which is what clearing the name shows again.
+	titles      map[string]string
 	editors     []editorOpen // the sandboxes handed to a host tool, and which one
 	toolLookups []string     // the sandboxes whose tools were asked for
 	opens       []string     // "action id colsxrows"
@@ -314,6 +317,7 @@ func newFakeSource(sandboxes ...Sandbox) *fakeSource {
 			HostKey:        testHostKey,
 		},
 		sandboxes: sandboxes,
+		titles:    map[string]string{},
 		createdID: "sbx_created",
 		harnesses: testHarnesses(),
 	}
@@ -574,7 +578,16 @@ func (f *fakeSource) Rename(_ context.Context, id, name string) error {
 	}
 	for i, sb := range f.sandboxes {
 		if sb.ID == id {
+			// What the server does with a meta name: it is what the row shows
+			// when set, and the title is shown again when it is cleared.
+			if f.sandboxes[i].GivenName == "" {
+				f.titles[id] = sb.Name
+			}
+			f.sandboxes[i].GivenName = name
 			f.sandboxes[i].Name = name
+			if name == "" {
+				f.sandboxes[i].Name = f.titles[id]
+			}
 		}
 	}
 	return nil

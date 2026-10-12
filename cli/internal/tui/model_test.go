@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -622,6 +623,61 @@ func TestRenameCancelsWithoutCalling(t *testing.T) {
 	}
 }
 
+// An empty name clears one that was given, which puts the title back; on a box
+// nobody has named there is nothing to clear, and it asks for nothing.
+func TestRenameWithAnEmptyNameClearsAGivenOne(t *testing.T) {
+	t.Parallel()
+	ds := newFakeSource(testSandboxes()...)
+	m := newTestModel(t, ds)
+	emptyTheName := func() {
+		t.Helper()
+		send(t, m, keyPress("e"))
+		if m.dialog == nil || m.dialog.kind != dlgInput {
+			t.Fatalf("e should open an input dialog, got %+v", m.dialog)
+		}
+		for range len([]rune(m.dialog.input.Value())) {
+			send(t, m, keyPress("backspace"))
+		}
+		send(t, m, keyPress("enter"))
+	}
+	send(t, m, keyPress("tab"))
+	emptyTheName()
+	if len(ds.renames) != 0 {
+		t.Fatalf("an empty name on a box with none should rename nothing, got %v", ds.renames)
+	}
+
+	send(t, m, keyPress("e"))
+	send(t, m, typeString(" again")...)
+	send(t, m, keyPress("enter"))
+	emptyTheName()
+	want := []string{"sbx_one fix flaky pool reaper tests again", "sbx_one "}
+	if !slices.Equal(ds.renames, want) {
+		t.Fatalf("renames = %q, want %q", ds.renames, want)
+	}
+}
+
+// An archived box cannot be started to take a name, so rename says so rather
+// than failing against the server.
+func TestRenameRefusedOnAnArchivedBox(t *testing.T) {
+	t.Parallel()
+	ds := newFakeSource(testSandboxes()...)
+	m := newTestModel(t, ds)
+	// As TestArchivedSandboxesCannotBeDiffed reaches the archived one.
+	showAllFolders(t, m)
+	send(t, m, keyPress("A"), keyPress("G"))
+	if targets := m.list.targets(); len(targets) != 1 || targets[0].State != StateArchived {
+		t.Fatalf("targets = %+v, want the archived box", targets)
+	}
+	send(t, m, keyPress("e"))
+
+	if m.dialog == nil || m.dialog.kind != dlgMessage || !strings.Contains(dialogText(m), "unarchive it first") {
+		t.Fatalf("rename on an archived box should say why, got %q", dialogText(m))
+	}
+	if len(ds.renames) != 0 {
+		t.Fatalf("renames = %v", ds.renames)
+	}
+}
+
 // Rename takes one box: a name is a name, and several rows cannot share one.
 func TestRenameTakesExactlyOneBox(t *testing.T) {
 	t.Parallel()
@@ -637,9 +693,11 @@ func TestRenameTakesExactlyOneBox(t *testing.T) {
 	}
 }
 
-// A row named by its terminal's title refuses rename: the configured name is
-// not the one on screen, so accepting a new one would visibly change nothing.
-func TestRenameRefusedWhenNameIsTerminalTitle(t *testing.T) {
+// A row named by its terminal's title is renamed like any other: rename sets
+// the name in the discobox's meta, which the row then shows in place of the
+// title (ADR 26-10-12-026). While it edited the configured name, which such a
+// row is not showing, it was refused here.
+func TestRenameTakesARowNamedByItsTerminalTitle(t *testing.T) {
 	t.Parallel()
 	boxes := testSandboxes()
 	boxes[0].ConfigName = "brave-otter"
@@ -647,11 +705,11 @@ func TestRenameRefusedWhenNameIsTerminalTitle(t *testing.T) {
 	m := newTestModel(t, ds)
 	send(t, m, keyPress("tab"), keyPress("e"))
 
-	if m.dialog == nil || m.dialog.kind != dlgMessage {
-		t.Fatalf("rename on a title-named row should say why, got %+v", m.dialog)
+	if m.dialog == nil || m.dialog.kind != dlgInput {
+		t.Fatalf("rename on a title-named row should ask for the name, got %+v", m.dialog)
 	}
-	if len(ds.renames) != 0 {
-		t.Fatalf("renames = %v", ds.renames)
+	if got := m.dialog.input.Value(); got != boxes[0].Name {
+		t.Fatalf("the field opens on %q, want the name the row shows, %q", got, boxes[0].Name)
 	}
 }
 

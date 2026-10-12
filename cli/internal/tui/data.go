@@ -221,11 +221,17 @@ type Sandbox struct {
 	// generated names do. It is empty when the box was never named, and the
 	// display name is then the id.
 	//
-	// It is carried because it is the handle the rest of the world knows the
-	// box by — what rename edits, what a `disco` command takes — and the row
-	// is not showing it. The status line says it under the cursor, and the
-	// rename guard reads it (nameIsTitle).
+	// It is carried because it is the handle the box was created with, which
+	// a `disco` command still takes, and the row is not showing it. The status
+	// line says it under the cursor. Rename does not edit it: it sets the name
+	// in the box's meta, which Name then shows (ADR 26-10-12-026).
 	ConfigName string
+
+	// GivenName is the name in the discobox's meta, the one rename sets, and
+	// empty when nobody has named it. Name is it whenever it is set, so the
+	// row does not draw it; it is here so rename can tell a name that can be
+	// cleared from a title that cannot.
+	GivenName string
 
 	// Tags are the discobox's tags as it last reported them, spelled `key` or
 	// `key=value` in key order, and Description is the first line of its
@@ -665,17 +671,6 @@ func (h Harness) flagName() string {
 }
 
 func (s Sandbox) hasDiff() bool { return s.Diff.Known && s.Diff.Files > 0 }
-
-// nameIsTitle reports whether the row's name came from the primary terminal's
-// window title rather than from the name the box is configured with. Rename
-// edits the configured name — which such a row is not showing — so it is
-// disabled there.
-//
-// A box with no configured name is named by its id, which rename does change
-// what is shown for, so only a differing name counts as a title.
-func (s Sandbox) nameIsTitle() bool {
-	return s.ConfigName != "" && s.Name != s.ConfigName
-}
 
 // attachable reports whether there is a container to attach to. It asks the
 // power axis, not the lifecycle one, because that is the question: the pool
@@ -1954,8 +1949,10 @@ type DataSource interface {
 	// Do runs a lifecycle verb against one sandbox.
 	Do(ctx context.Context, verb Verb, sandboxID string) error
 
-	// Rename gives one sandbox a new name. It is not a Verb: a verb is a word
-	// the window already has, and this one needs the name typed first.
+	// Rename gives one sandbox a new name: the one in its meta, which its row
+	// shows from then on whatever its harness titles the terminal. It is not a
+	// Verb: a verb is a word the window already has, and this one needs the
+	// name typed first.
 	Rename(ctx context.Context, sandboxID, name string) error
 
 	// Tools is every tool one sandbox can be worked on with: the CLI's and the

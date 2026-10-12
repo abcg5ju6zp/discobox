@@ -62,30 +62,7 @@ ID, or a short prefix of that ID.`,
 			if err != nil {
 				return err
 			}
-			projectID, err := a.projectIDValue()
-			if err != nil {
-				return err
-			}
-			client, err := a.apiClient()
-			if err != nil {
-				return err
-			}
-			var sandboxes []apimodel.Sandbox
-			if !allFullSandboxIDs(args[:1]) {
-				sandboxes, err = a.listProjectSandboxes(cmd.Context(), client, projectID, false, nil)
-				if err != nil {
-					return err
-				}
-			}
-			sandboxID, err := a.resolveSandboxReference(cmd.Context(), client, projectID, args[0], sandboxes, listedName)
-			if err != nil {
-				return err
-			}
-			res, err := client.UpdateSandboxMeta(cmd.Context(), body, apiclientgen.UpdateSandboxMetaParams{ProjectId: projectID, SandboxId: sandboxID})
-			if err != nil {
-				return err
-			}
-			sandbox, err := expectResponse[apimodel.Sandbox](res)
+			sandbox, err := a.changeSandboxMeta(cmd, args[0], body)
 			if err != nil {
 				return err
 			}
@@ -95,6 +72,37 @@ ID, or a short prefix of that ID.`,
 	cmd.Flags().StringArrayVar(&removed, "rm", nil, "Remove this tag, by KEY; repeat to remove several")
 	cmd.Flags().StringVar(&description, "description", "", `Replace the description; "" clears it`)
 	return cmd
+}
+
+// changeSandboxMeta carries a change to the meta of the discobox reference
+// names, and answers with the discobox as it then is. The reference is
+// resolved against the listing by the name `discobox ls` shows, except a full
+// ID, which is trusted as it stands without listing anything.
+func (a *App) changeSandboxMeta(cmd *cobra.Command, reference string, body *apimodel.UpdateSandboxMetaBody) (*apimodel.Sandbox, error) {
+	projectID, err := a.projectIDValue()
+	if err != nil {
+		return nil, err
+	}
+	client, err := a.apiClient()
+	if err != nil {
+		return nil, err
+	}
+	var sandboxes []apimodel.Sandbox
+	if !allFullSandboxIDs([]string{reference}) {
+		sandboxes, err = a.listProjectSandboxes(cmd.Context(), client, projectID, false, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+	sandboxID, err := a.resolveSandboxReference(cmd.Context(), client, projectID, reference, sandboxes, listedName)
+	if err != nil {
+		return nil, err
+	}
+	res, err := client.UpdateSandboxMeta(cmd.Context(), body, apiclientgen.UpdateSandboxMetaParams{ProjectId: projectID, SandboxId: sandboxID})
+	if err != nil {
+		return nil, err
+	}
+	return expectResponse[apimodel.Sandbox](res)
 }
 
 // tagChange is the request for what was asked: every KEY[=VALUE] set, every
