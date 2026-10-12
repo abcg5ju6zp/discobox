@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,10 +33,15 @@ const postedInventory = `{
 	"screens": {"exec-1": {"rows": 2, "cols": 10, "lines": ["hello", "$"], "fromTheFuture": 1}}
 }`
 
+// stateReportSequence orders the reports a test makes. A clock does not: two
+// reports can land in one tick of a coarse one, and the second is then
+// ignored as no newer than the first.
+var stateReportSequence atomic.Int64
+
 func reportRuntimeState(t *testing.T, service *Service, state string) {
 	t.Helper()
 	if _, err := service.store.ApplySandboxStateReports(context.Background(), store.SandboxStateReportBatch{
-		PoolID: "pool-1", BootID: "boot-1", Sequence: time.Now().UnixNano(), ReportedAt: time.Now().UTC(), Complete: true,
+		PoolID: "pool-1", BootID: "boot-1", Sequence: stateReportSequence.Add(1), ReportedAt: time.Now().UTC(), Complete: true,
 		Reports: []store.SandboxStateReport{{SandboxID: "sb-1", State: state}},
 	}); err != nil {
 		t.Fatalf("state report: %v", err)
