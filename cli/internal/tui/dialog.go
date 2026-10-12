@@ -1128,6 +1128,10 @@ func (d *dialog) viewItems(st *styles, z *zones, top, inner, room int) string {
 		b.WriteString("\n")
 	}
 	if room < len(d.items) {
+		// The row that says there are more is the menu's too: the wheel over
+		// it walks the menu, as it does over a row, rather than falling
+		// through to the body above. It is no row, so a press on it runs none.
+		z.markRow(hit{kind: hitDialogItem, idx: -1}, top+last-first, inner+2*dialogPadLeft)
 		b.WriteString(st.dimText.Render(pad(truncate(fmt.Sprintf("  … %d–%d of %d · ↑/↓ for more", first+1, last, len(d.items)), inner), inner)))
 		b.WriteString("\n")
 	}
