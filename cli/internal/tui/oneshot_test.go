@@ -223,6 +223,11 @@ func TestARunWindowBecomesTheAttachOnWhatItMade(t *testing.T) {
 	d.key("ctrl+a")
 	d.key(paneDetachAlt)
 	d.wait("the window to close", func() bool { return m.quit })
+	// And it is what Run hands back, so the command can say which discobox
+	// is still running once the window has taken the screen away with it.
+	if made := m.made(); made == nil || made.ID != ds.createdID {
+		t.Fatalf("made = %+v, want the discobox this window made", made)
+	}
 }
 
 // A create that failed takes its wait down with it: the report belongs on a
@@ -278,6 +283,9 @@ func TestEscOnAOneShotWaitLeavesTheDiscoboxStarting(t *testing.T) {
 	}
 	if m.primary() != nil {
 		t.Fatal("leaving the wait should not attach to anything")
+	}
+	if made := m.made(); made != nil {
+		t.Fatalf("made = %+v, want nothing named before the create came back", made)
 	}
 	close(ds.runGate)
 }

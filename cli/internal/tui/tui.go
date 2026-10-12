@@ -11,14 +11,19 @@ import (
 //
 // The alternate screen is asked for by the view rather than by a program option,
 // because Bubble Tea v2 decides it per frame.
-func Run(ctx context.Context, ds DataSource, options ...Option) error {
+//
+// A window opened on one run (WithRun) also returns the discobox that run made,
+// and nil if it never made one: the alternate screen takes everything the window
+// showed with it, so the command that opened it is what is left to say which
+// discobox it was.
+func Run(ctx context.Context, ds DataSource, options ...Option) (*Sandbox, error) {
 	model := New(ctx, ds, options...)
 	program := tea.NewProgram(model, tea.WithContext(ctx))
 	if _, err := program.Run(); err != nil {
-		return err
+		return model.made(), err
 	}
 	// A window opened as an attach ends with whatever ended the attach, so the
 	// command that opened it fails the way a plain attach fails. Everything
 	// else ends with nothing to say. See Model.exit.
-	return model.exitErr
+	return model.made(), model.exitErr
 }

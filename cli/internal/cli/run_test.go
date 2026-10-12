@@ -333,7 +333,8 @@ func runAttachesVirtualPrimaryTerminal(t *testing.T, flags []string) {
 
 	cmd := NewRootCommand()
 	cmd.SetOut(&bytes.Buffer{})
-	cmd.SetErr(&bytes.Buffer{})
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
 	args := []string{"--server", server.URL, "--project", "project-1", "new", "-C", repo + "@HEAD"}
 	args = append(args, flags...)
 	cmd.SetArgs(append(args, "fix", "tests"))
@@ -345,6 +346,11 @@ func runAttachesVirtualPrimaryTerminal(t *testing.T, flags []string) {
 	}
 	if want := "/api/projects/project-1/sandboxes/" + sandboxID + "/execs/primary/attach"; attachPath != want {
 		t.Fatalf("attach path = %q, want %q", attachPath, want)
+	}
+	// The attach is over, so the discobox it was on is named last, where
+	// somebody back at their shell will see it.
+	if want := "Discobox " + sandboxID + " (run-test); \"discobox attach " + sandboxID + "\" to return to it\n"; !strings.HasSuffix(stderr.String(), want) {
+		t.Fatalf("stderr = %q, want it to end with %q", stderr.String(), want)
 	}
 }
 

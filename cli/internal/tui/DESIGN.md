@@ -1174,7 +1174,9 @@ streaming a terminal of its own.
   `created` — so every way out of the workspace is the way out of the window:
   the leader's `d` and the primary session ending both go through `Model.exit`,
   and an attach that never came up exits carrying its own failure, which `Run`
-  hands back as the command's error. The key still reads `detach`, because that
+  hands back as the command's error. A run's window also hands back the
+  discobox it made (`Model.made`), and `discobox new` names it on stderr once
+  the window is gone, since the screen that named it went with the window. The key still reads `detach`, because that
   is what it does to the discobox — nothing stops — and the header drops the
   `leader q quit` half beside it, since quit and detach are the same act in
   such a window and offering both reads as a choice between them.
