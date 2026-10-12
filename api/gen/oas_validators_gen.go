@@ -1573,6 +1573,8 @@ func (s GitSourceDelivery) Validate() error {
 		return nil
 	case "push":
 		return nil
+	case "cache":
+		return nil
 	default:
 		return errors.Errorf("invalid value: %v", s)
 	}

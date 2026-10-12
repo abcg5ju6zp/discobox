@@ -293,6 +293,12 @@ func (s *GitSource) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.CacheKey.Set {
+			e.FieldStart("cacheKey")
+			s.CacheKey.Encode(e)
+		}
+	}
+	{
 		if s.Delivery.Set {
 			e.FieldStart("delivery")
 			s.Delivery.Encode(e)
@@ -346,17 +352,18 @@ func (s *GitSource) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfGitSource = [10]string{
-	0: "checkout",
-	1: "delivery",
-	2: "dataKey",
-	3: "destination",
-	4: "kind",
-	5: "localDirectory",
-	6: "slug",
-	7: "upstreamUrl",
-	8: "url",
-	9: "workspace",
+var jsonFieldsNameOfGitSource = [11]string{
+	0:  "checkout",
+	1:  "cacheKey",
+	2:  "delivery",
+	3:  "dataKey",
+	4:  "destination",
+	5:  "kind",
+	6:  "localDirectory",
+	7:  "slug",
+	8:  "upstreamUrl",
+	9:  "url",
+	10: "workspace",
 }
 
 // Decode decodes GitSource from json.
@@ -377,6 +384,16 @@ func (s *GitSource) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"checkout\"")
+			}
+		case "cacheKey":
+			if err := func() error {
+				s.CacheKey.Reset()
+				if err := s.CacheKey.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cacheKey\"")
 			}
 		case "delivery":
 			if err := func() error {
@@ -409,7 +426,7 @@ func (s *GitSource) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"destination\"")
 			}
 		case "kind":
-			requiredBitSet[0] |= 1 << 4
+			requiredBitSet[0] |= 1 << 5
 			if err := func() error {
 				if err := s.Kind.Decode(d); err != nil {
 					return err
@@ -478,7 +495,7 @@ func (s *GitSource) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [2]uint8{
-		0b00010000,
+		0b00100000,
 		0b00000000,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
@@ -642,6 +659,8 @@ func (s *GitSourceDelivery) Decode(d *jx.Decoder) error {
 		*s = GitSourceDeliveryClone
 	case GitSourceDeliveryPush:
 		*s = GitSourceDeliveryPush
+	case GitSourceDeliveryCache:
+		*s = GitSourceDeliveryCache
 	default:
 		*s = GitSourceDelivery(v)
 	}

@@ -196,9 +196,7 @@ func newFromInstance(_ context.Context, instance *model.SandboxProviderInstance,
 		_ = driver.Close()
 		return nil, err
 	}
-	definition := Definition()
-	definition.LocalSourceRoots = localSourceRoots()
-	return poolruntime.New(engine, definition, poolManager), nil
+	return poolruntime.New(engine, Definition(), poolManager), nil
 }
 
 // hostShares are the host directories every pool VM exports to its guest.
@@ -229,23 +227,6 @@ func hostMounts() []dockerworker.HostMount {
 		mounts = append(mounts, dockerworker.HostMount{Source: share.HostPath, ReadOnly: share.ReadOnly})
 	}
 	return mounts
-}
-
-// localSourceRoots are the host paths a sandbox on this backend can clone a
-// local source directory out of, which is exactly the set the guest is given.
-//
-// Publishing them is what stops the client pushing a repository it does not
-// have to: a source under one of these roots is delivered by the sandbox
-// cloning it through the share (see server/internal/resources/sandboxes,
-// sourceNeedsPush). Unlike the Docker provider there is no remote-daemon case
-// to exclude — a Virtualization.framework VM is always on this machine.
-func localSourceRoots() []string {
-	shares := hostShares()
-	roots := make([]string, 0, len(shares))
-	for _, share := range shares {
-		roots = append(roots, share.HostPath)
-	}
-	return roots
 }
 
 // engineConfig renders the pool engine configuration for one provider instance.

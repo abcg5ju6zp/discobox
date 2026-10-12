@@ -80,6 +80,11 @@ const (
 	// source fields happen to be set.
 	GitSourceDeliveryClone = "clone"
 	GitSourceDeliveryPush  = "push"
+	// GitSourceDeliveryCache has a client deliver the source into a namespace
+	// of the pool's cache for its remote, which the sandbox clones (ADR
+	// 26-10-10-545). It is every source created since; the two above are the
+	// record of how earlier ones were delivered.
+	GitSourceDeliveryCache = "cache"
 
 	// SandboxUpgradePolicyAutomatic and SandboxUpgradePolicyManual are a
 	// project's answer to whether its stopped and failed sandboxes follow their
@@ -127,6 +132,7 @@ var (
 	GitSourceDeliveries = []string{
 		GitSourceDeliveryClone,
 		GitSourceDeliveryPush,
+		GitSourceDeliveryCache,
 	}
 	SandboxUpgradePolicies = []string{
 		SandboxUpgradePolicyAutomatic,
@@ -451,8 +457,13 @@ type HarnessConfigSecret struct {
 
 // GitSource describes a Git source to materialize into a sandbox.
 type GitSource struct {
-	Kind           string  `json:"kind" doc:"Source kind. Currently only git is supported." enum:"git"`
-	Delivery       string  `json:"delivery,omitempty" doc:"How the source reaches the sandbox: clone fetches it from url or localDirectory, push has the client push it into the sandbox's Git repository. Defaults to clone." enum:"clone,push"`
+	Kind     string `json:"kind" doc:"Source kind. Currently only git is supported." enum:"git"`
+	Delivery string `json:"delivery,omitempty" doc:"How the source reaches the sandbox, decided by the server and recorded at create. cache is every source created now. A client delivers it into a Git namespace of the pool's cache for the source's remote, and the sandbox clones it from the pool; the sandbox waits in the awaiting_source phase until the delivery is reported complete. clone and push are how earlier discoboxes were delivered and keep their meaning for them. clone means the sandbox fetched it from url, or from localDirectory through its pool. push means the client pushed it into a repository the pool made for that sandbox." enum:"clone,push,cache"`
+	// CacheKey names the pool cache a cache-delivered source is delivered
+	// into (ADR 26-10-10-545 §2). It is recorded rather than derived again by
+	// each stage that needs it, and it is the server's: whatever a client
+	// sends is replaced at create.
+	CacheKey       *string `json:"cacheKey,omitempty" doc:"The pool's Git cache this source is delivered into, set by the server for a cache-delivered source. It is the source's remote, normalized to host and path, or a key for the client's own directory when the source has no remote. Sources that share it share one object store on a pool, so a delivery sends only what the pool has not been sent before."`
 	Slug           *string `json:"slug,omitempty" doc:"Stable URL-safe source slug used to address the source as a sandbox Git repository"`
 	URL            *string `json:"url,omitempty" doc:"Remote Git source URL" format:"uri"`
 	LocalDirectory *string `json:"localDirectory,omitempty" doc:"Absolute local Git repository directory accessible to the worker"`
@@ -477,12 +488,12 @@ type GitSource struct {
 	// there is nothing a sandbox can be bound to. Its commits stay in the user's
 	// repository, as NoLocalCommits' do.
 	NoLocalGitDirectory bool `json:"noLocalGitDirectory,omitempty" doc:"Whether localDirectory has no Git directory of its own at localDirectory/.git — a linked worktree or submodule checkout, whose .git is a file naming a Git directory elsewhere — so there is nothing at that path a sandbox's origin can be bound to. The client can only deliver it by push, and can still deliver it later."`
-	// UpstreamURL is where the client's own checkout of a local source pushes
-	// and pulls: the remote its checked-out branch tracks. The sandbox's origin
-	// is the client's repository, so without this the box would not know the
-	// project's real remote at all. It is configured as a remote named
-	// upstream and nothing tracks it.
-	UpstreamURL *string               `json:"upstreamUrl,omitempty" doc:"Network URL of the remote the local source's checked-out branch tracks on the client. The sandbox adds it as a remote named upstream when it materializes the source; the branch keeps tracking origin."`
+	// UpstreamURL is a local source's remote as its client reported it: the
+	// remote its checked-out branch tracks, else origin, else its only
+	// remote. A cache-delivered source has it as origin in the sandbox and is
+	// keyed by it on the pool (ADR 26-10-10-545 §§2, 6); a source delivered
+	// before that has it as a remote named upstream.
+	UpstreamURL *string               `json:"upstreamUrl,omitempty" doc:"Network URL of a local source's remote on the client. It is the remote its checked-out branch tracks, else origin, else its only remote. A cache-delivered source has it as the sandbox's origin remote, and it names the pool cache the source is delivered into. A source delivered before that has it as a remote named upstream."`
 	Checkout    *GitSourceCheckout    `json:"checkout,omitempty" doc:"Immutable checkout target and optional user-facing ref identity"`
 	Workspace   *GitSourceWorkspace   `json:"workspace,omitempty" doc:"Workspace materialization mode for this source"`
 	Destination *GitSourceDestination `json:"destination,omitempty" doc:"Sandbox destination paths for this source"`

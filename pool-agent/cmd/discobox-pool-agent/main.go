@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	poolagent "github.com/discobox-ai/discobox/pool-agent"
+	"github.com/discobox-ai/discobox/pool-agent/gitcache"
 )
 
 func main() {
@@ -16,6 +17,12 @@ func main() {
 	if err := poolagent.ExecSystemdChildIfRequested(); err != nil {
 		logger.Error("exec systemd child failed", "error", err)
 		os.Exit(1)
+	}
+
+	// A Git cache's pre-receive hook is this program (gitcache.RunPreReceive):
+	// git runs it for a sandbox's push, with what arrived still in quarantine.
+	if len(os.Args) > 1 && os.Args[1] == gitcache.PreReceiveCommand {
+		os.Exit(gitcache.RunPreReceive(os.Stdin, os.Stderr))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

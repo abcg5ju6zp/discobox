@@ -6093,6 +6093,12 @@ func (s *GitSource) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.CacheKey.Set {
+			e.FieldStart("cacheKey")
+			s.CacheKey.Encode(e)
+		}
+	}
+	{
 		if s.Delivery.Set {
 			e.FieldStart("delivery")
 			s.Delivery.Encode(e)
@@ -6158,19 +6164,20 @@ func (s *GitSource) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfGitSource = [12]string{
+var jsonFieldsNameOfGitSource = [13]string{
 	0:  "checkout",
-	1:  "delivery",
-	2:  "destination",
-	3:  "kind",
-	4:  "localDirectory",
-	5:  "noLocalCommits",
-	6:  "noLocalGitDirectory",
-	7:  "noLocalRepository",
-	8:  "slug",
-	9:  "upstreamUrl",
-	10: "url",
-	11: "workspace",
+	1:  "cacheKey",
+	2:  "delivery",
+	3:  "destination",
+	4:  "kind",
+	5:  "localDirectory",
+	6:  "noLocalCommits",
+	7:  "noLocalGitDirectory",
+	8:  "noLocalRepository",
+	9:  "slug",
+	10: "upstreamUrl",
+	11: "url",
+	12: "workspace",
 }
 
 // Decode decodes GitSource from json.
@@ -6191,6 +6198,16 @@ func (s *GitSource) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"checkout\"")
+			}
+		case "cacheKey":
+			if err := func() error {
+				s.CacheKey.Reset()
+				if err := s.CacheKey.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cacheKey\"")
 			}
 		case "delivery":
 			if err := func() error {
@@ -6213,7 +6230,7 @@ func (s *GitSource) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"destination\"")
 			}
 		case "kind":
-			requiredBitSet[0] |= 1 << 3
+			requiredBitSet[0] |= 1 << 4
 			if err := func() error {
 				if err := s.Kind.Decode(d); err != nil {
 					return err
@@ -6312,7 +6329,7 @@ func (s *GitSource) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [2]uint8{
-		0b00001000,
+		0b00010000,
 		0b00000000,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
@@ -6476,6 +6493,8 @@ func (s *GitSourceDelivery) Decode(d *jx.Decoder) error {
 		*s = GitSourceDeliveryClone
 	case GitSourceDeliveryPush:
 		*s = GitSourceDeliveryPush
+	case GitSourceDeliveryCache:
+		*s = GitSourceDeliveryCache
 	default:
 		*s = GitSourceDelivery(v)
 	}

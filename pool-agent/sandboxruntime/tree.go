@@ -38,7 +38,8 @@ import (
 // sandbox's, and only the sandbox can say which of its declared paths stay
 // behind and where they live, so the sandbox agent's export mode reads them,
 // from the sandbox's own image (ADR 0129 §1). `origins` is this pool's, and
-// this agent adds it.
+// this agent adds it: the bare repository made for the sandbox, or its
+// namespace of the pool's cache written out as one (ADR 26-10-10-545 §9).
 
 // ErrTreeExists refuses a restore onto a sandbox this pool already holds.
 // Overwriting would merge two sandboxes' data into one tree, and there is no
@@ -106,14 +107,23 @@ func (r *DockerSandboxRuntime) ExportTree(ctx context.Context, sandboxID string,
 	if err == nil && sb.Status == StatusRunning {
 		return nil, fmt.Errorf("export sandbox %s: %w", sandboxID, ErrSandboxRunning)
 	}
+	// A cache-delivered source's origin is a namespace of this pool's cache,
+	// and travels as the repository it would have been (ADR 26-10-10-545 §9):
+	// written under the tree's origins for the length of the export.
+	removeOrigins, err := r.exportCachedOrigins(ctx, sandboxID)
+	if err != nil {
+		return nil, fmt.Errorf("export sandbox %s: %w", sandboxID, err)
+	}
 	exported, err := r.runExportMode(ctx, sandboxID, image)
 	if err != nil {
+		removeOrigins()
 		return nil, fmt.Errorf("export sandbox %s: %w", sandboxID, err)
 	}
 	reader, writer := io.Pipe()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer removeOrigins()
 		err := composeTree(ctx, writer, exported, filepath.Join(root, sandboxtree.Origins))
 		// Closing what the sandbox is still writing ends its container: its next
 		// write fails, the copy returns, and the container is removed.
@@ -144,7 +154,7 @@ func composeTree(ctx context.Context, w io.Writer, exported io.Reader, origins s
 			return err
 		}
 	} else if !os.IsNotExist(err) {
-		// A sandbox with no push-delivered source has no origins directory.
+		// A sandbox with no client-delivered source has no origins directory.
 		// Absent is not empty and not an error: what is there is what travels.
 		return err
 	}

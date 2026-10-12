@@ -16,7 +16,6 @@ import (
 	"github.com/discobox-ai/discobox/configfile"
 	"github.com/discobox-ai/discobox/devimage"
 	"github.com/discobox-ai/discobox/endpoint"
-	"github.com/discobox-ai/discobox/internal/hostid"
 	"github.com/discobox-ai/discobox/releasemanifest"
 	"github.com/discobox-ai/discobox/server/internal/auth/discobot"
 	"github.com/discobox-ai/discobox/server/internal/harnessdefs"
@@ -104,15 +103,6 @@ type Config struct {
 	ConfigDir string `yaml:"configDir" env:"DISCOBOX_CONFIG_DIR" doc:"Operator-edited configuration. Defaults to <XDG config home>/discobox. It cannot relocate the configuration file itself, which is found from the environment." example:"/etc/discobox"`
 	CacheDir  string `yaml:"cacheDir" env:"DISCOBOX_CACHE_DIR" doc:"Reproducible data that may be deleted. Defaults to <XDG cache home>/discobox." example:"/var/cache/discobox"`
 	StateDir  string `yaml:"stateDir" env:"DISCOBOX_STATE_DIR" doc:"State that should survive a restart but is not precious. Defaults to <XDG state home>/discobox." example:"/var/lib/discobox/state"`
-
-	// HostID identifies the machine this server runs on, resolved the same way
-	// a CLI on this machine resolves it. A create request whose origin reports
-	// this host ID came from this filesystem, which is what makes binding a
-	// client's local source directory possible.
-	//
-	// Derived, never configured: an operator who set it would be claiming to
-	// be a different machine.
-	HostID string `yaml:"-"`
 
 	// Database settings.
 	DatabaseDSN     string        `yaml:"databaseDsn" env:"DATABASE_DSN" doc:"Database DSN: postgres:// or postgresql:// for PostgreSQL, sqlite3:///<path> for SQLite. Defaults to a SQLite file under dataDir." example:"postgres://discobox:password@db.internal:5432/discobox?sslmode=require"`
@@ -397,12 +387,6 @@ func Load() (*Config, error) {
 	// the environment, or nowhere: a running server no one can reach is worse
 	// than one that opened a socket nobody asked for.
 	cfg.Listen = requireLocalListenEndpoint(cfg.Listen)
-
-	hostID, err := hostid.Get()
-	if err != nil {
-		return nil, fmt.Errorf("resolve host ID: %w", err)
-	}
-	cfg.HostID = hostID
 
 	cfg.HarnessImages = harnessdefs.ImageOverridesFromEnv(os.Getenv)
 	if cfg.ReleaseManifest != "" {

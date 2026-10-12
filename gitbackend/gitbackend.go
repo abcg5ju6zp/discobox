@@ -80,6 +80,10 @@ type Backend struct {
 	Root string
 	// Config is the `-c` switches git is started with, ahead of http-backend.
 	Config []string
+	// Env is added to the backend's environment, after everything this
+	// package sets: a Git namespace, or what a hook the caller installed
+	// reads.
+	Env []string
 	// RemoteUser is who the backend is told authenticated the request. It is
 	// the ident a push's reflog entries carry when the repository's own
 	// configuration names nobody.
@@ -166,7 +170,8 @@ func Serve(w http.ResponseWriter, r *http.Request, b Backend, suffix string) {
 // advertisement, GIT_CONFIG_COUNT with its GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_*
 // pairs injects the very configuration GIT_CONFIG_NOSYSTEM and
 // GIT_CONFIG_GLOBAL are switching off, and GIT_ALTERNATE_OBJECT_DIRECTORIES
-// lends the repository objects it does not have.
+// lends the repository objects it does not have. A caller that means one of
+// them says so in Backend.Env.
 func backendEnv(r *http.Request, b Backend, suffix string) []string {
 	env := append(BaseEnv(),
 		"GIT_PROJECT_ROOT="+b.Root,
@@ -199,7 +204,7 @@ func backendEnv(r *http.Request, b Backend, suffix string) []string {
 	if r.ContentLength >= 0 {
 		env = append(env, "CONTENT_LENGTH="+strconv.FormatInt(r.ContentLength, 10))
 	}
-	return env
+	return append(env, b.Env...)
 }
 
 // BaseEnv is the part of the backend's environment every git run beside it

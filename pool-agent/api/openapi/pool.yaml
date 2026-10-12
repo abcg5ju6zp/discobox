@@ -73,11 +73,17 @@ components:
             properties:
                 checkout:
                     "$ref": "#/components/schemas/GitSourceCheckout"
+                cacheKey:
+                    description: The key of this pool's Git cache a cache-delivered source is delivered into. The source's namespace in it is the sandbox id and the source slug.
+                    maxLength: 2048
+                    minLength: 1
+                    type: string
                 delivery:
-                    description: How the source reaches the sandbox. clone fetches from url or localDirectory; push initializes an empty repository for the client to push into. Defaults to clone.
+                    description: How the source reaches the sandbox. cache is a namespace of this pool's Git cache named by cacheKey, which a client delivers into and the sandbox clones. clone and push are sources delivered before that. clone is fetched by the sandbox from url; push is a bare repository made for the sandbox, which the client pushes into. Defaults to clone.
                     enum:
                     - clone
                     - push
+                    - cache
                     type: string
                 dataKey:
                     description: Opaque stable key for durable pool-local data shared by sandboxes using this source.
@@ -97,7 +103,7 @@ components:
                     pattern: ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$
                     type: string
                 upstreamUrl:
-                    description: URL to configure as the checkout's upstream remote once the source is materialized. The checked-out branch keeps tracking origin.
+                    description: The source's own remote. A cache-delivered source's checkout has it as origin. A source delivered before that has it as a remote named upstream, and its branch tracks origin, the pool.
                     type: string
                 url:
                     format: uri

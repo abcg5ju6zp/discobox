@@ -6,8 +6,8 @@
 // Materializing is convergence, not a verb. A source is cloned, checked out
 // and its workspace snapshot restored exactly once, then marked inside its own
 // .git (sandboxconfig.SourceMaterializedMarker); every later pass only asserts
-// the origin remote, because re-materializing a workspace the sandbox has been
-// using would discard its work. git runs as whoever owns the checkout, in the
+// the remote it reaches its pool under, because re-materializing a workspace
+// the sandbox has been using would discard its work. git runs as whoever owns the checkout, in the
 // sandbox's own namespace, so nothing is chowned after it and no
 // safe.directory is needed.
 //
@@ -242,12 +242,14 @@ func (c *Converger) converge(ctx context.Context, revision int64, source sandbox
 		helper = c.cfg.CredentialHelper
 	}
 	if commit, ok := materializedAt(source.Target); ok {
-		// Once materialized the workspace is the sandbox's: only the origin
-		// remote is asserted, since the pool may move where it serves it.
-		if err := repo.ensureOrigin(ctx, source.OriginURL, helper); err != nil {
+		// Once materialized the workspace is the sandbox's: only the remote
+		// it reaches its pool under is asserted, since the pool may move
+		// where it serves the origin.
+		pool := poolRemote(c.manifest[source.Slug])
+		if err := repo.ensurePoolRemote(ctx, pool, source.OriginURL, helper); err != nil {
 			return c.failed(state, err)
 		}
-		repo.ensureOriginHeadRef(ctx)
+		repo.ensurePoolHeadRef(ctx, pool)
 		state.State, state.Commit = StateMaterialized, commit
 		return c.setState(state)
 	}
@@ -258,7 +260,7 @@ func (c *Converger) converge(ctx context.Context, revision int64, source sandbox
 		// sandbox's workspace, so it is adopted as it stands rather than
 		// refused or cloned over: marked once, at what it has checked out,
 		// and from then on like any other.
-		if err := repo.ensureOrigin(ctx, source.OriginURL, helper); err != nil {
+		if err := repo.ensurePoolRemote(ctx, originRemote, source.OriginURL, helper); err != nil {
 			return c.failed(state, err)
 		}
 		if err := repo.writeMarker(filepath.Join(source.Target, ".git", sandboxconfig.SourceMaterializedMarker), commit); err != nil {

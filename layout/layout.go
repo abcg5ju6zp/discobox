@@ -188,6 +188,15 @@ func (r Root) PoolSourceData(projectID, poolID string) string {
 	return r.join(r.PoolData(projectID, poolID), "data-per-source")
 }
 
+// PoolGitCache holds the pool's cache of Git: one bare repository per remote
+// its sandboxes' sources came from, each holding a namespace per sandbox
+// source (ADR 26-10-10-545 §2). It is the pool's own — never mounted into a
+// sandbox and no part of any sandbox's tree — and it is durable: a sandbox's
+// namespace is its origin for as long as the sandbox exists, archived or not.
+func (r Root) PoolGitCache(projectID, poolID string) string {
+	return r.join(r.PoolData(projectID, poolID), "git-cache")
+}
+
 // SourceData is one source's durable pool-local data directory. sourceKey is
 // an opaque key resolved before the pool boundary; layout does not interpret
 // source identity.

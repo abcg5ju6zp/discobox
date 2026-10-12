@@ -5,9 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +14,6 @@ import (
 	"github.com/discobox-ai/discobox/server/internal/apperrors"
 	"github.com/discobox-ai/discobox/server/internal/auth"
 	"github.com/discobox-ai/discobox/server/internal/model"
-	"github.com/discobox-ai/discobox/server/internal/resources/sandboxes"
 	"github.com/discobox-ai/discobox/server/internal/resources/secrets"
 	"github.com/discobox-ai/discobox/server/internal/service"
 	services "github.com/discobox-ai/discobox/server/internal/services"
@@ -338,29 +335,17 @@ func TestTheDiscoboxAPIIsNotGivenAtCreateByItsSecret(t *testing.T) {
 	requireStatus(t, err, http.StatusForbidden)
 }
 
-// hostPathProvider reaches the server's whole filesystem, so a source whose
-// origin is the server's own machine is cloned from its path there. root is
-// that filesystem's root as the host spells it: "/" on POSIX, a volume such as
-// "C:\\" on Windows, where "/" is not absolute and covers nothing.
-type hostPathProvider struct {
-	noopSandboxProvider
-	root string
-}
-
-func (p hostPathProvider) Definition() sandboxes.ProviderDefinition {
-	return sandboxes.ProviderDefinition{Name: "host-path", LocalSourceRoots: []string{p.root}}
-}
-
-// A sandbox can read the user's origin off any discobox's record. Claiming it
-// must not get a source cloned from the server's filesystem: a create from a
-// sandbox is always push-delivered (ADR 26-09-24-630 §3).
-func TestASandboxsOriginDoesNotDecideDelivery(t *testing.T) {
+// A discobox a sandbox creates has its source delivered the way a person's
+// is: by its client, into the pool's cache (ADR 26-10-10-545 §1). The origin a
+// sandbox reports is its own claim, and so is the cache it names with it; that
+// decides nothing a pool reads, since a sandbox reaches nothing in a cache but
+// what it sends (§7). No source is ever read off the server's or a pool's own
+// filesystem, so a URL that names a path there is only a name.
+func TestASandboxsSourceIsDeliveredAsAPersonsIs(t *testing.T) {
 	ctx := context.Background()
 	svc, _, _, projectID := newSandboxTestService(t, nil)
 	// A real host path, so it is absolute on the machine running the test.
 	directory := t.TempDir()
-	svc.RegisterSandboxProvider("test", hostPathProvider{root: filepath.VolumeName(directory) + string(filepath.Separator)})
-	svc.SetHostID("host-user")
 	lead := auth.WithPrincipal(ctx, auth.Principal{
 		Type: auth.PrincipalTypeSandbox, SandboxID: "sbx-lead", ProjectID: projectID, UserID: service.DefaultUserID,
 	})
@@ -383,43 +368,28 @@ func TestASandboxsOriginDoesNotDecideDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create sandbox as the user: %v", err)
 	}
-	if mine.Source.Delivery != model.GitSourceDeliveryClone {
-		t.Fatalf("user's own source delivered by %q, want clone from the path", mine.Source.Delivery)
-	}
 	forged, err := svc.CreateSandbox(lead, projectID, body("from-a-sandbox"))
 	if err != nil {
 		t.Fatalf("create sandbox as a sandbox: %v", err)
 	}
-	if forged.Source.Delivery != model.GitSourceDeliveryPush {
-		t.Fatalf("sandbox's source delivered by %q, want push", forged.Source.Delivery)
-	}
-
-	// Nor may it name a host path by URL, which the pool agent would clone
-	// as itself — as its source, or as a source beside it.
-	hostURL := func(raw string) serverapi.GitSource {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
+	for name, sandbox := range map[string]*model.Sandbox{"the user's": mine, "the sandbox's": forged} {
+		if sandbox.Source.Delivery != model.GitSourceDeliveryCache || sandbox.Source.CacheKey == nil || *sandbox.Source.CacheKey == "" {
+			t.Fatalf("%s source = %+v, want delivered into a pool cache", name, sandbox.Source)
 		}
-		return serverapi.GitSource{Kind: serverapi.GitSourceKindGit, URL: serverapi.NewOptURI(*u)}
 	}
-	for name, raw := range map[string]string{"file": "file:///home/user/.password-store", "bare path": "/home/user/.password-store"} {
-		source := body("url-" + strings.ReplaceAll(name, " ", "-"))
-		source.Config.Source = serverapi.NewOptGitSource(hostURL(raw))
-		_, err := svc.CreateSandbox(lead, projectID, source)
-		requireStatus(t, err, http.StatusForbidden)
 
-		beside := body("ref-" + strings.ReplaceAll(name, " ", "-"))
-		beside.Config.Source = serverapi.OptGitSource{}
-		beside.Config.SourceCodeReferences = serverapi.NewOptSandboxCreateConfigSourceCodeReferences(
-			serverapi.SandboxCreateConfigSourceCodeReferences{"/workspace/secrets": hostURL(raw)})
-		_, err = svc.CreateSandbox(lead, projectID, beside)
-		requireStatus(t, err, http.StatusForbidden)
-	}
 	remote := body("remote")
-	remote.Config.Source = serverapi.NewOptGitSource(hostURL("https://github.com/org/repo.git"))
-	if _, err := svc.CreateSandbox(lead, projectID, remote); err != nil {
+	u, err := url.Parse("https://github.com/org/repo.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote.Config.Source = serverapi.NewOptGitSource(serverapi.GitSource{Kind: serverapi.GitSourceKindGit, URL: serverapi.NewOptURI(*u)})
+	created, err := svc.CreateSandbox(lead, projectID, remote)
+	if err != nil {
 		t.Fatalf("create from a network URL: %v", err)
+	}
+	if got := *created.Source.CacheKey; got != "remote/github.com/org/repo" {
+		t.Fatalf("remote source's cache = %q, want its remote's", got)
 	}
 }
 

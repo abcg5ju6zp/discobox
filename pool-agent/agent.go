@@ -142,7 +142,6 @@ func newDockerSandboxRuntime(root layout.Root, bootstrap Bootstrap, identityKey 
 		ProjectID:             bootstrap.ProjectID,
 		PoolID:                bootstrap.PoolID,
 		ControlPlanePublicKey: bootstrap.ControlPlaneKey,
-		HostMountPrefix:       bootstrap.HostMountPrefix,
 		Root:                  root,
 		HostStateRoot:         bootstrap.HostStateRoot,
 		SandboxIdleTimeout:    idleTimeout,

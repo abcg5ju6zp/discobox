@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,10 +130,10 @@ func (r *DockerSandboxRuntime) runtimeSources(sandboxID string, sources []sandbo
 }
 
 // sourceOriginURL is where the sandbox fetches a source from: this pool's
-// git-origins route, at the origins host its proxy answers, for a source the
-// client delivers from its own machine — live from the developer's Git
-// directory, or the bare origin it pushes into — and the remote itself for a
-// remote-URL source.
+// git-origins route, at the origins host its proxy answers, for every source
+// a client delivers — into this pool's cache, or into the bare repository an
+// earlier pool made for the sandbox — and the remote itself for a remote-URL
+// source created before a pool cached Git, which the sandbox cloned directly.
 func (r *DockerSandboxRuntime) sourceOriginURL(sandboxID string, source sandboxSource) string {
 	if poolServesOrigin(source.git) {
 		return proxyagent.OriginURL(r.projectID, r.poolID, sandboxID, source.slug)
@@ -144,9 +145,9 @@ func (r *DockerSandboxRuntime) sourceOriginURL(sandboxID string, source sandboxS
 }
 
 // poolServesOrigin reports whether a source's origin is this pool's to serve:
-// one pushed into the pool, or one in a directory on the client's machine.
+// one a client delivers, or one in a directory on the client's machine.
 func poolServesOrigin(source workerapimodel.GitSource) bool {
-	return gitSourceAwaitsPush(source) || strings.TrimSpace(optString(source.LocalDirectory)) != ""
+	return gitSourceClientDelivers(source) || gitSourceHasOwnOrigin(source)
 }
 
 // refreshOriginTokens gives every source whose origin this pool serves a token
@@ -337,13 +338,26 @@ func (r *DockerSandboxRuntime) markSourcesDelivered(ctx context.Context, sandbox
 	}))
 }
 
-// pushedSourcesLanded reports whether every push-delivered source's origin
-// holds the client's push, and gives each one that does the HEAD its clone
-// reads. It runs git in the pool's own bare origin, never in the sandbox's
-// checkout.
+// pushedSourcesLanded reports whether every source a client delivers has
+// arrived — its namespace of this pool's cache, or its own bare origin, holds
+// a branch — and gives each one that has the HEAD its clone reads. It runs
+// git in the pool's own repositories, never in the sandbox's checkout.
+//
+// A local source that an earlier pool served live from the developer's Git
+// directory has a bare origin now, empty until a client pushes (ADR
+// 26-10-10-545 §8). One the sandbox has not materialized waits for that push
+// as a pushed source does; one it has is not asked about, because a sandbox
+// whose sources are delivered never reaches this.
 func (r *DockerSandboxRuntime) pushedSourcesLanded(ctx context.Context, sandboxID string, sources []sandboxSource, user sandboxuser.User) (bool, error) {
 	for _, source := range sources {
-		if !gitSourceAwaitsPush(source.git) {
+		if key := gitSourceCacheKey(source.git); key != "" {
+			landed, err := r.cachedSourceLanded(ctx, key, sandboxID, source)
+			if err != nil || !landed {
+				return false, err
+			}
+			continue
+		}
+		if !gitSourceHasOwnOrigin(source.git) {
 			continue
 		}
 		origin := r.sandboxOriginPath(sandboxID, source.slug)
@@ -360,11 +374,45 @@ func (r *DockerSandboxRuntime) pushedSourcesLanded(ctx context.Context, sandboxI
 	return true, nil
 }
 
-// headPushedOrigins points the HEAD of each of the sandbox's bare origins that
-// has received a push at what arrived, as the origin's owner
-// (headOriginAtWhatArrived). A source with no bare origin is not pushed.
+// cachedSourceLanded reports whether a cache-delivered source's namespace
+// holds a branch, and points the namespace's HEAD at the source's own.
+func (r *DockerSandboxRuntime) cachedSourceLanded(ctx context.Context, key, sandboxID string, source sandboxSource) (bool, error) {
+	path, release, err := r.gitCache.Use(ctx, key)
+	if err != nil {
+		return false, fmt.Errorf("source %q cache: %w", source.slug, err)
+	}
+	defer release()
+	if !r.gitCache.HasBranches(ctx, path, sandboxID, source.slug) {
+		return false, nil
+	}
+	if err := r.gitCache.EnsureHead(ctx, path, sandboxID, source.slug, gitSourceInitialBranch(source.git)); err != nil {
+		return false, fmt.Errorf("source %q cache: %w", source.slug, err)
+	}
+	return true, nil
+}
+
+// headPushedOrigins points the HEAD of each of the sandbox's origins that has
+// received a delivery at what arrived: a bare origin's as its owner
+// (headOriginAtWhatArrived), and a cache namespace's in the cache. A source
+// with neither is not delivered by a client.
 func (r *DockerSandboxRuntime) headPushedOrigins(ctx context.Context, sandboxID string, sources []sandboxconfig.RuntimeSource) error {
+	caches, err := r.readSourceCaches(sandboxID)
+	if err != nil {
+		return err
+	}
 	for _, source := range sources {
+		if key := caches[source.Slug]; key != "" {
+			path, release, err := r.gitCache.Use(ctx, key)
+			if err != nil {
+				return fmt.Errorf("source %q cache: %w", source.Slug, err)
+			}
+			err = r.gitCache.EnsureHead(ctx, path, sandboxID, source.Slug, "")
+			release()
+			if err != nil {
+				return fmt.Errorf("source %q cache: %w", source.Slug, err)
+			}
+			continue
+		}
 		origin := r.sandboxOriginPath(sandboxID, source.Slug)
 		info, err := os.Stat(origin)
 		if err != nil {
@@ -476,21 +524,29 @@ func cloneProgress(labels map[string]string, slug string, state sourceState) Clo
 	return clone
 }
 
-// sourceLabel names a source for a person waiting on its clone: a remote by
-// its host and path — "github.com/discobox-ai/discobox" — and a source
-// delivered from the client's machine by its checkout's directory, since the
-// pool's own origin URL for it means nothing to them.
+// sourceLabel names a source for a person waiting on its clone: a remote-URL
+// source by its remote's host and path — "github.com/discobox-ai/discobox" —
+// and a source from a checkout on the client's machine by that checkout's
+// directory, since the pool's own origin URL for it means nothing to them.
 func sourceLabel(source sandboxSource) string {
-	if !poolServesOrigin(source.git) {
-		if remote, ok := source.git.URL.Get(); ok && remote.Host != "" {
+	// The client's path, in its own OS's spelling: a Windows client's has
+	// backslashes, which filepath on this Linux pool does not split on.
+	directory := strings.TrimRight(strings.TrimSpace(optString(source.git.LocalDirectory)), `/\`)
+	if directory == "" {
+		remote, ok := source.git.URL.Get()
+		if !ok {
+			// A cache-delivered remote-URL source carries its URL as its
+			// remote alone.
+			if parsed, err := url.Parse(strings.TrimSpace(optString(source.git.UpstreamUrl))); err == nil {
+				remote, ok = *parsed, true
+			}
+		}
+		if ok && remote.Host != "" {
 			// The escaped path: a decoded one would carry whatever a %1b
 			// in a URL declared by repository content spells.
 			return remote.Host + strings.TrimSuffix(strings.TrimSuffix(remote.EscapedPath(), "/"), ".git")
 		}
 	}
-	// The client's path, in its own OS's spelling: a Windows client's has
-	// backslashes, which filepath on this Linux pool does not split on.
-	directory := strings.TrimRight(strings.TrimSpace(optString(source.git.LocalDirectory)), `/\`)
 	if cut := strings.LastIndexAny(directory, `/\`); cut >= 0 {
 		directory = directory[cut+1:]
 	}
