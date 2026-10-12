@@ -4992,7 +4992,7 @@ func (s *Server) handleUpdateSandboxAgentMetaRequest(args [2]string, argsEscaped
 		mreq := middleware.Request{
 			Context:          ctx,
 			OperationName:    UpdateSandboxAgentMetaOperation,
-			OperationSummary: "Change the description or tags in the sandbox's meta file.",
+			OperationSummary: "Change the name, description or tags in the sandbox's meta file.",
 			OperationID:      "update-sandbox-agent-meta",
 			Body:             request,
 			RawBody:          rawBody,

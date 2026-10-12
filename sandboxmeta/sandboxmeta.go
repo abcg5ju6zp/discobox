@@ -1,13 +1,13 @@
-// Package sandboxmeta is the shape of a sandbox's meta — its description and
-// its tags: the file inside the sandbox that holds them, the rules each must
-// satisfy, and the selector grammar a listing filters tags by.
+// Package sandboxmeta is the shape of a sandbox's meta — its name, its
+// description and its tags: the file inside the sandbox that holds them, the
+// rules each must satisfy, and the selector grammar a listing filters tags by.
 //
 // A sandbox's meta lives in the sandbox, in a JSON file at RelativePath under
 // the sandbox user's home. That file is the system of record: the agent in the
 // sandbox edits it directly, an API write is carried into the sandbox and
 // applied to it, and the control plane only keeps a copy of what the sandbox
 // last reported, for reading a stopped sandbox and for filtering a listing
-// (ADR 0136).
+// (ADR 0136, and ADR 26-10-12-026 for the name).
 //
 // It lives in the root module because three modules apply the same rules: the
 // sandbox agent reads and writes the file, the server validates what it caches
@@ -35,6 +35,7 @@ const RelativePath = ".discobox/meta.json"
 // Limits on meta. They are generous for what a person writes and small enough
 // that the whole of it rides every status report without anyone noticing.
 const (
+	MaxNameLength        = 128
 	MaxDescriptionLength = 4096
 	MaxTags              = 64
 	MaxKeyLength         = 128
@@ -46,6 +47,11 @@ const (
 
 // Meta is what the file holds.
 type Meta struct {
+	// Name is what a person or the agent calls the sandbox: one line of
+	// display text that a listing shows in place of the title its harness
+	// set. It identifies nothing — two sandboxes may share one — and an empty
+	// one means none has been set (ADR 26-10-12-026).
+	Name string `json:"name,omitempty"`
 	// Description says what the sandbox is for, in the words of whoever
 	// wrote it. It may run to several lines; a listing shows the first.
 	Description string `json:"description,omitempty"`
@@ -56,7 +62,8 @@ type Meta struct {
 
 // Parse reads the file's contents. An empty file, or one holding only
 // whitespace, is no meta — the same answer as no file at all. Anything else
-// must be a JSON object with no fields but description and tags, and all of it
+// must be a JSON object with no fields but name, description and tags — each
+// of them optional — and all of it
 // must be valid: a file with one bad tag is refused whole rather than read in
 // part, because a partial read would report as removed a tag the file still
 // says is there.
@@ -71,7 +78,7 @@ func Parse(data []byte) (Meta, error) {
 	decoder.DisallowUnknownFields()
 	var meta Meta
 	if err := decoder.Decode(&meta); err != nil {
-		return Meta{}, fmt.Errorf(`meta file must be a JSON object like {"description": "...", "tags": {"wip": "", "ticket": "ENG-12"}}: %w`, err)
+		return Meta{}, fmt.Errorf(`meta file must be a JSON object like {"name": "...", "description": "...", "tags": {"wip": "", "ticket": "ENG-12"}}: %w`, err)
 	}
 	if decoder.More() {
 		return Meta{}, errors.New("meta file holds more than one JSON value")
@@ -97,10 +104,30 @@ func Encode(meta Meta) ([]byte, error) {
 
 // Validate checks all of the meta.
 func (m Meta) Validate() error {
+	if err := ValidateName(m.Name); err != nil {
+		return err
+	}
 	if err := ValidateDescription(m.Description); err != nil {
 		return err
 	}
 	return ValidateTags(m.Tags)
+}
+
+// ValidateName checks a name. It is one line a listing draws in a column, so
+// it holds no control characters at all, line breaks and tabs included.
+func ValidateName(name string) error {
+	switch {
+	case !utf8.ValidString(name):
+		return errors.New("the name is not valid UTF-8")
+	case len(name) > MaxNameLength:
+		return fmt.Errorf("the name is longer than %d bytes", MaxNameLength)
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return errors.New("the name is one line and cannot contain control characters")
+		}
+	}
+	return nil
 }
 
 // ValidateDescription checks a description. Line breaks and tabs are allowed;
@@ -185,6 +212,9 @@ func ValidateValue(key, value string) error {
 // Change is an edit to meta. Whatever it does not name is left as it is,
 // including what the sandbox wrote itself.
 type Change struct {
+	// Name, when set, replaces the name, with the space around it trimmed; an
+	// empty one clears it.
+	Name *string
 	// Description, when set, replaces the description; an empty one clears it.
 	Description *string
 	// SetTags adds or overwrites tags.
@@ -205,8 +235,11 @@ func (c Change) Check() error {
 // Apply returns meta with the change made, and checks the result. meta itself
 // is not modified.
 func Apply(meta Meta, change Change) (Meta, error) {
-	out := Meta{Description: meta.Description, Tags: make(map[string]string, len(meta.Tags)+len(change.SetTags))}
+	out := Meta{Name: meta.Name, Description: meta.Description, Tags: make(map[string]string, len(meta.Tags)+len(change.SetTags))}
 	maps.Copy(out.Tags, meta.Tags)
+	if change.Name != nil {
+		out.Name = strings.TrimSpace(*change.Name)
+	}
 	if change.Description != nil {
 		out.Description = *change.Description
 	}

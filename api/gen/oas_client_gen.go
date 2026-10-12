@@ -943,9 +943,9 @@ type Invoker interface {
 	UpdateSandboxAgentMeta(ctx context.Context, request *UpdateSandboxMetaBody, params UpdateSandboxAgentMetaParams) (UpdateSandboxAgentMetaRes, error)
 	// UpdateSandboxMeta invokes update-sandbox-meta operation.
 	//
-	// Change a sandbox's description or tags. The change is carried into the sandbox and applied to its
-	// meta file, ~/.discobox/meta.json, which is their system of record; the server records what the
-	// sandbox then holds and returns the sandbox with it. A stopped sandbox is started to take the
+	// Change a sandbox's name, description or tags. The change is carried into the sandbox and applied
+	// to its meta file, ~/.discobox/meta.json, which is their system of record; the server records what
+	// the sandbox then holds and returns the sandbox with it. A stopped sandbox is started to take the
 	// change, and a sandbox that cannot be reached is an error rather than a change recorded only here.
 	//
 	// PATCH /projects/{projectId}/sandboxes/{sandboxId}/meta
@@ -16876,9 +16876,9 @@ func (c *Client) sendUpdateSandboxAgentMeta(ctx context.Context, request *Update
 
 // UpdateSandboxMeta invokes update-sandbox-meta operation.
 //
-// Change a sandbox's description or tags. The change is carried into the sandbox and applied to its
-// meta file, ~/.discobox/meta.json, which is their system of record; the server records what the
-// sandbox then holds and returns the sandbox with it. A stopped sandbox is started to take the
+// Change a sandbox's name, description or tags. The change is carried into the sandbox and applied
+// to its meta file, ~/.discobox/meta.json, which is their system of record; the server records what
+// the sandbox then holds and returns the sandbox with it. A stopped sandbox is started to take the
 // change, and a sandbox that cannot be reached is an error rather than a change recorded only here.
 //
 // PATCH /projects/{projectId}/sandboxes/{sandboxId}/meta

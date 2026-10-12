@@ -60,7 +60,7 @@ func registerSandboxProxyRoutes(router chi.Router, service *sandboxService) {
 	router.Method(http.MethodPost, "/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/services/{serviceId}/restart", service.autoStart(failFast, needsSandbox, service.sandboxAgentProxyHandler()))
 
 	// The meta file (ADR 0136). Writing it starts a stopped sandbox like any
-	// other use: the sandbox is where its description and tags live, so a
+	// other use: the sandbox is where its name, description and tags live, so a
 	// change cannot be taken while it is down.
 	router.Method(http.MethodPatch, "/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/meta", service.autoStart(failFast, needsSandbox, service.sandboxAgentProxyHandler()))
 

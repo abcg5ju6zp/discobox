@@ -105,11 +105,16 @@ type Spec struct {
 	// the source host's clock, and a destination whose clock is behind would
 	// ignore its own reports until it caught up.
 	//
-	// Tags were added without a format version: an older reader ignores the
-	// field and loses only this copy, which the discobox's first report
-	// restores, while a version bump would refuse the whole archive.
+	// Tags, and then MetaName, were added without a format version: an older
+	// reader ignores the field and loses only this copy, which the discobox's
+	// first report restores, while a version bump would refuse the whole
+	// archive.
+	//
+	// MetaName is the name in that meta (ADR 26-10-12-026), spelled apart
+	// from Name, the configured one, which already has the spec's "name".
 	Description *string           `json:"description,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
+	MetaName    *string           `json:"metaName,omitempty"`
 	Harness     Harness           `json:"harness"`
 	// Origin is the client host the discobox was created from. It travels
 	// because it is not a fact about the server: it says which machine's
@@ -147,12 +152,13 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		Name        string            `json:"name"`
 		Description *string           `json:"description,omitempty"`
 		Tags        map[string]string `json:"tags,omitempty"`
+		MetaName    *string           `json:"metaName,omitempty"`
 		Harness     Harness           `json:"harness"`
 		Origin      *model.Origin     `json:"origin,omitempty"`
 		Platform    platform.Platform `json:"platform,omitzero"`
 		Secrets     []SecretBinding   `json:"secrets,omitempty"`
 		model.SandboxManifest
-	}{Name: s.Name, Description: s.Description, Tags: s.Tags, Harness: s.Harness, Origin: s.Origin, Platform: s.Platform, Secrets: s.Secrets, SandboxManifest: s.Manifest})
+	}{Name: s.Name, Description: s.Description, Tags: s.Tags, MetaName: s.MetaName, Harness: s.Harness, Origin: s.Origin, Platform: s.Platform, Secrets: s.Secrets, SandboxManifest: s.Manifest})
 }
 
 func (s *Spec) UnmarshalJSON(data []byte) error {
@@ -160,6 +166,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		Name        string            `json:"name"`
 		Description *string           `json:"description,omitempty"`
 		Tags        map[string]string `json:"tags,omitempty"`
+		MetaName    *string           `json:"metaName,omitempty"`
 		Harness     Harness           `json:"harness"`
 		Origin      *model.Origin     `json:"origin,omitempty"`
 		Platform    platform.Platform `json:"platform,omitzero"`
@@ -172,6 +179,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 	s.Name = decoded.Name
 	s.Description = decoded.Description
 	s.Tags = decoded.Tags
+	s.MetaName = decoded.MetaName
 	s.Harness = decoded.Harness
 	s.Origin = decoded.Origin
 	s.Platform = decoded.Platform

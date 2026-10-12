@@ -17,6 +17,7 @@ import (
 	"github.com/discobox-ai/discobox/sandboxmeta"
 	"github.com/discobox-ai/discobox/server/internal/auth"
 	"github.com/discobox-ai/discobox/server/internal/sandbox"
+	"github.com/discobox-ai/discobox/server/internal/services"
 	"github.com/discobox-ai/discobox/server/internal/transport"
 )
 
@@ -97,6 +98,49 @@ func TestUpdateSandboxMetaRecordsWhatTheSandboxHolds(t *testing.T) {
 	}
 }
 
+// A rename is a meta write (ADR 26-10-12-026): the name is carried into the
+// sandbox, what the sandbox answers is recorded, and it is what the sandbox is
+// then listed as. The answer here holds nothing but the name — every field of
+// a meta is optional, and the ones left out are unset.
+func TestUpdateSandboxMetaRenamesTheSandbox(t *testing.T) {
+	var body map[string]any
+	service := metaFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewEncoder(w).Encode(map[string]any{"meta": map[string]any{"name": "Daily GH Check In"}, "observedAt": time.Now()})
+	})
+	sb, err := service.UpdateSandboxMeta(metaCaller(), "project-1", "sb-1", apimodel.UpdateSandboxMetaBody{
+		Name: serverapi.NewOptString("  Daily GH Check In "),
+	})
+	if err != nil {
+		t.Fatalf("UpdateSandboxMeta() error = %v", err)
+	}
+	if want := map[string]any{"name": "  Daily GH Check In "}; !reflect.DeepEqual(body, want) {
+		t.Fatalf("sandbox was sent %v, want %v", body, want)
+	}
+	if sb.MetaName == nil || *sb.MetaName != "Daily GH Check In" {
+		t.Fatalf("recorded name = %v, want the one the sandbox holds", sb.MetaName)
+	}
+	if got := services.SandboxDisplayName(sb); got != "Daily GH Check In" {
+		t.Fatalf("display name = %q, want the name it was given", got)
+	}
+	if len(sb.Tags) != 0 {
+		t.Fatalf("recorded tags = %v, want none", sb.Tags)
+	}
+}
+
+// A name that is not one line is refused before anything is asked of the
+// sandbox, which a stopped one would be started to hear.
+func TestUpdateSandboxMetaRefusesAnInvalidName(t *testing.T) {
+	service := metaFixture(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("the sandbox was asked to take a name that is not valid")
+	})
+	_, err := service.UpdateSandboxMeta(metaCaller(), "project-1", "sb-1", apimodel.UpdateSandboxMetaBody{Name: serverapi.NewOptString("two\nlines")})
+	var status interface{ StatusCode() int }
+	if !errors.As(err, &status) || status.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("UpdateSandboxMeta() error = %v, want a 400", err)
+	}
+}
+
 // Two writes inside one second are both recorded. The sandbox agent answers
 // through the generated encoder, and the store keeps a write only when it is
 // newer than the last, so an observedAt cut to whole seconds would tie the
@@ -104,8 +148,8 @@ func TestUpdateSandboxMetaRecordsWhatTheSandboxHolds(t *testing.T) {
 func TestUpdateSandboxMetaRecordsTwoWritesInOneSecond(t *testing.T) {
 	second := time.Now().UTC().Truncate(time.Second)
 	answers := []sandboxapi.SandboxAgentMeta{
-		{Meta: sandboxapi.SandboxMeta{Tags: sandboxapi.SandboxMetaTags{"to-delete": ""}}, ObservedAt: second.Add(100 * time.Millisecond)},
-		{Meta: sandboxapi.SandboxMeta{Tags: sandboxapi.SandboxMetaTags{}}, ObservedAt: second.Add(600 * time.Millisecond)},
+		{Meta: sandboxapi.SandboxMeta{Tags: sandboxapi.NewOptSandboxMetaTags(sandboxapi.SandboxMetaTags{"to-delete": ""})}, ObservedAt: second.Add(100 * time.Millisecond)},
+		{Meta: sandboxapi.SandboxMeta{}, ObservedAt: second.Add(600 * time.Millisecond)},
 	}
 	var calls atomic.Int32
 	service := metaFixture(t, func(w http.ResponseWriter, _ *http.Request) {

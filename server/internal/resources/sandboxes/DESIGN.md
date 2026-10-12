@@ -439,7 +439,7 @@ reading and typing into its terminals
 starting, stopping, and restarting it
 ([ADR 26-10-02-478](../../../../docs/adr/26-10-02-478-a-discobox-starts-and-stops-the-discoboxes-it-creates.md)),
 which are the same power instructions a person sends and need nothing of the
-service beyond the role's ownership check; changing its description and tags
+service beyond the role's ownership check; changing its name, description and tags
 ([ADR 26-10-08-447](../../../../docs/adr/26-10-08-447-a-discobox-tags-the-discoboxes-it-creates.md)),
 whose write into the discobox leases the `exec:write` its terminal input
 already does; and reading and answering the
@@ -451,21 +451,26 @@ secret requests it files, within what the creator was delegated
 
 `Sandbox.displayName` is what a listing calls a sandbox, computed on the server
 (`services.SandboxDisplayName`) so `discobox ls`, the console, and any other
-client agree: the window title the primary terminal last set, the configured
-name until one has, and the sandbox ID when it has no name either. The title is
-what the harness says the work is about, which tells two sandboxes apart better
-than two generated names do.
+client agree: the name in the sandbox's meta when one is set
+([ADR 26-10-12-026](../../../../docs/adr/26-10-12-026-a-sandboxs-name-is-meta-and-renaming-it-is-a-meta-write.md)),
+then the window title the primary terminal last set, the configured name until
+one has, and the sandbox ID when it has no name either. The title is what the
+harness says the work is about, which tells two sandboxes apart better than two
+generated names do; a set name is what a person or the agent chose instead.
 
-It reads the title out of the last agent-status report already on the row
-(ADR 0030) — nothing is woken to name a listing — and it is display only. Name
-resolution and rename still act on `config.name`, which is left untouched
-beside it.
+It reads the name from the `meta_name` column and the title out of the last
+agent-status report already on the row (ADR 0030) — nothing is woken to name a
+listing — and it is display only. `config.name` is left untouched beside it: it
+is the handle the sandbox was created with, and `UpdateSandbox` still edits it.
+A rename is not that edit. It is a meta write (below) that names `name`.
 
 ## Meta
 
-A sandbox's description and tags live in the sandbox, in its meta file, and the
-row holds a copy (ADR 0136): the `description` column, `tags`, and
-`meta_observed_at`, stamped on the sandbox's clock. `UpdateSandboxMeta` carries
+A sandbox's name, description and tags live in the sandbox, in its meta file,
+and the row holds a copy (ADR 0136, ADR 26-10-12-026): the `meta_name` and
+`description` columns, `tags`, and `meta_observed_at`, stamped on the sandbox's
+clock. Each is optional there and on the wire, and one that is unset is left
+out of `Sandbox.meta`. `UpdateSandboxMeta` carries
 a change to the sandbox agent (`PATCH .../meta`, as `exec:write`) and records
 what it answers; the status report (pools) records what the file holds. Either
 write lands only when newer, and both are observed columns `UpdateSandbox`

@@ -596,6 +596,9 @@ func (h *handler) UpdateSandboxAgentMeta(_ context.Context, req *sandboxapi.Upda
 	}
 	var change sandboxmeta.Change
 	if req != nil {
+		if name, ok := req.Name.Get(); ok {
+			change.Name = &name
+		}
 		if description, ok := req.Description.Get(); ok {
 			change.Description = &description
 		}
@@ -614,12 +617,17 @@ func (h *handler) UpdateSandboxAgentMeta(_ context.Context, req *sandboxapi.Upda
 	return &sandboxapi.SandboxAgentMeta{Meta: sandboxAgentMeta(current), ObservedAt: observedAt}, nil
 }
 
-// sandboxAgentMeta carries meta onto the wire. Tags are always present, empty
-// or not, so a reader can tell "no tags" from a field it did not get.
+// sandboxAgentMeta carries meta onto the wire. Every field is optional there
+// and an absent one is unset (ADR 26-10-12-026 §1), so only what the file
+// holds is sent: a meta with nothing in it is an empty object, which still
+// says the file was read.
 func sandboxAgentMeta(in sandboxmeta.Meta) sandboxapi.SandboxMeta {
-	out := sandboxapi.SandboxMeta{Tags: sandboxapi.SandboxMetaTags(in.Tags)}
-	if out.Tags == nil {
-		out.Tags = sandboxapi.SandboxMetaTags{}
+	var out sandboxapi.SandboxMeta
+	if in.Name != "" {
+		out.Name = sandboxapi.NewOptString(in.Name)
+	}
+	if len(in.Tags) > 0 {
+		out.Tags = sandboxapi.NewOptSandboxMetaTags(sandboxapi.SandboxMetaTags(in.Tags))
 	}
 	if in.Description != "" {
 		out.Description = sandboxapi.NewOptString(in.Description)

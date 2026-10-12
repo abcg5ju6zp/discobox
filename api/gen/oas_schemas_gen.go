@@ -12914,6 +12914,52 @@ func (o OptSandboxMeta) Or(d SandboxMeta) SandboxMeta {
 	return d
 }
 
+// NewOptSandboxMetaTags returns new OptSandboxMetaTags with value set to v.
+func NewOptSandboxMetaTags(v SandboxMetaTags) OptSandboxMetaTags {
+	return OptSandboxMetaTags{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptSandboxMetaTags is optional SandboxMetaTags.
+type OptSandboxMetaTags struct {
+	Value SandboxMetaTags
+	Set   bool
+}
+
+// IsSet returns true if OptSandboxMetaTags was set.
+func (o OptSandboxMetaTags) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptSandboxMetaTags) Reset() {
+	var v SandboxMetaTags
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptSandboxMetaTags) SetTo(v SandboxMetaTags) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptSandboxMetaTags) Get() (v SandboxMetaTags, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptSandboxMetaTags) Or(d SandboxMetaTags) SandboxMetaTags {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptSandboxProviderInstance returns new OptSandboxProviderInstance with value set to v.
 func NewOptSandboxProviderInstance(v SandboxProviderInstance) OptSandboxProviderInstance {
 	return OptSandboxProviderInstance{
@@ -18105,10 +18151,12 @@ type Sandbox struct {
 	// Creating user ID.
 	CreatedByUserId string `json:"createdByUserId"`
 	// Name to show for this sandbox in a listing, computed by the server so every
-	// client shows the same one: the window title the primary terminal last set,
-	// the sandbox's configured name until one has, and the sandbox ID if it has
-	// no name either. The title is what the harness says the work is about,
-	// which tells two sandboxes apart better than two generated names do.
+	// client shows the same one: the name in the sandbox's meta when one is set
+	// (meta.name), then the window title the primary terminal last set, the
+	// sandbox's configured name until one has, and the sandbox ID if it has no
+	// name either. The title is what the harness says the work is about, which
+	// tells two sandboxes apart better than two generated names do, and a set
+	// name is what a person or the agent chose to call it instead.
 	DisplayName string `json:"displayName"`
 	// Stable sandbox ID.
 	ID string `json:"id"`
@@ -18129,12 +18177,12 @@ type Sandbox struct {
 	PoolId OptString `json:"poolId"`
 	// Observed sandbox runtime state.
 	Runtime SandboxRuntime `json:"runtime"`
-	// The sandbox's description and tags. The sandbox holds them, in
+	// The sandbox's name, description and tags. The sandbox holds them, in
 	// ~/.discobox/meta.json, and this is the copy it last reported: what a
 	// listing filters on, and what a stopped sandbox is read as. Change them with
 	// update-sandbox-meta, or by editing that file inside the sandbox. Until the
 	// sandbox has reported (metaObservedAt absent) it holds the description the
-	// sandbox was created with, or for an imported one the description and tags it
+	// sandbox was created with, or for an imported one the name, description and tags it
 	// was exported with.
 	Meta OptSandboxMeta `json:"meta"`
 	// When the sandbox read or wrote the meta above, on its own clock. Absent until it has reported.
@@ -19549,9 +19597,9 @@ type SandboxAgentStatusResponse struct {
 	// The sandbox's idle-stop policy. Absent while the policy is not running, which in a configure-mode
 	// sandbox is always.
 	Autostop OptSandboxAgentAutostopStatus `json:"autostop"`
-	// The sandbox's description and tags, read from ~/.discobox/meta.json in the sandbox user's home,
-	// which is their system of record. Empty when there is no such file. Absent when the file could not
-	// be read or is not valid, in which case metaError says why.
+	// The sandbox's name, description and tags, read from ~/.discobox/meta.json in the sandbox user's
+	// home, which is their system of record. Empty when there is no such file. Absent when the file
+	// could not be read or is not valid, in which case metaError says why.
 	Meta OptSandboxMeta `json:"meta"`
 	// Why the meta file could not be read. Present only when meta is absent.
 	MetaError OptString `json:"metaError"`
@@ -21938,14 +21986,24 @@ func (s *SandboxMemoryConsumptionAdditional) init() SandboxMemoryConsumptionAddi
 	return m
 }
 
-// A sandbox's description and tags, as the file inside it that holds them says.
+// A sandbox's name, description and tags, as the file inside it that holds them says. Each is
+// optional, and an absent one is unset.
 // Ref: #/components/schemas/SandboxMeta
 type SandboxMeta struct {
+	// What a person or the agent calls the sandbox, on one line. When set it is the sandbox's
+	// displayName, in place of the title its harness set. It identifies nothing, and two sandboxes may
+	// share one.
+	Name OptString `json:"name"`
 	// What the sandbox is for, in the words of whoever wrote it. May run to several lines; a listing
 	// shows the first.
 	Description OptString `json:"description"`
 	// Tags labeling the sandbox, key to value. A tag with an empty value is a plain label.
-	Tags SandboxMetaTags `json:"tags"`
+	Tags OptSandboxMetaTags `json:"tags"`
+}
+
+// GetName returns the value of Name.
+func (s *SandboxMeta) GetName() OptString {
+	return s.Name
 }
 
 // GetDescription returns the value of Description.
@@ -21954,8 +22012,13 @@ func (s *SandboxMeta) GetDescription() OptString {
 }
 
 // GetTags returns the value of Tags.
-func (s *SandboxMeta) GetTags() SandboxMetaTags {
+func (s *SandboxMeta) GetTags() OptSandboxMetaTags {
 	return s.Tags
+}
+
+// SetName sets the value of Name.
+func (s *SandboxMeta) SetName(val OptString) {
+	s.Name = val
 }
 
 // SetDescription sets the value of Description.
@@ -21964,7 +22027,7 @@ func (s *SandboxMeta) SetDescription(val OptString) {
 }
 
 // SetTags sets the value of Tags.
-func (s *SandboxMeta) SetTags(val SandboxMetaTags) {
+func (s *SandboxMeta) SetTags(val OptSandboxMetaTags) {
 	s.Tags = val
 }
 
@@ -27375,6 +27438,10 @@ func (s *UpdateSandboxBody) SetConfig(val OptSandboxUpdateConfig) {
 // name is left as it is, including what the sandbox wrote itself.
 // Ref: #/components/schemas/UpdateSandboxMetaBody
 type UpdateSandboxMetaBody struct {
+	// Replaces the name, with the space around it trimmed. An empty string clears it, and the sandbox is
+	// listed by its harness's title again; omit it to leave the name alone. A name is one line of at
+	// most 128 bytes.
+	Name OptString `json:"name"`
 	// Replaces the description. An empty string clears it; omit it to leave the description alone.
 	Description OptString `json:"description"`
 	// Tags to add or overwrite, key to value. An empty value makes a plain label. A key is printable,
@@ -27383,6 +27450,11 @@ type UpdateSandboxMetaBody struct {
 	// Tag keys to delete. Naming a key the sandbox does not have is not an error. A key may not be both
 	// set and removed.
 	RemoveTags []string `json:"removeTags"`
+}
+
+// GetName returns the value of Name.
+func (s *UpdateSandboxMetaBody) GetName() OptString {
+	return s.Name
 }
 
 // GetDescription returns the value of Description.
@@ -27398,6 +27470,11 @@ func (s *UpdateSandboxMetaBody) GetSetTags() OptUpdateSandboxMetaBodySetTags {
 // GetRemoveTags returns the value of RemoveTags.
 func (s *UpdateSandboxMetaBody) GetRemoveTags() []string {
 	return s.RemoveTags
+}
+
+// SetName sets the value of Name.
+func (s *UpdateSandboxMetaBody) SetName(val OptString) {
+	s.Name = val
 }
 
 // SetDescription sets the value of Description.

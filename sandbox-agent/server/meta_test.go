@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	sandboxapi "github.com/discobox-ai/discobox/api/sandboxgen"
@@ -39,15 +40,15 @@ func TestGetSandboxAgentStatusReportsMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, ok := status.Meta.Get()
-	if !ok || got.Tags == nil || len(got.Tags) != 0 || got.Description.Set {
-		t.Fatalf("meta with no file = %+v (set %v), want empty meta", got, ok)
+	if !ok || got.Tags.Set || got.Description.Set || got.Name.Set {
+		t.Fatalf("meta with no file = %+v (set %v), want a meta with nothing set", got, ok)
 	}
 
 	path := filepath.Join(home, sandboxmeta.RelativePath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(`{"description": "fix the reaper", "tags": {"wip": ""}}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"name": "the reaper", "description": "fix the reaper", "tags": {"wip": ""}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	status, err = agent.GetSandboxAgentStatus(ctx, sandboxapi.GetSandboxAgentStatusParams{})
@@ -55,7 +56,7 @@ func TestGetSandboxAgentStatusReportsMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = status.Meta.Get()
-	if got.Description.Or("") != "fix the reaper" || !reflect.DeepEqual(map[string]string(got.Tags), map[string]string{"wip": ""}) {
+	if got.Name.Or("") != "the reaper" || got.Description.Or("") != "fix the reaper" || !reflect.DeepEqual(map[string]string(got.Tags.Or(nil)), map[string]string{"wip": ""}) {
 		t.Fatalf("meta = %+v, want what the file holds", got)
 	}
 
@@ -83,8 +84,23 @@ func TestUpdateSandboxAgentMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateSandboxAgentMeta() error = %v", err)
 	}
-	if written.Meta.Description.Or("") != "fix the reaper" || written.Meta.Tags["wip"] != "" || written.ObservedAt.IsZero() {
+	if _, tagged := written.Meta.Tags.Or(nil)["wip"]; written.Meta.Description.Or("") != "fix the reaper" || !tagged || written.ObservedAt.IsZero() {
 		t.Fatalf("UpdateSandboxAgentMeta() = %+v", written)
+	}
+
+	// A rename is the same write (ADR 26-10-12-026): the name is trimmed and
+	// kept in the file with what was already there, and an empty one clears it.
+	written, err = agent.UpdateSandboxAgentMeta(ctx, &sandboxapi.UpdateSandboxMetaBody{Name: sandboxapi.NewOptString(" Daily GH Check In ")}, sandboxapi.UpdateSandboxAgentMetaParams{})
+	if err != nil || written.Meta.Name.Or("") != "Daily GH Check In" || written.Meta.Description.Or("") != "fix the reaper" {
+		t.Fatalf("a rename answered %+v, %v; want the name beside the description", written, err)
+	}
+	onDisk, err := os.ReadFile(filepath.Join(home, sandboxmeta.RelativePath))
+	if err != nil || !strings.Contains(string(onDisk), `"name": "Daily GH Check In"`) {
+		t.Fatalf("the meta file holds %q, %v; want the name in it", onDisk, err)
+	}
+	written, err = agent.UpdateSandboxAgentMeta(ctx, &sandboxapi.UpdateSandboxMetaBody{Name: sandboxapi.NewOptString("")}, sandboxapi.UpdateSandboxAgentMetaParams{})
+	if err != nil || written.Meta.Name.Set {
+		t.Fatalf("clearing the name answered %+v, %v", written, err)
 	}
 
 	_, err = agent.UpdateSandboxAgentMeta(ctx, &sandboxapi.UpdateSandboxMetaBody{RemoveTags: []string{"a=b"}}, sandboxapi.UpdateSandboxAgentMetaParams{})

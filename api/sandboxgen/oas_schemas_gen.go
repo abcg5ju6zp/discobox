@@ -2382,6 +2382,52 @@ func (o OptSandboxMeta) Or(d SandboxMeta) SandboxMeta {
 	return d
 }
 
+// NewOptSandboxMetaTags returns new OptSandboxMetaTags with value set to v.
+func NewOptSandboxMetaTags(v SandboxMetaTags) OptSandboxMetaTags {
+	return OptSandboxMetaTags{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptSandboxMetaTags is optional SandboxMetaTags.
+type OptSandboxMetaTags struct {
+	Value SandboxMetaTags
+	Set   bool
+}
+
+// IsSet returns true if OptSandboxMetaTags was set.
+func (o OptSandboxMetaTags) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptSandboxMetaTags) Reset() {
+	var v SandboxMetaTags
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptSandboxMetaTags) SetTo(v SandboxMetaTags) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptSandboxMetaTags) Get() (v SandboxMetaTags, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptSandboxMetaTags) Or(d SandboxMetaTags) SandboxMetaTags {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptSandboxRuntimeConfigProxy returns new OptSandboxRuntimeConfigProxy with value set to v.
 func NewOptSandboxRuntimeConfigProxy(v SandboxRuntimeConfigProxy) OptSandboxRuntimeConfigProxy {
 	return OptSandboxRuntimeConfigProxy{
@@ -3861,9 +3907,9 @@ type SandboxAgentStatusResponse struct {
 	// The sandbox's idle-stop policy. Absent while the policy is not running, which in a configure-mode
 	// sandbox is always.
 	Autostop OptSandboxAgentAutostopStatus `json:"autostop"`
-	// The sandbox's description and tags, read from ~/.discobox/meta.json in the sandbox user's home,
-	// which is their system of record. Empty when there is no such file. Absent when the file could not
-	// be read or is not valid, in which case metaError says why.
+	// The sandbox's name, description and tags, read from ~/.discobox/meta.json in the sandbox user's
+	// home, which is their system of record. Empty when there is no such file. Absent when the file
+	// could not be read or is not valid, in which case metaError says why.
 	Meta OptSandboxMeta `json:"meta"`
 	// Why the meta file could not be read. Present only when meta is absent.
 	MetaError  OptString `json:"metaError"`
@@ -4919,14 +4965,19 @@ func (s *SandboxExecsResponse) SetExecs(val []SandboxExec) {
 	s.Execs = val
 }
 
-// A sandbox's description and tags, as the file inside it that holds them says.
+// A sandbox's name, description and tags, as the file inside it that holds them says. Each is
+// optional, and an absent one is unset.
 // Ref: #/components/schemas/SandboxMeta
 type SandboxMeta struct {
 	// What the sandbox is for, in the words of whoever wrote it. May run to several lines; a listing
 	// shows the first.
 	Description OptString `json:"description"`
+	// What a person or the agent calls the sandbox, on one line. When set it is the sandbox's
+	// displayName, in place of the title its harness set. It identifies nothing, and two sandboxes may
+	// share one.
+	Name OptString `json:"name"`
 	// Tags labeling the sandbox, key to value. A tag with an empty value is a plain label.
-	Tags SandboxMetaTags `json:"tags"`
+	Tags OptSandboxMetaTags `json:"tags"`
 }
 
 // GetDescription returns the value of Description.
@@ -4934,8 +4985,13 @@ func (s *SandboxMeta) GetDescription() OptString {
 	return s.Description
 }
 
+// GetName returns the value of Name.
+func (s *SandboxMeta) GetName() OptString {
+	return s.Name
+}
+
 // GetTags returns the value of Tags.
-func (s *SandboxMeta) GetTags() SandboxMetaTags {
+func (s *SandboxMeta) GetTags() OptSandboxMetaTags {
 	return s.Tags
 }
 
@@ -4944,8 +5000,13 @@ func (s *SandboxMeta) SetDescription(val OptString) {
 	s.Description = val
 }
 
+// SetName sets the value of Name.
+func (s *SandboxMeta) SetName(val OptString) {
+	s.Name = val
+}
+
 // SetTags sets the value of Tags.
-func (s *SandboxMeta) SetTags(val SandboxMetaTags) {
+func (s *SandboxMeta) SetTags(val OptSandboxMetaTags) {
 	s.Tags = val
 }
 
@@ -5975,6 +6036,10 @@ func (s StreamSandboxExecResourcesOK) Read(p []byte) (n int, err error) {
 type UpdateSandboxMetaBody struct {
 	// Replaces the description. An empty string clears it; omit it to leave the description alone.
 	Description OptString `json:"description"`
+	// Replaces the name, with the space around it trimmed. An empty string clears it, and the sandbox is
+	// listed by its harness's title again; omit it to leave the name alone. A name is one line of at
+	// most 128 bytes.
+	Name OptString `json:"name"`
 	// Tag keys to delete. Naming a key the sandbox does not have is not an error. A key may not be both
 	// set and removed.
 	RemoveTags []string `json:"removeTags"`
@@ -5986,6 +6051,11 @@ type UpdateSandboxMetaBody struct {
 // GetDescription returns the value of Description.
 func (s *UpdateSandboxMetaBody) GetDescription() OptString {
 	return s.Description
+}
+
+// GetName returns the value of Name.
+func (s *UpdateSandboxMetaBody) GetName() OptString {
+	return s.Name
 }
 
 // GetRemoveTags returns the value of RemoveTags.
@@ -6001,6 +6071,11 @@ func (s *UpdateSandboxMetaBody) GetSetTags() OptUpdateSandboxMetaBodySetTags {
 // SetDescription sets the value of Description.
 func (s *UpdateSandboxMetaBody) SetDescription(val OptString) {
 	s.Description = val
+}
+
+// SetName sets the value of Name.
+func (s *UpdateSandboxMetaBody) SetName(val OptString) {
+	s.Name = val
 }
 
 // SetRemoveTags sets the value of RemoveTags.

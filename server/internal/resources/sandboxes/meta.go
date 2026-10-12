@@ -18,7 +18,7 @@ import (
 	services "github.com/discobox-ai/discobox/server/internal/services"
 )
 
-// UpdateSandboxMeta carries a change to the sandbox's description or tags into
+// UpdateSandboxMeta carries a change to the sandbox's name, description or tags into
 // the sandbox, which applies it to its meta file, and records what the sandbox
 // then holds (ADR 0136). The sandbox is the system of record: a change it did
 // not take is an error, never a change recorded here alone, because the next
@@ -28,6 +28,9 @@ import (
 // already allows any such write.
 func (s *Service) UpdateSandboxMeta(ctx context.Context, projectID, sandboxID string, input services.UpdateSandboxMetaBody) (*model.Sandbox, error) {
 	change := sandboxmeta.Change{RemoveTags: input.RemoveTags}
+	if name, ok := input.Name.Get(); ok {
+		change.Name = &name
+	}
 	if description, ok := input.Description.Get(); ok {
 		change.Description = &description
 	}
@@ -48,6 +51,9 @@ func (s *Service) UpdateSandboxMeta(ctx context.Context, projectID, sandboxID st
 		return nil, err
 	}
 	request := sandboxapi.UpdateSandboxMetaBody{RemoveTags: change.RemoveTags}
+	if change.Name != nil {
+		request.Name = sandboxapi.NewOptString(*change.Name)
+	}
 	if change.Description != nil {
 		request.Description = sandboxapi.NewOptString(*change.Description)
 	}
@@ -75,7 +81,11 @@ func (s *Service) UpdateSandboxMeta(ctx context.Context, projectID, sandboxID st
 	if err := json.NewDecoder(io.LimitReader(resp.Body, sandboxmeta.MaxFileSize*2)).Decode(&written); err != nil {
 		return nil, apperrors.NewStatusError(http.StatusBadGateway, fmt.Sprintf("the sandbox answered a meta change with an unreadable response: %v", err))
 	}
-	meta := sandboxmeta.Meta{Description: written.Meta.Description.Or(""), Tags: map[string]string(written.Meta.Tags)}
+	meta := sandboxmeta.Meta{
+		Name:        written.Meta.Name.Or(""),
+		Description: written.Meta.Description.Or(""),
+		Tags:        map[string]string(written.Meta.Tags.Or(nil)),
+	}
 	if err := meta.Validate(); err != nil {
 		return nil, apperrors.NewStatusError(http.StatusBadGateway, fmt.Sprintf("the sandbox reported invalid meta: %v", err))
 	}

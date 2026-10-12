@@ -617,9 +617,33 @@ func TestReportSandboxAgentStatusRecordsMeta(t *testing.T) {
 		t.Fatalf("after reports carrying none, recorded %q %v; want the copy kept", description, tags)
 	}
 
-	report(observedAt.Add(3*time.Second), serverapi.SandboxAgentStatusEntryStatus{"meta": jx.Raw(`{"tags":{}}`)})
-	if description, tags := recorded(); description != "" || len(tags) != 0 {
-		t.Fatalf("recorded %q %v, want nothing once the sandbox reports nothing", description, tags)
+	// A meta naming a field this server does not know is not recorded, and
+	// neither is a null one: each leaves the copy as it was.
+	report(observedAt.Add(2*time.Second+time.Millisecond), serverapi.SandboxAgentStatusEntryStatus{"meta": jx.Raw(`{"title":"x"}`)})
+	report(observedAt.Add(2*time.Second+2*time.Millisecond), serverapi.SandboxAgentStatusEntryStatus{"meta": jx.Raw(`null`)})
+	if description, tags := recorded(); description != "fix the reaper" || !reflect.DeepEqual(tags, wantTags) {
+		t.Fatalf("after a meta this server cannot read, recorded %q %v; want the copy kept", description, tags)
+	}
+
+	// Every field of a meta is optional (ADR 26-10-12-026 §1): one holding
+	// only a name is the whole file, so the name is recorded and the
+	// description and tags it leaves out are unset.
+	report(observedAt.Add(3*time.Second), serverapi.SandboxAgentStatusEntryStatus{"meta": jx.Raw(`{"name":"Daily GH Check In"}`)})
+	got, err := svc.store.GetSandbox(ctx, "project-1", "sandbox-a")
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if got.MetaName == nil || *got.MetaName != "Daily GH Check In" || got.Description != nil || len(got.Tags) != 0 {
+		t.Fatalf("recorded name %v, description %v, tags %v; want only the name", got.MetaName, got.Description, got.Tags)
+	}
+
+	report(observedAt.Add(4*time.Second), serverapi.SandboxAgentStatusEntryStatus{"meta": jx.Raw(`{}`)})
+	got, err = svc.store.GetSandbox(ctx, "project-1", "sandbox-a")
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if description, tags := recorded(); description != "" || len(tags) != 0 || got.MetaName != nil {
+		t.Fatalf("recorded %q %v and name %v, want nothing once the sandbox reports nothing", description, tags, got.MetaName)
 	}
 }
 
