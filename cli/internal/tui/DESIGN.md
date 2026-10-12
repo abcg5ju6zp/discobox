@@ -576,13 +576,9 @@ the URL a remote source clones, or the upstream a local one's branch tracked
 tag to the issue or pull request (`Sandbox.tagURL`). Without a GitHub
 repository the tag is plain: `issue=4` alone does not say whose issue 4.
 
-- **On the list**, the tag on the row is the link, and a plain click on it
-  opens that discobox's workspace — as Enter on the row does, refusals
-  included — with the issue or pull request as a tab beside it
-  (`openIssueOf`): the same thing the header's link opens, one screen
-  earlier. Ctrl-click follows the link, as below. The row cannot mark it —
+- **On the list**, the tag on the row is the link. The row cannot mark it —
   rows are marked after they are drawn — so `row` hands its links back and
-  `view` marks them over the row (`hitIssue`, `hitPull`, naming the box). The wheel and the right button look through
+  `view` marks them over the row. The wheel and the right button look through
   a link to the row under it (`zones.beneathLinks`): a link has no answer to
   them.
 - **In the workspace**, the header carries them as `issue #4 · PR #9`

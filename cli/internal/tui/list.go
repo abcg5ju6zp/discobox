@@ -725,14 +725,9 @@ func (l *sandboxList) view(st *styles, z *zones, focused bool) string {
 	block := append(append(out, body...), blank)
 	z.markList(hitRow, l.drawn, l.width, len(block))
 	// The links on the rows go over the rows, so a press on one opens it
-	// rather than pointing at its row: the issue or the pull request, as a tab
-	// beside its discobox's workspace.
+	// rather than pointing at its row.
 	for _, link := range rowLinks {
-		what := hit{kind: hitIssue, idx: link.issue, url: link.url, box: link.box}
-		if link.pull {
-			what.kind = hitPull
-		}
-		z.mark(what, link.x, link.y, link.width, 1)
+		z.mark(urlHit(link.url), link.x, link.y, link.width, 1)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, block...)
 }
@@ -992,19 +987,13 @@ func (l *sandboxList) row(st *styles, z *zones, s Sandbox, i, y int, focused boo
 type rowLink struct {
 	x, y, width int
 	url         string
-	// issue is the number the link is to, and pull whether it is a pull
-	// request's; box is the discobox whose row it is on.
-	issue int
-	pull  bool
-	box   string
 }
 
 // tagSpans draws the tags a row has room for, dim, from cell x of line y. A
 // tag that numbers an issue or a pull request in the discobox's GitHub
 // repository (Sandbox.tagURL) is a link to it instead, in the color the
 // header's links are drawn in, and lit when the pointer is on it — the same
-// terms the header's links are drawn on, since a click on one opens it, as a
-// tab beside that discobox's workspace, as the header's does.
+// terms the header's links are drawn on, since a click on one opens it.
 func (l *sandboxList) tagSpans(st *styles, z *zones, s Sandbox, tags []string, x, y int) (string, []rowLink) {
 	var out strings.Builder
 	var links []rowLink
@@ -1013,20 +1002,15 @@ func (l *sandboxList) tagSpans(st *styles, z *zones, s Sandbox, tags []string, x
 		out.WriteString(st.dimText.Render(" "))
 		x++
 		width := lipgloss.Width(label)
-		url := s.tagURL(tag)
-		key, number, _ := strings.Cut(tag, "=")
-		// tagURL has said the number is one.
-		issue, _ := strconv.Atoi(number)
-		link := rowLink{x: x, y: y, width: width, url: url, issue: issue, pull: key == "pr", box: s.ID}
-		switch {
+		switch url := s.tagURL(tag); {
 		case url == "":
 			out.WriteString(st.dimText.Render(label))
 		case z.hovering(x, y, width, 1):
 			out.WriteString(hyperlink(url, st.hover.Render(label)))
-			links = append(links, link)
+			links = append(links, rowLink{x: x, y: y, width: width, url: url})
 		default:
 			out.WriteString(hyperlink(url, st.info.Render(label)))
-			links = append(links, link)
+			links = append(links, rowLink{x: x, y: y, width: width, url: url})
 		}
 		x += width
 	}

@@ -119,10 +119,6 @@ type hit struct {
 	keys []string
 	// url is what a link opens.
 	url string
-	// box is the discobox an issue or a pull request is opened beside, for a
-	// link drawn on a row of the list (hitIssue, hitPull); empty for the
-	// workspace header's, which are the open workspace's own.
-	box string
 }
 
 // urlHit is a link made pressable, opening the URL its text already carries.
