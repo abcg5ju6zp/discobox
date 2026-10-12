@@ -8,20 +8,26 @@ import (
 // (ADR 26-10-09-389), read again on every call rather than once: the console
 // is one long-lived process, and a person who fixes or edits the file between
 // two creates from it means the second to see what they wrote.
-//
-// When there is no file where it was looked for, the reference listing every
-// setting is rewritten beside where it belongs, the way the server rewrites
-// server.example.yaml. That reference is documentation, so one that cannot be
-// written is no reason to fail the command that looked.
 func loadClientConfig() (*clientconfig.Config, error) {
 	cfg, err := clientconfig.Load()
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Path != "" && !cfg.Read {
-		_, _ = clientconfig.RefreshExample(cfg.Path)
-	}
+	refreshClientConfigExample()
 	return cfg, nil
+}
+
+// refreshClientConfigExample rewrites client.example.yaml, the reference
+// listing every setting, when the client reads the default path and there is
+// no client.yaml there (clientconfig.MissingDefault) — the way the server
+// rewrites server.example.yaml. Reading the configuration calls it, and so
+// does the console as it starts, so the reference is there to find before
+// anything is created. It is documentation, so one that cannot be written
+// fails nothing.
+func refreshClientConfigExample() {
+	if path, ok := clientconfig.MissingDefault(); ok {
+		_, _ = clientconfig.RefreshExample(path)
+	}
 }
 
 // newSkills is what a new discobox installs as skills: --skills and

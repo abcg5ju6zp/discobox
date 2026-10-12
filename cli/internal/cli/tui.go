@@ -92,6 +92,7 @@ func (a *App) runConsole(cmd *cobra.Command, leaderFlag string, options ...tui.O
 			return err
 		}
 	}
+	refreshClientConfigExample()
 	projectID, err := a.projectIDValue()
 	if err != nil {
 		return err
