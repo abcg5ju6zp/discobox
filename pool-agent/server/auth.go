@@ -57,7 +57,24 @@ type SignedTokenClaims struct {
 	PoolID    string
 	SandboxID string
 	Scopes    []string
+	// Use is what the control plane says the request is for (ADR 26-10-12-711
+	// §2): it decides whether a sandbox-directed route starts a stopped
+	// sandbox. Empty on a token the control plane did not mark, which is a
+	// sandbox's own.
+	Use string
 }
+
+// The uses a control-plane token may carry. An action and a read both start a
+// stopped sandbox; the control plane tells them apart, because only an action
+// may repair, and here they are the same. An inspect and an observe never
+// start one, and are refused while it is not running: an inspect waits out a
+// boot something else began, and an observe answers now.
+const (
+	UseAction  = "action"
+	UseRead    = "read"
+	UseInspect = "inspect"
+	UseObserve = "observe"
+)
 
 func (c SignedTokenClaims) HasScope(scope string) bool {
 	for _, candidate := range c.Scopes {
@@ -190,7 +207,7 @@ func (a *SignedTokenAuthenticator) OriginMiddleware(sandboxTokens *sandboxtoken.
 			// decoded path is a different string once a segment carries an
 			// escaped slash: a project id of "p%2Fpool%2Fx%2Fsandboxes%2Fmine"
 			// decodes to a path whose first sandbox is the token's own while
-			// the router serves, and autoStart starts, the one named after it.
+			// the router serves, and onUse starts, the one named after it.
 			if err := a.authorizeRequestPath(r.URL.EscapedPath(), claims); err != nil {
 				a.reject(r, w, http.StatusForbidden, reasonForbidden, err)
 				return
@@ -316,11 +333,16 @@ func signedTokenClaimsFromToken(token *paseto.Token) (SignedTokenClaims, error) 
 	if err := token.Get("scopes", &scopes); err != nil {
 		return SignedTokenClaims{}, fmt.Errorf("read scopes claim: %w", err)
 	}
+	// Optional: a token minted for something other than a route into a
+	// sandbox carries none.
+	var use string
+	_ = token.Get("use", &use)
 	return SignedTokenClaims{
 		ProjectID: projectID,
 		PoolID:    poolID,
 		SandboxID: sandboxID,
 		Scopes:    scopes,
+		Use:       use,
 	}, nil
 }
 
@@ -372,6 +394,7 @@ func requiredPoolOperationScope(operation workerapi.OperationName) string {
 		workerapi.PoolArchiveSandboxOperation,
 		workerapi.PoolDeleteSandboxOperation,
 		workerapi.PoolStartSandboxOperation,
+		workerapi.PoolEnsureSandboxRunningOperation,
 		workerapi.PoolStopSandboxOperation:
 		return ScopeSandboxWrite
 	case workerapi.PoolSyncOperation:

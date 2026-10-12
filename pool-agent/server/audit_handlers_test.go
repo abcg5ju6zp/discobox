@@ -330,7 +330,7 @@ func TestSandboxReadsNeverStartAStoppedSandbox(t *testing.T) {
 			if err := runtime.StopSandbox(ctx, "sandbox-1", &workerapimodel.PoolSandboxOperationRequest{}); err != nil {
 				t.Fatal(err)
 			}
-			publicKey, sign := testPoolTokenSigner(t)
+			publicKey, sign := testPoolTokenSignerFor(t, UseObserve)
 			router, err := NewRouter(Config{
 				Identity:              Identity{ProjectID: "project-1", PoolID: "pool-1"},
 				Runtime:               proxyTestRuntime{MemorySandboxRuntime: runtime, baseURL: baseURL},

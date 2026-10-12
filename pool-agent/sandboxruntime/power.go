@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
@@ -72,27 +71,20 @@ func (r *DockerSandboxRuntime) RestartSandbox(ctx context.Context, sandboxID str
 
 // EnsureSandboxRunning starts a sandbox that is not running, and is a no-op for
 // one that already is. It is what the sandbox-directed routes call so that a
-// stopped sandbox comes up on first use (ADR 0017 §12).
+// stopped sandbox comes up on first use (ADR 0017 §12), and what the control
+// plane calls before it forwards an action into one (ADR 26-10-12-711 §2).
 //
 // Nothing about it is a special path: it takes the same lock and calls the same
 // start as an explicit instruction, so an implicitly started sandbox reports
 // starting and then running exactly like any other.
-func (r *DockerSandboxRuntime) EnsureSandboxRunning(ctx context.Context, sandboxID string, awaitContainer bool) error {
-	// A sandbox whose container is not there yet is waited for, not failed,
-	// when the caller is one that waits (ADR 0039 tier 2). This tier is the
-	// only one that can see the container, and a rebuild — repair, or a
-	// recreate after runtime loss — leaves a window where this pool holds the
-	// sandbox's tree and its container is between removal and recreation.
-	//
-	// It cannot see whether a rebuild is actually coming, so the wait is only
-	// for the routes the control plane itself waits on. Everything else is
-	// asked on a cadence or by a command that wants an answer, and a failed
-	// sandbox whose container is simply gone held each of those for the whole
-	// wait before saying so.
-	//
-	// The wait is outside the lock: the create it is waiting for takes the same
-	// lock, so holding it here would wait for something it was blocking.
-	current, err := r.sandboxContainer(ctx, sandboxID, awaitContainer)
+func (r *DockerSandboxRuntime) EnsureSandboxRunning(ctx context.Context, sandboxID string) error {
+	// A sandbox whose container is not there is answered at once, and says
+	// which kind of absence it is (powerTarget). This tier is the only one
+	// that can see the container, and it cannot see whether a rebuild is
+	// coming: the control plane can, and is the one that waits for it
+	// (ADR 26-10-12-711 §6). Waiting here held every caller of a failed
+	// sandbox whose container was simply gone for the whole wait.
+	current, err := r.powerTarget(ctx, sandboxID)
 	if err != nil {
 		return err
 	}
@@ -108,23 +100,17 @@ func (r *DockerSandboxRuntime) EnsureSandboxRunning(ctx context.Context, sandbox
 	// not listening yet, and it comes back a bare 502. A boot can end without
 	// the sandbox up, so one that was waited on is followed by a second look
 	// the ordinary way, which starts the sandbox if it went down.
-	if current != nil && current.Status == StatusRunning {
+	if current.Status == StatusRunning {
 		waited, err := r.awaitBoot(ctx, sandboxID)
 		if err != nil || !waited {
 			return err
 		}
 	}
 	for {
+		// A start that retires a container from before the bootstrap named
+		// the pool's key answers that there is none (errContainerRetired),
+		// like any other: the control plane rebuilds it.
 		booting, err := r.startUnlessRunning(ctx, sandboxID)
-		if errors.Is(err, errContainerRetired) && awaitContainer {
-			// The start retired a container from before the bootstrap named
-			// the pool's key; the control plane rebuilds it, and the caller
-			// waits for that like any other rebuild.
-			if _, err := r.sandboxContainer(ctx, sandboxID, true); err != nil {
-				return err
-			}
-			continue
-		}
 		if err != nil || !booting {
 			return err
 		}
@@ -161,56 +147,6 @@ func (r *DockerSandboxRuntime) startUnlessRunning(ctx context.Context, sandboxID
 	return false, r.startLocked(ctx, sandboxID)
 }
 
-// sandboxContainerWaitTimeout bounds the wait for a container that is being
-// rebuilt. It is strictly shorter than the control plane's own wait, so a
-// container that never appears is reported by this tier — the only one that can
-// see it — rather than by a deadline two levels out (ADR 0039).
-const (
-	sandboxContainerWaitTimeout  = 90 * time.Second
-	sandboxContainerPollInterval = 250 * time.Millisecond
-)
-
-// sandboxContainer returns as soon as the sandbox has a container, and — when
-// asked to await one — waits for one only when this pool is holding the
-// sandbox's tree.
-//
-// An id whose tree is not here is not late, it is wrong: waiting on it would
-// turn a prompt error into a minute and a half of silence on every route
-// autoStart wraps. An archived sandbox is not waited on either — its container
-// is gone by intent (ADR 0022 §5) — and is left to the archive answer its
-// caller gives.
-//
-// It returns the sandbox as last read, or nil when it stopped waiting without
-// one.
-func (r *DockerSandboxRuntime) sandboxContainer(ctx context.Context, sandboxID string, await bool) (*Sandbox, error) {
-	deadline := time.Now()
-	if await {
-		deadline = deadline.Add(sandboxContainerWaitTimeout)
-	}
-	for {
-		sb, err := r.GetSandbox(ctx, sandboxID)
-		if err == nil {
-			return sb, nil
-		}
-		if !errors.Is(err, ErrNotFound) {
-			return nil, err
-		}
-		if r.isArchived(sandboxID) || !r.hostsSandbox(sandboxID) {
-			return nil, nil
-		}
-		if !time.Now().Before(deadline) {
-			// The tree is here and the container is not: the sandbox exists,
-			// and repair is what gives it one.
-			return nil, ErrNoContainer
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(sandboxContainerPollInterval):
-		}
-	}
-}
-
 // powerTarget returns the container a power operation acts on, and says why
 // there is none when there is not.
 //
@@ -221,10 +157,9 @@ func (r *DockerSandboxRuntime) sandboxContainer(ctx context.Context, sandboxID s
 // "sandbox not found" while an attach to the same sandbox answered that it
 // needed repair. Only an id whose tree is not here is not found.
 //
-// It does not wait for a rebuild. That wait belongs to the route the control
-// plane itself waits on (see EnsureSandboxRunning); a power instruction is a
-// command that wants an answer, and for a sandbox nothing is rebuilding the
-// wait would only delay the one it gets.
+// It does not wait for a rebuild. That wait is the control plane's, which
+// knows whether one is coming (ADR 26-10-12-711 §6); here it would only delay
+// the answer for a sandbox nothing is rebuilding.
 func (r *DockerSandboxRuntime) powerTarget(ctx context.Context, sandboxID string) (*Sandbox, error) {
 	sb, err := r.GetSandbox(ctx, sandboxID)
 	if err == nil || !errors.Is(err, ErrNotFound) {

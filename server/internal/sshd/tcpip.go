@@ -15,6 +15,7 @@ import (
 	poolagentauth "github.com/discobox-ai/discobox/server/internal/auth/poolagent"
 	"github.com/discobox-ai/discobox/server/internal/model"
 	"github.com/discobox-ai/discobox/server/internal/sandboxagentclient"
+	services "github.com/discobox-ai/discobox/server/internal/services"
 	"github.com/discobox-ai/discobox/server/internal/transport"
 )
 
@@ -37,7 +38,7 @@ func (s *Server) handleDirectTCPIPChannel(ctx context.Context, newChannel ssh.Ne
 		return
 	}
 
-	lease, sandboxModel, err := s.sandboxes.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, []string{poolagentauth.ScopeTCPConnect})
+	lease, sandboxModel, err := s.sandboxes.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, []string{poolagentauth.ScopeTCPConnect}, services.SandboxAction("ssh port forward"))
 	if err != nil {
 		s.logger.Warn("ssh direct-tcpip authorize failed", "project", projectID, "sandbox", sandboxID, "error", err)
 		_ = newChannel.Reject(ssh.ConnectionFailed, err.Error())

@@ -76,6 +76,10 @@ type TokenClaims struct {
 	PoolID    string
 	SandboxID string
 	Scopes    []string
+	// Use marks a token for a route into a sandbox with what the request is
+	// for (ADR 26-10-12-711 §2). The pool agent starts a stopped sandbox, or
+	// refuses to, by it. Empty on every other token.
+	Use string
 }
 
 type issuerState struct {
@@ -228,6 +232,9 @@ func CreateTokenForAudience(privateKey ed25519.PrivateKey, audience string, clai
 	}
 	if err := token.Set("scopes", claims.Scopes); err != nil {
 		return "", err
+	}
+	if claims.Use != "" {
+		token.SetString("use", claims.Use)
 	}
 	return token.V4Sign(pasetoKey, nil), nil
 }

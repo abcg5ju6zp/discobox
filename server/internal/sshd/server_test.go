@@ -53,12 +53,13 @@ type acquireCall struct {
 	projectID string
 	sandboxID string
 	scopes    []string
+	use       services.SandboxUse
 }
 
-func (f *fakeSandboxService) AcquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
+func (f *fakeSandboxService) AcquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
 	principal, ok := auth.PrincipalFromContext(ctx)
 	f.mu.Lock()
-	f.acquireCalls = append(f.acquireCalls, acquireCall{principal: principal, ok: ok, projectID: projectID, sandboxID: sandboxID, scopes: scopes})
+	f.acquireCalls = append(f.acquireCalls, acquireCall{principal: principal, ok: ok, projectID: projectID, sandboxID: sandboxID, scopes: scopes, use: use})
 	f.mu.Unlock()
 	if f.acquireResult != nil {
 		return f.acquireResult()
@@ -69,13 +70,7 @@ func (f *fakeSandboxService) AcquireSandboxHTTPClient(ctx context.Context, proje
 	return nil, nil, errors.New("fakeSandboxService: no lease configured")
 }
 
-// AwaitSandboxHTTPClient records and answers exactly like the acquire it
-// waits on; nothing in these tests is provisioning.
-func (f *fakeSandboxService) AwaitSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
-	return f.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
-}
-
-func (f *fakeSandboxService) AcquireRunningSandboxHTTPClient(context.Context, string, string, []string) (*services.HTTPClientLease, *model.Sandbox, error) {
+func (f *fakeSandboxService) AcquireRunningSandboxHTTPClient(context.Context, string, string, []string, services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
 	panic("not implemented")
 }
 func (f *fakeSandboxService) ReadSandboxInventory(context.Context, string, string, []string, services.InventoryRead) ([]byte, error) {

@@ -164,6 +164,23 @@ func (s *sandboxService) PoolStartSandbox(ctx context.Context, req *workerapimod
 	return &workerapimodel.PoolSandboxOperationAccepted{SandboxId: params.SandboxId}, nil
 }
 
+// PoolEnsureSandboxRunning starts the sandbox unless it is running, and
+// answers once its agent does (ADR 26-10-12-711 §2). The control plane calls
+// it before forwarding an action, so that a sandbox with no container is
+// learned of while nothing has been forwarded yet and the control plane can
+// still repair it. It is the same call the sandbox-directed routes make
+// (onUse), not the start instruction: that answers for a container Docker
+// calls running before its agent is up, and always waits on the start gate.
+func (s *sandboxService) PoolEnsureSandboxRunning(ctx context.Context, _ *workerapimodel.PoolSandboxOperationRequest, params workerapi.PoolEnsureSandboxRunningParams) (*workerapimodel.PoolSandboxRunning, error) {
+	if err := s.authorize(params.ProjectId, params.PoolId); err != nil {
+		return nil, err
+	}
+	if err := s.runtime.EnsureSandboxRunning(ctx, params.SandboxId); err != nil {
+		return nil, mapRuntimeError(err)
+	}
+	return &workerapimodel.PoolSandboxRunning{SandboxId: params.SandboxId}, nil
+}
+
 func (s *sandboxService) PoolStopSandbox(ctx context.Context, req *workerapimodel.PoolSandboxOperationRequest, params workerapi.PoolStopSandboxParams) (*workerapimodel.PoolSandboxOperationAccepted, error) {
 	if err := s.authorize(params.ProjectId, params.PoolId); err != nil {
 		return nil, err

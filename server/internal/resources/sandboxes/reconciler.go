@@ -307,6 +307,14 @@ func (r *SandboxReconciler) ensure(ctx context.Context, sandbox *model.Sandbox, 
 	sandbox.SetState(model.SandboxStateReady)
 	sandbox.ObservedGeneration = generation
 	sandbox.ClearFailure()
+	// An automatic repair that converges here has landed, and says so on its
+	// record: that is what tells a later failure on this generation from the
+	// repair's own (ADR 26-10-12-711 §4). Once, not on the observation-driven
+	// ensures that still arrive on this generation.
+	if repair := sandbox.AutomaticRepair; repair != nil && repair.Generation == generation && repair.LandedAt == nil {
+		landed := time.Now().UTC()
+		repair.LandedAt = &landed
+	}
 	if err := r.update(ctx, sandbox, generation); err != nil {
 		return reconcile.Result{}, err
 	}

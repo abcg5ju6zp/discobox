@@ -60,7 +60,11 @@ func (p *recordingProvider) Remove(context.Context, sandbox.SandboxRef, []byte) 
 func (p *recordingProvider) Get(context.Context, sandbox.SandboxRef, []byte) (*sandbox.Sandbox, error) {
 	return nil, nil
 }
-func (p *recordingProvider) AcquireHTTPClient(context.Context, sandbox.SandboxRef, []byte, []string) (*transport.HTTPClientLease, error) {
+func (p *recordingProvider) EnsureRunning(context.Context, sandbox.SandboxRef, []byte) error {
+	return nil
+}
+
+func (p *recordingProvider) AcquireHTTPClient(context.Context, sandbox.SandboxRef, []byte, []string, sandbox.Use) (*transport.HTTPClientLease, error) {
 	return nil, nil
 }
 

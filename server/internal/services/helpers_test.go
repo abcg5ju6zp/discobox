@@ -50,6 +50,7 @@ func TestSandboxDisplayState(t *testing.T) {
 		errMessage   string
 		generation   int64
 		observed     int64
+		repair       int64
 		want         string
 	}{
 		// Existence answers first, then the runtime axis fills in what the
@@ -82,6 +83,18 @@ func TestSandboxDisplayState(t *testing.T) {
 		{name: "failed", desired: model.DesiredStatePresent, state: model.SandboxStateFailed, generation: 2, observed: 2, want: "error"},
 		{name: "error recorded", desired: model.DesiredStatePresent, state: model.SandboxStateReady, runtimeState: model.SandboxRuntimeStateStopped, errMessage: "boom", generation: 2, observed: 2, want: "error"},
 		{name: "invalid lifecycle", desired: "", state: "", want: "error"},
+
+		// A repair recorded and not yet landed answers before the failure it
+		// is repairing: the row still reads `failed`, and "error" would name
+		// the thing being fixed (ADR 26-10-12-711 §8). Once its generation is
+		// observed it is whatever it became, and a later generation is not a
+		// repair at all.
+		{name: "repair of a failed sandbox in flight", desired: model.DesiredStatePresent, state: model.SandboxStateFailed, generation: 4, observed: 3, repair: 4, want: "repairing"},
+		{name: "repair of a running sandbox in flight", desired: model.DesiredStatePresent, state: model.SandboxStateReady, runtimeState: model.SandboxRuntimeStateRunning, generation: 4, observed: 3, repair: 4, want: "repairing"},
+		{name: "repair landed", desired: model.DesiredStatePresent, state: model.SandboxStateReady, runtimeState: model.SandboxRuntimeStateStopped, generation: 4, observed: 4, repair: 4, want: "stopped"},
+		{name: "repair failed", desired: model.DesiredStatePresent, state: model.SandboxStateFailed, errMessage: "boom", generation: 4, observed: 4, repair: 4, want: "error"},
+		{name: "intent after a repair", desired: model.DesiredStatePresent, state: model.SandboxStateFailed, generation: 5, observed: 4, repair: 4, want: "error"},
+		{name: "archive requested over a repair", desired: model.DesiredStateArchived, state: model.SandboxStateFailed, generation: 4, observed: 3, repair: 4, want: "error"},
 	}
 
 	for _, tt := range tests {
@@ -95,7 +108,7 @@ func TestSandboxDisplayState(t *testing.T) {
 			if tt.errMessage != "" {
 				lifecycle.ErrorMessage = &tt.errMessage
 			}
-			sandbox := &model.Sandbox{ResourceLifecycle: lifecycle, RuntimeState: tt.runtimeState}
+			sandbox := &model.Sandbox{ResourceLifecycle: lifecycle, RuntimeState: tt.runtimeState, RepairGeneration: tt.repair}
 			if got := SandboxDisplayState(sandbox); got != tt.want {
 				t.Fatalf("SandboxDisplayState() = %q, want %q", got, tt.want)
 			}

@@ -35,6 +35,19 @@ type Handler interface {
 	//
 	// DELETE /api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}
 	PoolDeleteSandbox(ctx context.Context, params PoolDeleteSandboxParams) error
+	// PoolEnsureSandboxRunning implements pool-ensure-sandbox-running operation.
+	//
+	// Starts the sandbox unless it is already running, and answers once the
+	// sandbox agent inside it answers. It is what the control plane calls
+	// before it forwards an action into a sandbox. Unlike the start
+	// instruction it does not answer for a container that is up while its
+	// agent is not, and a sandbox already running does not wait on the
+	// start gate. A sandbox with no container is a 409 of type
+	// sandbox-no-container, and an archived one a 409 of type
+	// sandbox-archived.
+	//
+	// POST /api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/ensure-running
+	PoolEnsureSandboxRunning(ctx context.Context, req *PoolSandboxOperationRequest, params PoolEnsureSandboxRunningParams) (*PoolSandboxRunning, error)
 	// PoolGetHTTPAudit implements pool-get-http-audit operation.
 	//
 	// One audited HTTP exchange in full, relayed from the pool proxy's loopback

@@ -123,14 +123,43 @@ type HarnessConfigService interface {
 	DeleteHarnessConfigSecretBinding(ctx context.Context, projectID, configID, envName string) error
 }
 
-// AcquireSandboxHTTPClient takes no set of acceptable sandbox states, so no
-// caller has to know the sandbox is up before it can talk to it.
-//
-// Under ADR 0017 §12 the pool agent starts a stopped sandbox on demand, so the
-// server checks only that the sandbox exists and is not being deleted, and
-// that its pool is reachable. Gating on power state would refuse traffic that
-// the pool agent would happily have served, and it would only cover the routes
-// that consult the server in the first place.
+// SandboxUse says what a request into a sandbox is for, which is what decides
+// whether it starts a stopped sandbox, whether it waits for one that is not
+// usable yet, and whether it may repair a failed one (ADR 26-10-12-711 §1).
+// Every route into a sandbox names its use when it acquires its client, so the
+// table of which route does what is the callers of AcquireSandboxHTTPClient
+// and nothing else: the pool agent is told the answer on each request.
+type SandboxUse struct {
+	Kind sandbox.Use
+	// Trigger names an action in the words a listing shows when the action
+	// leads to an automatic repair: "exec attach", "ssh", "http". Reads and
+	// observes repair nothing and leave it empty.
+	Trigger string
+	// Attach marks a terminal attach, which a discobox may not make to
+	// another (ADR 26-10-01-397 §2).
+	Attach bool
+}
+
+// SandboxAction is a request that changes something in the sandbox or acts in
+// it. It starts a stopped sandbox, waits for one still being provisioned, and
+// repairs, once, a failed one with no container.
+func SandboxAction(trigger string) SandboxUse {
+	return SandboxUse{Kind: sandbox.UseAction, Trigger: trigger}
+}
+
+var (
+	// SandboxRead reads what only a running sandbox can answer: logs, events,
+	// resource samples. It starts a stopped sandbox, answers at once, and
+	// repairs nothing.
+	SandboxRead = SandboxUse{Kind: sandbox.UseRead}
+	// SandboxInspect reads what the sandbox's last inventory also answers:
+	// its execs, services and tools. It never starts a sandbox; the pool
+	// agent waits out a boot under way and refuses one that is not running.
+	SandboxInspect = SandboxUse{Kind: sandbox.UseInspect}
+	// SandboxObserve reads what a running sandbox is doing and never starts
+	// one: the pool agent refuses it for a sandbox that is not running.
+	SandboxObserve = SandboxUse{Kind: sandbox.UseObserve}
+)
 
 // SandboxService manages sandboxes within a project.
 type SandboxService interface {
@@ -169,19 +198,19 @@ type SandboxService interface {
 	// (ADR 0136).
 	UpdateSandboxMeta(ctx context.Context, projectID, sandboxID string, input UpdateSandboxMetaBody) (*model.Sandbox, error)
 	ReconcileSandbox(ctx context.Context, projectID, sandboxID string) (*model.Sandbox, error)
-	AcquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*HTTPClientLease, *model.Sandbox, error)
-	// AwaitSandboxHTTPClient is the same acquire for a caller that means "I
-	// want to use this sandbox now": it waits for a sandbox that is still
-	// being provisioned to become reachable instead of refusing the request
-	// (ADR 0039 tier 1). Callers that want the fail-fast answer keep using
-	// AcquireSandboxHTTPClient.
-	AwaitSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*HTTPClientLease, *model.Sandbox, error)
+	// AcquireSandboxHTTPClient leases a client onto the sandbox for the
+	// caller's scopes, and is the one way into a sandbox. What it does first
+	// depends on use: an action waits for a sandbox that is not usable yet,
+	// has its pool start it, and repairs it once if it failed and has no
+	// container; a read or an observe answers at once.
+	AcquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string, use SandboxUse) (*HTTPClientLease, *model.Sandbox, error)
 	// AcquireRunningSandboxHTTPClient is the acquire for a read the sandbox's
-	// inventory can answer (ADR 26-10-11-657 §4). The pool agent refuses such
-	// a read of a sandbox that is not running, and the caller answers that
-	// from ReadSandboxInventory; this refuses with sandbox.ErrNotRunning only
-	// a sandbox recorded as stopped whose pool cannot be asked.
-	AcquireRunningSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*HTTPClientLease, *model.Sandbox, error)
+	// inventory can answer (ADR 26-10-11-657 §4), whose use is an inspect or
+	// an observe. The pool agent refuses such a read of a sandbox that is not
+	// running, and the caller answers that from ReadSandboxInventory; this
+	// refuses with sandbox.ErrNotRunning only a sandbox recorded as stopped
+	// whose pool cannot be asked.
+	AcquireRunningSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string, use SandboxUse) (*HTTPClientLease, *model.Sandbox, error)
 	// ReadSandboxInventory answers read from the inventory the sandbox last
 	// posted, as the JSON its own route would have answered plus observedAt.
 	// A sandbox that has posted none, or none of that part, is a 409.

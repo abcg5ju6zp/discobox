@@ -23,7 +23,7 @@ func TestInstructionRefusalSaysWhatToDo(t *testing.T) {
 		{ErrNotFound, "repair it"},
 	} {
 		t.Run(tc.cause.Error(), func(t *testing.T) {
-			err := instructionRefusal(fmt.Errorf("pool: %w", tc.cause), sandboxStart)
+			err := runtimeRefusal(fmt.Errorf("pool: %w", tc.cause), sandboxStart.String())
 			var statusErr apperrors.StatusError
 			if !errors.As(err, &statusErr) || statusErr.Status != http.StatusConflict {
 				t.Fatalf("refusal = %#v, want a 409", err)
@@ -39,7 +39,7 @@ func TestInstructionRefusalSaysWhatToDo(t *testing.T) {
 
 	other := errors.New("pool-agent request failed: boom")
 	var statusErr apperrors.StatusError
-	if got := instructionRefusal(other, sandboxStop); errors.As(got, &statusErr) || got.Error() != other.Error() {
+	if got := runtimeRefusal(other, sandboxStop.String()); errors.As(got, &statusErr) || got.Error() != other.Error() {
 		t.Fatalf("an unrelated failure was rewritten as %v", got)
 	}
 }

@@ -629,11 +629,19 @@ func (p *Provider) Get(ctx context.Context, ref sandbox.SandboxRef, state []byte
 	return client.Get(ctx, ref, state)
 }
 
+func (p *Provider) EnsureRunning(ctx context.Context, ref sandbox.SandboxRef, state []byte) error {
+	client, err := p.agentClientFromState(ctx, ref, state)
+	if err != nil {
+		return err
+	}
+	return client.EnsureRunning(ctx, ref)
+}
+
 // AcquireHTTPClient leases a client onto the sandbox's pool. A sandbox this
 // provider has not created yet has no state to name its pool, and is reached
 // at the pool the control plane placed it in: its source is delivered there
 // while it is still being made (ADR 26-10-10-545 §3).
-func (p *Provider) AcquireHTTPClient(ctx context.Context, ref sandbox.SandboxRef, state []byte, scopes []string) (*transport.HTTPClientLease, error) {
+func (p *Provider) AcquireHTTPClient(ctx context.Context, ref sandbox.SandboxRef, state []byte, scopes []string, use sandbox.Use) (*transport.HTTPClientLease, error) {
 	client, err := p.agentClientFromState(ctx, ref, state)
 	if errors.Is(err, sandbox.ErrNotFound) && ref.PoolID != "" {
 		var pool *model.Pool
@@ -644,7 +652,7 @@ func (p *Provider) AcquireHTTPClient(ctx context.Context, ref sandbox.SandboxRef
 	if err != nil {
 		return nil, err
 	}
-	return client.AcquireHTTPClient(ctx, ref, state, scopes)
+	return client.AcquireHTTPClient(ctx, ref, state, scopes, use)
 }
 
 func (p *Provider) Archive(ctx context.Context, ref sandbox.SandboxRef, state []byte) ([]byte, error) {

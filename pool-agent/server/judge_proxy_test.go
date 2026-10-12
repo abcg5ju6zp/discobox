@@ -42,9 +42,8 @@ func TestJudgeIsForwardedOnItsOwnScope(t *testing.T) {
 
 // The judge's route is registered by name, because this router forwards the
 // paths it names and nothing else: an unregistered one is a 404 the control
-// plane cannot tell from a pool that has no judge. It starts a stopped judge
-// without waiting for a container to be rebuilt — the request a verdict is
-// holding open would be waiting on that rebuild.
+// plane cannot tell from a pool that has no judge. It starts a stopped judge,
+// and answers at once for one with no container.
 func TestJudgeRouteIsRegisteredAndStartsAStoppedJudge(t *testing.T) {
 	runtime := &ensureRecorder{err: sandboxruntime.ErrNoContainer}
 	service := &sandboxService{runtime: runtime}
@@ -52,12 +51,11 @@ func TestJudgeRouteIsRegisteredAndStartsAStoppedJudge(t *testing.T) {
 	registerSandboxProxyRoutes(router, service)
 
 	resp := httptest.NewRecorder()
-	router.ServeHTTP(resp, httptest.NewRequestWithContext(t.Context(), http.MethodPost,
-		"/api/project/p/pool/w/sandboxes/sb_judge/judge", nil))
+	router.ServeHTTP(resp, markedRequest(t, http.MethodPost, "/api/project/p/pool/w/sandboxes/sb_judge/judge", UseAction))
 	if resp.Code == http.StatusNotFound {
 		t.Fatal("status = 404: the judge's path is not registered with this router")
 	}
-	if len(runtime.awaited) != 1 || runtime.awaited[0] {
-		t.Fatalf("awaited = %v, want the judge started without waiting for a rebuild", runtime.awaited)
+	if runtime.ensured != 1 {
+		t.Fatalf("ensured %d times, want the judge started once", runtime.ensured)
 	}
 }

@@ -23,10 +23,11 @@ const primaryExecID = "primary"
 // AcquireRunningSandboxHTTPClient leases a client for a read the sandbox's
 // inventory can answer (ADR 26-10-11-657 §4).
 //
+// Its use is an inspect or an observe, which the lease marks on its tokens.
 // Whether the sandbox is running is the pool agent's to say, not the row's:
-// it knows the container's true state, refuses such a read of a sandbox that
-// is not running instead of starting it, and the caller answers that refusal
-// from the inventory. The row lags — an action that has just started a
+// it knows the container's true state, refuses a read so marked of a sandbox
+// that is not running instead of starting it, and the caller answers that
+// refusal from the inventory. The row lags — an action that has just started a
 // stopped sandbox is followed by reads of it before the pool's state report
 // lands — and a read answered from the inventory then would miss the very
 // exec the action created.
@@ -34,8 +35,8 @@ const primaryExecID = "primary"
 // The row decides only when the pool cannot be asked. A sandbox recorded as
 // stopped on a pool that is not reachable is refused with
 // sandbox.ErrNotRunning, so it is still read from its inventory.
-func (s *Service) AcquireRunningSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
-	lease, sandboxModel, err := s.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
+func (s *Service) AcquireRunningSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
+	lease, sandboxModel, err := s.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes, use)
 	if err != nil && errors.Is(err, sandbox.ErrPoolNotReachable) && sandboxModel != nil && sandboxModel.RuntimeState == model.SandboxRuntimeStateStopped {
 		return nil, sandboxModel, apperrors.StatusError{
 			Status:  http.StatusConflict,

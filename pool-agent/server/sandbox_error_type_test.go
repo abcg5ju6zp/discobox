@@ -106,9 +106,15 @@ func (r *refusingRuntime) RestartSandbox(context.Context, string, *workerapimode
 	return r.err
 }
 
+func (r *refusingRuntime) EnsureSandboxRunning(context.Context, string) error {
+	return r.err
+}
+
 // A refused power instruction answers with the runtime's own status, not a 500:
 // an id this pool does not hold is not found, and a sandbox with no container
-// or an archived one is a conflict that says what to do.
+// or an archived one is a conflict that says what to do. The ensure the control
+// plane calls before an action answers the same way, and the no-container type
+// on it is what the control plane repairs on (ADR 26-10-12-711 §3).
 func TestPowerInstructionsMapRuntimeErrors(t *testing.T) {
 	identity := Identity{ProjectID: "proj_a", PoolID: "pool_a"}
 	cases := map[error]struct {
@@ -134,6 +140,10 @@ func TestPowerInstructionsMapRuntimeErrors(t *testing.T) {
 			},
 			"restart": func() error {
 				_, err := service.PoolRestartSandbox(ctx, req, workerapi.PoolRestartSandboxParams{ProjectId: "proj_a", PoolId: "pool_a", SandboxId: "sbx_1"})
+				return err
+			},
+			"ensure-running": func() error {
+				_, err := service.PoolEnsureSandboxRunning(ctx, req, workerapi.PoolEnsureSandboxRunningParams{ProjectId: "proj_a", PoolId: "pool_a", SandboxId: "sbx_1"})
 				return err
 			},
 		}

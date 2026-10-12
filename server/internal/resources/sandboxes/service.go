@@ -489,28 +489,65 @@ func (s *Service) GetSandbox(ctx context.Context, projectID, sandboxID string) (
 }
 
 // AcquireSandboxHTTPClient leases an HTTP client onto the sandbox for the
-// caller's scopes.
+// caller's scopes. It is the choke point every route into a sandbox goes
+// through, and use is what the route is for (ADR 26-10-12-711 §1).
 //
-// It checks that the sandbox still exists and that its pool is up, and nothing
-// about whether the sandbox is running: a stopped sandbox is started on demand
-// by the pool agent when the request arrives (ADR 0017 §12). Refusing here
-// would reject traffic the agent would have served, and would only cover the
-// routes that consult the server at all — the git and HTTP proxies are served
-// by the agent directly.
-func (s *Service) AcquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
+// A read or an observe answers now: the sandbox exists, and its pool is up.
+// Whether the sandbox is started for it is the pool agent's to carry out, by
+// the mark the lease puts on every token.
+//
+// An action is brought to a sandbox that can take it before the lease is
+// handed out (acquireForAction): it waits for one still being provisioned, has
+// the pool start it, and repairs it once if it failed and has no container.
+// Nothing has been forwarded at that point, so nothing has to be replayed.
+func (s *Service) AcquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
+	// A discobox reads and types into another's terminal one judged call at a
+	// time, and does not attach to it (ADR 26-10-01-397 §2).
+	if principal, ok := auth.PrincipalFromContext(ctx); ok && use.Attach && principal.Type == auth.PrincipalTypeSandbox {
+		return nil, nil, apperrors.NewStatusError(http.StatusForbidden, "a discobox does not attach to another")
+	}
 	if err := authorizeRequestedScopes(ctx, scopes); err != nil {
 		return nil, nil, err
 	}
-	return s.acquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
+	return s.acquireForUse(ctx, projectID, sandboxID, scopes, use)
 }
 
-func (s *Service) acquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
+// AcquireSandboxHTTPClientForServer is the same acquire for a call Discobox
+// makes itself rather than on behalf of somebody: putting a job to the
+// project's judge (ADR 26-09-22-838 §2). There are no caller scopes to check,
+// because there is no caller — the scopes are this code's own, and the route
+// they reach is the one they name.
+//
+// As an action it waits, which a judge needs: one on a pool the server has not
+// heard from since it started is the ordinary state for the first heartbeat
+// after a restart, and a refusal there blocks a request the judge would have
+// allowed. The caller bounds the wait with its context.
+func (s *Service) AcquireSandboxHTTPClientForServer(ctx context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
+	return s.acquireForUse(ctx, projectID, sandboxID, scopes, use)
+}
+
+func (s *Service) acquireForUse(ctx context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
+	if use.Kind == sandbox.UseAction {
+		return s.acquireForAction(ctx, projectID, sandboxID, scopes, use)
+	}
+	return s.acquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes, use.Kind)
+}
+
+// acquireSandboxHTTPClient is one look: the row, its pool, and a lease marked
+// with use. It waits for nothing and starts nothing.
+func (s *Service) acquireSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string, use sandbox.Use) (*services.HTTPClientLease, *model.Sandbox, error) {
 	sandboxModel, err := s.store.GetSandbox(ctx, projectID, sandboxID)
 	if err != nil {
 		return nil, nil, apperrors.NotFound(err, "sandbox not found")
 	}
 	if sandboxModel.DesiredState == model.DesiredStateDeleted {
 		return nil, sandboxModel, apperrors.NewStatusError(http.StatusConflict, "sandbox is being deleted")
+	}
+	// An action is not forwarded into a sandbox archived by intent, and says
+	// what undoes that. A read or an observe is left to the pool agent, which
+	// refuses it in its own words.
+	if use == sandbox.UseAction && sandboxModel.DesiredState == model.DesiredStateArchived {
+		return nil, sandboxModel, apperrors.NewStatusError(http.StatusConflict, "sandbox is archived; unarchive it first")
 	}
 	pool, err := s.store.GetPool(ctx, projectID, sandboxModel.PoolID)
 	if err != nil {
@@ -526,8 +563,8 @@ func (s *Service) acquireSandboxHTTPClient(ctx context.Context, projectID, sandb
 			Status:  http.StatusConflict,
 			Message: fmt.Sprintf("sandbox pool is not reachable: pool=%s state=%s ready=%t", pool.ID, pool.State, pool.IsReady()),
 			// A pool that is not up yet is a condition a wait can resolve, and
-			// the sentinel is how AwaitSandboxHTTPClient tells it apart from
-			// the refusals that are answers.
+			// the sentinel is how an action's wait tells it apart from the
+			// refusals that are answers.
 			Cause: sandbox.ErrPoolNotReachable,
 		}
 	}
@@ -538,7 +575,7 @@ func (s *Service) acquireSandboxHTTPClient(ctx context.Context, projectID, sandb
 	if err != nil {
 		return nil, nil, err
 	}
-	lease, err := provider.AcquireHTTPClient(ctx, sandboxRefFromSandbox(sandboxModel), sandboxModel.ProviderState, scopes)
+	lease, err := provider.AcquireHTTPClient(ctx, sandboxRefFromSandbox(sandboxModel), sandboxModel.ProviderState, scopes, use)
 	if err != nil {
 		// The row outlives the host: a pool whose container is being replaced,
 		// or whose agent has not passed its healthcheck yet, still reads ready
@@ -564,7 +601,7 @@ func authorizeRequestedScopes(ctx context.Context, scopes []string) error {
 		// (ADR 26-10-01-397 §1), and writing its meta file (ADR 26-10-08-447
 		// §1). Those scopes are all this allows, so a route added to the role
 		// by mistake reaches no legacy terminal, tunnel, or sandbox HTTP.
-		// Attaching is refused where it waits (AwaitSandboxHTTPClient).
+		// Attaching is refused before this (AcquireSandboxHTTPClient).
 		for _, scope := range scopes {
 			switch scope {
 			case poolagentauth.ScopeSandboxWrite, poolagentauth.ScopeExecRead, poolagentauth.ScopeExecWrite:
@@ -756,46 +793,74 @@ func (s *Service) RepairSandbox(ctx context.Context, projectID, sandboxID string
 	return s.instructSandbox(ctx, projectID, sandboxID, sandboxStart)
 }
 
+// instructSandbox forwards a power instruction and answers with the pool's
+// refusal, if any.
+//
+// A start or a restart is a use of the sandbox like any action, so one refused
+// for want of a container repairs the sandbox once, or waits for the rebuild
+// already coming, and is then sent again (ADR 26-10-12-711 §3). It waits for
+// nothing else: an instruction is a command that wants an answer, and a
+// sandbox still being created is still refused at once. A stop is not a use.
 func (s *Service) instructSandbox(ctx context.Context, projectID, sandboxID string, instruction sandboxInstruction) (*model.Sandbox, error) {
+	if instruction == sandboxStop {
+		sandbox, err := s.instructSandboxOnce(ctx, projectID, sandboxID, instruction)
+		if err != nil {
+			return nil, err
+		}
+		return sandbox, nil
+	}
+	sandbox, err := s.awaitUsable(ctx, projectID, sandboxID, services.SandboxAction(instruction.String()), waitOnceRebuilding,
+		func(ctx context.Context) (*model.Sandbox, error) {
+			return s.instructSandboxOnce(ctx, projectID, sandboxID, instruction)
+		})
+	if err != nil {
+		return nil, err
+	}
+	return sandbox, nil
+}
+
+func (s *Service) instructSandboxOnce(ctx context.Context, projectID, sandboxID string, instruction sandboxInstruction) (*model.Sandbox, error) {
 	sandbox, err := s.store.GetSandbox(ctx, projectID, sandboxID)
 	if err != nil {
 		return nil, apperrors.NotFound(err, "sandbox not found")
 	}
 	if sandbox.DesiredState == model.DesiredStateDeleted {
-		return nil, apperrors.NewStatusError(http.StatusConflict, "sandbox is being deleted")
+		return sandbox, apperrors.NewStatusError(http.StatusConflict, "sandbox is being deleted")
 	}
 	if sandbox.DesiredState == model.DesiredStateArchived {
-		return nil, apperrors.NewStatusError(http.StatusConflict, "sandbox is archived; unarchive it first")
+		return sandbox, apperrors.NewStatusError(http.StatusConflict, "sandbox is archived; unarchive it first")
 	}
 	provider, err := s.resolveProvider(ctx, sandbox)
 	if err != nil {
-		return nil, err
+		return sandbox, err
 	}
 	if err := instructSandbox(ctx, s.store, provider, sandbox, instruction); err != nil {
-		return nil, instructionRefusal(err, instruction)
+		return sandbox, runtimeRefusal(err, instruction.String())
 	}
 	return sandbox, nil
 }
 
-// instructionRefusal gives a refusal of a power instruction for want of a
-// runtime the status it means. The row is here, so none of these is the
-// sandbox missing: each says its runtime is not there to power, and why. Left
-// as plain errors they went out as a 500 naming nothing the caller could do.
-func instructionRefusal(err error, instruction sandboxInstruction) error {
+// runtimeRefusal gives a refusal for want of a runtime the status it means,
+// for a power instruction or for the ensure an action makes before it is
+// forwarded; verb is what was being done ("start", "use"). The row is here, so
+// none of these is the sandbox missing: each says its runtime is not there,
+// and why. Left as plain errors they went out as a 500 naming nothing the
+// caller could do.
+func runtimeRefusal(err error, verb string) error {
 	var message string
 	switch {
 	case errors.Is(err, ErrNoContainer):
-		message = fmt.Sprintf("cannot %s sandbox: it has no container on its pool; it is being rebuilt, or repair it to give it one", instruction)
+		message = fmt.Sprintf("cannot %s sandbox: it has no container on its pool; it is being rebuilt, or repair it to give it one", verb)
 	case errors.Is(err, ErrArchived):
 		// The row is present here — an archived row was refused before the
-		// instruction went out — so this is an unarchive the pool has not
-		// caught up with, or one that failed and settled, and unarchiving
-		// again would be refused. Repair is the way out of the second.
-		message = fmt.Sprintf("cannot %s sandbox: it is still archived on its pool; try again shortly while its unarchive converges, or repair it if the unarchive failed", instruction)
+		// pool was asked — so this is an unarchive the pool has not caught up
+		// with, or one that failed and settled, and unarchiving again would be
+		// refused. Repair is the way out of the second.
+		message = fmt.Sprintf("cannot %s sandbox: it is still archived on its pool; try again shortly while its unarchive converges, or repair it if the unarchive failed", verb)
 	case errors.Is(err, ErrNotFound):
 		// Not only the pool's 404: a sandbox whose create has not placed it on
 		// a pool yet reads the same way.
-		message = fmt.Sprintf("cannot %s sandbox: it has no runtime on its pool, either not yet created or lost; if it is not being created, repair it", instruction)
+		message = fmt.Sprintf("cannot %s sandbox: it has no runtime on its pool, either not yet created or lost; if it is not being created, repair it", verb)
 	default:
 		return err
 	}

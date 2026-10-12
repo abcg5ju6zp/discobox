@@ -399,14 +399,14 @@ func TestPoolProviderReachesANewSandboxAtThePoolItWasPlacedIn(t *testing.T) {
 	provider := New(runtimeProvider, sandbox.ProviderDefinition{Name: "test"}, &fakePoolManager{pool: activePool("pool-1")})
 
 	lease, err := provider.AcquireHTTPClient(context.Background(),
-		sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1", PoolID: "pool-1"}, nil, []string{poolagentauth.ScopeSandboxWrite})
+		sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1", PoolID: "pool-1"}, nil, []string{poolagentauth.ScopeSandboxWrite}, sandbox.UseRead)
 	if err != nil {
 		t.Fatalf("acquire a client for a sandbox with no provider state: %v", err)
 	}
 	lease.Release()
 
 	_, err = provider.AcquireHTTPClient(context.Background(),
-		sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, nil, []string{poolagentauth.ScopeSandboxWrite})
+		sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, nil, []string{poolagentauth.ScopeSandboxWrite}, sandbox.UseRead)
 	if !errors.Is(err, sandbox.ErrNotFound) {
 		t.Fatalf("a sandbox with no state and no pool = %v, want ErrNotFound", err)
 	}
@@ -429,7 +429,7 @@ func TestPoolProviderAcquireHTTPClientReconcilesPoolAndRetries(t *testing.T) {
 	provider := New(runtimeProvider, sandbox.ProviderDefinition{Name: "test"}, manager)
 	state := poolRuntimeState(t, &sandbox.Sandbox{SandboxID: "sandbox-1", Metadata: map[string]string{"pool_id": "pool-1"}})
 
-	lease, err := provider.AcquireHTTPClient(context.Background(), sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, state, []string{poolagentauth.ScopeSandboxRead})
+	lease, err := provider.AcquireHTTPClient(context.Background(), sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, state, []string{poolagentauth.ScopeSandboxRead}, sandbox.UseRead)
 	if err != nil {
 		t.Fatalf("acquire HTTP client: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestPoolProviderAcquireHTTPClientReconcilesPoolAndRetries(t *testing.T) {
 	if len(manager.agentTokenClaims) != 1 {
 		t.Fatalf("agent token claims count = %d, want 1", len(manager.agentTokenClaims))
 	}
-	if claims := manager.agentTokenClaims[0]; claims.ProjectID != "project-1" || claims.PoolID != "pool-1" || claims.SandboxID != "sandbox-1" || !reflect.DeepEqual(claims.Scopes, []string{poolagentauth.ScopeSandboxRead}) {
+	if claims := manager.agentTokenClaims[0]; claims.ProjectID != "project-1" || claims.PoolID != "pool-1" || claims.SandboxID != "sandbox-1" || !reflect.DeepEqual(claims.Scopes, []string{poolagentauth.ScopeSandboxRead}) || claims.Use != string(sandbox.UseRead) {
 		t.Fatalf("agent token claims = %#v", claims)
 	}
 	// The worktree's Git route is served by the sandbox agent (ADR 0126 §4),
@@ -600,7 +600,7 @@ func TestPoolProviderOnlyCreateWaitsForAPoolHost(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := provider.AcquireHTTPClient(ctx, sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, state, []string{poolagentauth.ScopeSandboxRead})
+	_, err := provider.AcquireHTTPClient(ctx, sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, state, []string{poolagentauth.ScopeSandboxRead}, sandbox.UseRead)
 	if !errors.Is(err, notRunning) {
 		t.Fatalf("AcquireHTTPClient error = %v, want %v without waiting", err, notRunning)
 	}
@@ -632,7 +632,7 @@ func TestPoolProviderKeepsTheDriverRefusalWhenTheReconcileWaitRunsOut(t *testing
 	provider := New(runtimeProvider, sandbox.ProviderDefinition{Name: "test"}, manager)
 	state := poolRuntimeState(t, &sandbox.Sandbox{SandboxID: "sandbox-1", Metadata: map[string]string{"pool_id": "pool-1"}})
 
-	_, err := provider.AcquireHTTPClient(context.Background(), sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, state, []string{poolagentauth.ScopeSandboxRead})
+	_, err := provider.AcquireHTTPClient(context.Background(), sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, state, []string{poolagentauth.ScopeSandboxRead}, sandbox.UseRead)
 	if !errors.Is(err, sandbox.ErrPoolNotReachable) {
 		t.Fatalf("AcquireHTTPClient error = %v, want the driver refusal (%v)", err, sandbox.ErrPoolNotReachable)
 	}
@@ -657,7 +657,7 @@ func TestPoolProviderMarksAPoolForReconcileOnceWhileItsHostIsDown(t *testing.T) 
 	state := poolRuntimeState(t, &sandbox.Sandbox{SandboxID: "sandbox-1", Metadata: map[string]string{"pool_id": "pool-1"}})
 
 	for pass := range 3 {
-		if _, err := provider.AcquireHTTPClient(context.Background(), sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, state, []string{poolagentauth.ScopeSandboxRead}); err == nil {
+		if _, err := provider.AcquireHTTPClient(context.Background(), sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}, state, []string{poolagentauth.ScopeSandboxRead}, sandbox.UseRead); err == nil {
 			t.Fatalf("pass %d: AcquireHTTPClient succeeded against an unreachable host", pass)
 		}
 	}

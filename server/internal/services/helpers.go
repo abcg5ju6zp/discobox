@@ -317,6 +317,9 @@ func SandboxToAPI(sandbox *model.Sandbox, fallback *model.HarnessConfig) (server
 	if upgrade := SandboxUpgrade(sandbox, fallback); upgrade != nil {
 		runtime["upgrade"] = upgrade
 	}
+	if sandbox.AutomaticRepair != nil {
+		runtime["automaticRepair"] = sandbox.AutomaticRepair
+	}
 	if len(sandbox.AgentStatus) > 0 {
 		runtime["agentStatus"] = sandbox.AgentStatus
 	}
@@ -489,8 +492,8 @@ func SandboxUpgrade(sandbox *model.Sandbox, fallback *model.HarnessConfig) map[s
 }
 
 // SandboxDisplayState renders the small lifecycle vocabulary presented to API
-// users: starting, running, stopping, stopped, archiving, archived, deleting,
-// deleted, error.
+// users: starting, running, stopping, stopped, repairing, archiving, archived,
+// deleting, deleted, error.
 //
 // It is the one place the two state axes are combined, and it is what clients
 // should read: existence is the reconciler's `State`, power is the pool agent's
@@ -504,6 +507,13 @@ func SandboxUpgrade(sandbox *model.Sandbox, fallback *model.HarnessConfig) map[s
 func SandboxDisplayState(sandbox *model.Sandbox) string {
 	if sandbox == nil {
 		return "error"
+	}
+	// A repair that has not landed answers before the failure it is repairing:
+	// recording it cleared the error, the row still reads `failed` until the
+	// reconciler writes, and "error" would name the thing being fixed
+	// (ADR 26-10-12-711 §8).
+	if sandbox.Repairing() {
+		return "repairing"
 	}
 	if sandbox.ErrorMessage != nil || sandbox.State == model.SandboxStateFailed {
 		return "error"

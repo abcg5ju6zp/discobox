@@ -10,6 +10,7 @@ import (
 
 	poolclient "github.com/discobox-ai/discobox/pool-agent/api/gen"
 	poolapimodel "github.com/discobox-ai/discobox/pool-agent/api/model"
+	sandboxruntime "github.com/discobox-ai/discobox/pool-agent/sandboxruntime"
 	"github.com/discobox-ai/discobox/server/internal/sandbox"
 )
 
@@ -105,5 +106,46 @@ func TestPoolAgentWithoutTheRouteIsUnsupported(t *testing.T) {
 	}
 	if errors.Is(err, sandbox.ErrNotFound) {
 		t.Fatal("an agent without the route read as a missing sandbox")
+	}
+}
+
+// The ensure an action makes before it is forwarded (ADR 26-10-12-711 §2)
+// starts a stopped sandbox on the pool agent, and its two refusals reach the
+// service as what it acts on: a pool that holds no such sandbox is not found,
+// and an agent from before the operation is unsupported, which the service
+// reads as "that agent starts sandboxes itself" rather than as a failure.
+func TestEnsureRunningStartsTheSandboxAndMapsItsRefusals(t *testing.T) {
+	ctx := context.Background()
+	runtimeProvider := newTestRuntimeProvider(t, "project-1", "pool-1")
+	manager := &fakePoolManager{pool: activePool("pool-1"), schedulable: true}
+	provider := New(runtimeProvider, sandbox.ProviderDefinition{Name: "test"}, manager)
+	ref := sandbox.SandboxRef{ProjectID: "project-1", SandboxID: "sandbox-1"}
+	state := poolRuntimeState(t, &sandbox.Sandbox{SandboxID: "sandbox-1", Metadata: map[string]string{"pool_id": "pool-1"}})
+
+	if err := provider.EnsureRunning(ctx, ref, state); !errors.Is(err, sandbox.ErrNotFound) || errors.Is(err, sandbox.ErrPoolAgentUnsupported) {
+		t.Fatalf("ensure of a sandbox the pool does not hold = %v, want ErrNotFound", err)
+	}
+
+	if _, err := runtimeProvider.runtime.CreateSandbox(ctx, &poolapimodel.PoolSandboxCreateRequest{SandboxId: "sandbox-1"}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if err := runtimeProvider.runtime.StopSandbox(ctx, "sandbox-1", &poolapimodel.PoolSandboxOperationRequest{}); err != nil {
+		t.Fatalf("stop sandbox: %v", err)
+	}
+	if err := provider.EnsureRunning(ctx, ref, state); err != nil {
+		t.Fatalf("ensure of a stopped sandbox: %v", err)
+	}
+	if sb, err := runtimeProvider.runtime.GetSandbox(ctx, "sandbox-1"); err != nil || sb.Status != sandboxruntime.StatusRunning {
+		t.Fatalf("after the ensure the sandbox is %v, %v; want it running", sb, err)
+	}
+
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(old.Close)
+	runtimeProvider.baseURL = old.URL
+	runtimeProvider.client = old.Client()
+	if err := provider.EnsureRunning(ctx, ref, state); !errors.Is(err, sandbox.ErrPoolAgentUnsupported) || errors.Is(err, sandbox.ErrNotFound) {
+		t.Fatalf("ensure against an agent without the route = %v, want ErrPoolAgentUnsupported and not a missing sandbox", err)
 	}
 }

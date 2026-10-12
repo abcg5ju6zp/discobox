@@ -57,7 +57,19 @@ func sandboxGitProxyHandler(service services.SandboxService, route gitRoute) htt
 
 		projectID := chi.URLParam(r, "projectId")
 		sandboxID := chi.URLParam(r, "sandboxId")
-		lease, sandboxModel, err := service.AcquireSandboxHTTPClient(r.Context(), projectID, sandboxID, agentScopes)
+		// The worktree is inside the sandbox, served by its agent, so reaching
+		// it is an action: the sandbox is started, and repaired once if it
+		// failed and lost its container. An origin is the pool's own
+		// repository, so reaching it repairs nothing and waits for nothing:
+		// it is a read, which the pool agent still starts a stopped sandbox
+		// for, as it did before. Not waiting is what keeps the push a parked
+		// sandbox is waiting on from waiting on that sandbox
+		// (ADR 26-10-12-711 §1).
+		use := services.SandboxRead
+		if route == gitRouteWorktree {
+			use = services.SandboxAction("git")
+		}
+		lease, sandboxModel, err := service.AcquireSandboxHTTPClient(r.Context(), projectID, sandboxID, agentScopes, use)
 		if err != nil {
 			http.Error(w, err.Error(), statusCodeForProxyError(err))
 			return

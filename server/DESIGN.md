@@ -101,16 +101,20 @@ Current proxy routes:
 - `/projects/{projectId}/sandboxes/{sandboxId}/http/{port}/{path...}` forwards
   to the pool-agent route
   `/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/http/{port}/{path...}`.
-  The pool agent owns reaching `{port}` inside the sandbox, and starts a
-  stopped sandbox on demand.
+  The pool agent owns reaching `{port}` inside the sandbox. Traffic to a port
+  is an action: the server has the pool start a stopped sandbox before it
+  forwards.
 - `/api/projects/{projectId}/sandboxes/{sandboxId}/execs...`, `.../services...`,
   `.../harness-hooks` and `.../exec-events` forward their path suffix to the pool-agent sandbox
   route, which reaches the sandbox-agent exec API. The pool agent and sandbox
   agent own serving that API; the server owns project authorization, scope
-  selection, and lease/token injection only. An `attach` acquires through
-  `AwaitSandboxHTTPClient`, so it waits for a sandbox still coming up
-  (ADR 0039). Exec creation can request the same wait with `wait=ready`;
-  other routes fail fast.
+  selection, lease/token injection, and naming what each request is for
+  (`registerSandboxAgentTerminalRoutes`): an action, a read, or an observe. That is
+  the one table of which route starts a stopped sandbox, waits for one still
+  coming up, or may repair one; see
+  [What a request is for](internal/resources/sandboxes/DESIGN.md#what-a-request-is-for).
+  `wait=ready` on an exec create predates every action waiting, and is taken
+  and not forwarded.
 - `/api/projects/{projectId}/sandboxes/{sandboxId}/tcp/attach?host=&port=`
   forwards the websocket upgrade to the sandbox-agent `/tcp/attach` endpoint,
   which dials `host:port` from inside the sandbox's network namespace and
@@ -342,11 +346,13 @@ permits fetch.
   `sandboxes.updateSandboxMetadata` rather than `recordSandboxIntent`:
   nothing about desired or observed runtime state changes, so there is
   nothing for the reconcile engine to act on.
-- `AcquireSandboxHTTPClient` checks that the sandbox exists and is not being
-  deleted and that its pool has current ready health (`Pool.IsReady`), and
-  nothing about whether it is running. A stopped sandbox is started on demand
-  by the pool agent when the request reaches it (ADR 0017 §12), so gating here
-  would refuse traffic the agent would have served.
+- `AcquireSandboxHTTPClient` is the one way into a sandbox, and takes what the
+  request is for. For every use it checks that the sandbox exists and is not
+  being deleted and that its pool has current ready health (`Pool.IsReady`).
+  For an action it also waits for a sandbox that is not usable yet, has the
+  pool start it, and repairs it once if it failed and has no container
+  (ADR 26-10-12-711). Power state never refuses a request: the pool agent
+  starts a stopped sandbox, in the process that can see its container.
 
 ## Configuration
 

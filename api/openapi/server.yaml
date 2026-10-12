@@ -4057,6 +4057,41 @@ components:
             required:
                 - status
             type: object
+        SandboxAutomaticRepair:
+            additionalProperties: false
+            description: |-
+                The last repair recorded for this sandbox without anybody asking for one: an
+                action found it failed with no container on its pool, and it was rebuilt once.
+                While displayState is repairing and generation is this record's, the repair is
+                still running. It is kept after the repair lands, with landedAt set, because
+                landing clears the failure it answered, and is replaced by the next one. A
+                sandbox in error on this record's generation with no landedAt is one whose
+                automatic repair failed, and it is not repaired automatically again until an
+                explicit repair or upgrade.
+            properties:
+                generation:
+                    description: Generation the repair was recorded as
+                    format: int64
+                    type: integer
+                startedAt:
+                    description: When the repair was recorded
+                    format: date-time
+                    type: string
+                trigger:
+                    description: The use of the sandbox that triggered the repair, such as "exec attach", "ssh" or "start"
+                    type: string
+                failure:
+                    description: The failure the repair answers
+                    type: string
+                landedAt:
+                    description: When the repair landed. Absent while it is running, and when it failed.
+                    format: date-time
+                    type: string
+            required:
+                - generation
+                - startedAt
+                - trigger
+            type: object
         SandboxUpgrade:
             additionalProperties: false
             description: |-
@@ -4144,11 +4179,14 @@ components:
                         User-facing lifecycle state, composed from the existence state, the runtime state,
                         and whether the existence generations agree. This is the field
                         clients should read: it is the one answer to "what is this sandbox doing".
+                        repairing is a repair, typed or automatic, that has been recorded and has not
+                        landed yet; automaticRepair says what triggered an automatic one.
                     enum:
                         - starting
                         - running
                         - stopping
                         - stopped
+                        - repairing
                         - archiving
                         - archived
                         - deleting
@@ -4227,6 +4265,8 @@ components:
                     type: string
                 upgrade:
                     "$ref": "#/components/schemas/SandboxUpgrade"
+                automaticRepair:
+                    "$ref": "#/components/schemas/SandboxAutomaticRepair"
             required:
                 - desiredState
                 - state

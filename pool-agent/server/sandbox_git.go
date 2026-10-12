@@ -18,7 +18,7 @@ import (
 // sandbox's checkout, so the route needs the sandbox up, and starts it if it
 // is not.
 func registerSandboxGitRoutes(router chi.Router, service *sandboxService) {
-	router.Handle("/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/git-repositories/*", service.autoStart(failFast, needsSandbox, service.sandboxWorktreeHandler()))
+	router.Handle("/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/git-repositories/*", service.onUse(needsSandbox, service.sandboxWorktreeHandler()))
 }
 
 // registerSandboxOriginRoutes serves each source's origin as its sandbox
@@ -29,7 +29,7 @@ func registerSandboxGitRoutes(router chi.Router, service *sandboxService) {
 // real one (ADR 0058 §3). It is registered apart from the other routes because
 // it alone accepts the sandbox's own token (OriginMiddleware).
 func registerSandboxOriginRoutes(router chi.Router, service *sandboxService) {
-	router.Handle("/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/git-origins/*", service.autoStart(failFast, servedByPool, service.sandboxOriginHandler()))
+	router.Handle("/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/git-origins/*", service.onUse(servedByPool, service.sandboxOriginHandler()))
 }
 
 // sandboxWorktreeHandler checks the pool's own token on the worktree route and

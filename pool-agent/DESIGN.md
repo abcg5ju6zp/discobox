@@ -355,9 +355,10 @@ flowchart LR
   (`retireContainerWithoutRuntimeConfig`): the container is removed — its
   durable tree is in the pool-host binds — a complete state sync goes at once,
   and the control plane's "your container is gone" ensure recreates it from the
-  spec it holds, on the bootstrap that can. An on-demand start waits for that
-  rebuild like any other; an explicit one answers that the sandbox is being
-  rebuilt. Any create that reaches such a container also counts it drifted.
+  spec it holds, on the bootstrap that can. The start that retired it answers
+  that the sandbox has no container, like any other, and the control plane
+  waits for the rebuild. Any create that reaches such a container also counts
+  it drifted.
 
 ## Sources
 
@@ -524,11 +525,38 @@ Adding one means adding it in all three.
 Power operations (`start`, `stop`, `restart`) answer with acceptance only, and
 serialise per sandbox on one mutex (the ones that can start a container also
 pass the pool's start gate first; see [Clearing the Pool's Caches](#clearing-the-pools-caches)). That is also what makes on-demand start safe:
-sandbox-directed routes — the HTTP proxy, the sandbox-agent proxy, the Git
-proxy, and the SSH ingress's TCP tunnel route (ADR 0024 §7) — start a stopped
-sandbox before proxying (`server/autostart.go`), and ten concurrent requests
-produce one start. Control operations never auto-start. A failed on-demand
-start refuses the routes that reach into the sandbox with its error and names
+ten concurrent requests produce one start.
+
+**The control plane decides what starts a sandbox, and this agent carries it
+out** (ADR 26-10-12-711 §2). Every sandbox-directed route — the HTTP proxy, the
+sandbox-agent proxy, the Git proxy, and the SSH ingress's TCP tunnel route
+(ADR 0024 §7) — is wrapped in `onUse` (`server/autostart.go`), which reads the
+`use` claim the control plane put on the request's token:
+
+| `use` | Before proxying |
+| --- | --- |
+| `action`, `read` | start the sandbox unless it is running, and wait out a boot under way |
+| `observe` | refuse with 409 unless it is running; never start it |
+| none | start nothing: a route that reaches into the sandbox is served as an observe, and an origin is served from the pool |
+
+There is no table of routes here. Which route is an action, a read or an
+observe is the control plane's to say, so a route cannot be classified one way
+there and another here. The one token with no mark a current control plane
+leads to is a sandbox's own, fetching its own origin, and that sandbox is
+running. A control plane from before the mark marks nothing, so a server rolled
+back under its pools finds stopped sandboxes refused until they are started
+explicitly, for as long as it takes to replace those pools' agents with its
+own version.
+
+`POST .../sandboxes/{id}/ensure-running` is the same start, asked for before
+anything is forwarded: the control plane calls it for an action, so that "no
+container" is learned while the request is still the caller's and a repair can
+run under it. It answers once the sandbox agent does. It is not the start
+instruction, which answers for a container Docker calls running and always
+waits on the start gate.
+
+Control operations never start a sandbox. A failed start refuses the routes
+that reach into the sandbox with its error and names
 `discobox admin box repair` for when it persists, so a runtime failure such as a
 missing bind mount is not hidden behind a missing sandbox IP address. The
 worktree's Git route is one of those routes: the repository is the sandbox's
@@ -537,43 +565,31 @@ until it is repaired, and the refusal's plain-text body is what `git` — and so
 `discobox apply` — prints. The origin route still serves, from the pool's own
 files.
 
-Every start — explicit, restart, or auto-start — ends by delivering the
+Every start — explicit, restart, or on use — ends by delivering the
 sandbox's runtime-config document once its agent answers (`finishBoot`; see
 [Sandbox Runtime Config](#sandbox-runtime-config)), so each boot is given the
 pool's idle timeout as it is now (ADR 0108 §3), and a provider's changed timeout
 reaches a running sandbox at the next status poll.
 
-The latch also waits for a container that is not there yet, which is this tier's
-half of the attach wait (ADR 0039): a rebuild — repair, or a recreate after
-runtime loss — leaves a window where the sandbox's tree is here and its
-container is between removal and recreation, and falling through it produced
-"no inspectable IP address" from the proxy about a fact the caller could not act
-on. The wait is for a sandbox this pool holds the tree of, under a budget
-shorter than the control plane's, so the tier that can see the container is the
-one that reports it missing. An id whose tree is not here is not late, it is
-wrong, and is answered immediately.
+**A sandbox with a tree and no container is answered at once**, on every
+route: `ErrNoContainer`, a 409 that says it is being rebuilt or needs repair.
+A rebuild — repair, or a recreate after runtime loss — leaves a window where
+the sandbox's tree is here and its container is between removal and
+recreation, and this tier cannot tell that from a container that is simply
+gone. The control plane can, and is the tier that waits for it or repairs it
+(ADR 26-10-12-711 §§3, 6); waiting here held every call to a `failed` sandbox
+for the whole budget before saying so. An id whose tree is not here is not
+late, it is wrong, and is a 404.
 
-**Only the route the control plane waits on waits here** (`autoStart`'s
-`awaitContainer`/`failFast`): exec attach, which is the one route
-`AwaitSandboxHTTPClient` serves. The sandbox-agent API (exec listing and create,
-services, tools, hooks), the tcp/udp tunnels and the git and port proxies are all
-failed fast upstream, and this tier cannot tell a rebuild in progress from a
-container that is simply gone: a `failed` sandbox left without one held each of
-those calls for the whole wait and then said "sandbox not found". Either way the
-sandbox with a tree and no container is `ErrNoContainer`, a 409 that says it is
-being rebuilt or needs repair.
-
-**Explicit power instructions answer the same way, without the wait**
-(`powerTarget`). A `start`, `stop`, or `restart` of a sandbox with no container
-is `ErrArchived` when its tree is marked archived, `ErrNoContainer` when the
-tree is here, and `ErrNotFound` (404) only when it is not. They do not wait for
-a rebuild: an instruction is a command that wants an answer, and the control
-plane does not wait on it. The handlers map these like every other runtime
+**Explicit power instructions answer the same way** (`powerTarget`). A
+`start`, `stop`, or `restart` of a sandbox with no container is `ErrArchived`
+when its tree is marked archived, `ErrNoContainer` when the tree is here, and
+`ErrNotFound` (404) only when it is not. The handlers map these like every other runtime
 error, and the no-container 409 carries `ErrorTypeSandboxNoContainer` so the
 control plane can tell it from "already exists" (see [Pool Agent API
 Model](api/model/DESIGN.md)).
 
-**Reads never start a sandbox** (`requireRunning`). The harness-hooks and
+**An inspect or an observe never starts a sandbox** (`requireRunning`). The harness-hooks and
 exec-events reads are what the sandbox recorded about itself (ADR 0130), and
 starting a stopped sandbox to read them would undo the stop they may be read to
 explain — ADR 0108's idle stop above all. The same holds for a terminal's
@@ -612,7 +628,7 @@ tree the control plane holds (below).
 
 `GET`/`PUT .../sandboxes/{id}/tree` (`sandboxruntime/tree.go`) are the two halves
 of moving a discobox to another server (ADR 0123). They deal only in the tree:
-neither touches a container, and neither is wrapped in the `autoStart` latch the
+neither touches a container, and neither is wrapped in the `onUse` latch the
 git routes use — everything about both assumes nothing is running.
 
 What travels is `data`, `sources`, and `origins`, and the list is the decision.
@@ -885,7 +901,7 @@ authorization, and desired-state orchestration remain outside this module.
 
 `.../sandboxes/{sandbox_id}/tcp/attach` (scope `tcp:connect`) is the pool-agent
 side of ADR 0024's SSH `direct-tcpip` tunnel: it reuses the generic
-sandbox-agent proxy handler and `autoStart` wrapper unchanged, forwarding to
+sandbox-agent proxy handler and `onUse` wrapper unchanged, forwarding to
 the sandbox-agent's own `/tcp/attach` (`sandbox-agent/DESIGN.md`), which is
 where the actual `host:port` dial happens — inside the sandbox's own network
 namespace, not this one, so `localhost` in a forwarded connection means what

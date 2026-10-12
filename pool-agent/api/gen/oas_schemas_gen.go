@@ -3822,6 +3822,35 @@ func (s *PoolSandboxPort) SetProtocol(val string) {
 	s.Protocol = val
 }
 
+// Says the sandbox is running and its agent answers.
+// Ref: #/components/schemas/PoolSandboxRunning
+type PoolSandboxRunning struct {
+	// A URL to the JSON Schema for this object.
+	Schema OptURI `json:"$schema"`
+	// Sandbox that is running.
+	SandboxId string `json:"sandboxId"`
+}
+
+// GetSchema returns the value of Schema.
+func (s *PoolSandboxRunning) GetSchema() OptURI {
+	return s.Schema
+}
+
+// GetSandboxId returns the value of SandboxId.
+func (s *PoolSandboxRunning) GetSandboxId() string {
+	return s.SandboxId
+}
+
+// SetSchema sets the value of Schema.
+func (s *PoolSandboxRunning) SetSchema(val OptURI) {
+	s.Schema = val
+}
+
+// SetSandboxId sets the value of SandboxId.
+func (s *PoolSandboxRunning) SetSandboxId(val string) {
+	s.SandboxId = val
+}
+
 // Ref: #/components/schemas/PoolSandboxRuntime
 type PoolSandboxRuntime struct {
 	CreatedAt  time.Time                  `json:"createdAt"`

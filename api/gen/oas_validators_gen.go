@@ -6757,6 +6757,8 @@ func (s SandboxRuntimeDisplayState) Validate() error {
 		return nil
 	case "stopped":
 		return nil
+	case "repairing":
+		return nil
 	case "archiving":
 		return nil
 	case "archived":

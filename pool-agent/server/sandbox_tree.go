@@ -28,7 +28,7 @@ const (
 // opaque stream of unbounded length, which the generated contract has no way to
 // describe and no reason to buffer.
 //
-// Neither route is wrapped in autoStart, unlike the git ones. Everything about
+// Neither route is wrapped in onUse, unlike the git ones. Everything about
 // both operations assumes nothing is running -- an export refuses a running
 // sandbox outright, and a restore happens for a sandbox that has no container
 // at all -- so starting one to serve the request would defeat the request.

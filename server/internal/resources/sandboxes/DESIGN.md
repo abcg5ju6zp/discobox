@@ -89,12 +89,20 @@ a caller learns the outcome by re-reading the sandbox once the agent's report
 has landed. `DesiredState` answers existence only: `present`,
 `archived`, or `deleted`. Start, stop, and restart are refused with 409 on an
 archived sandbox — it has no container to power. One refused for want of a
-runtime is also a 409 (`instructionRefusal`) saying why and what to do, since
+runtime is also a 409 (`runtimeRefusal`) saying why and what to do, since
 the row is here and none of these is a missing sandbox: no container on the
 pool (`ErrNoContainer`) is repaired; still archived on the pool
 (`ErrArchived`) is an unarchive the pool has not caught up with, waited out,
 or one that failed, repaired; no runtime at all (`ErrNotFound`, which is also a create not yet placed
 on a pool) is waited out while it is being created and repaired otherwise.
+
+A `start` or `restart` is a use of the sandbox, so one refused with
+`ErrNoContainer` goes the way an action does (below): the sandbox is repaired
+once, or the rebuild already coming is waited for, and the instruction is sent
+again — including through the window in which the repair's teardown has the
+pool calling the sandbox archived, which is read as the same answer. It waits for nothing else — a sandbox still being created is refused at
+once — and a `stop` is not a use. This is the one place an instruction leads to
+recorded intent, and what it records is existence, not power.
 
 ## A sandbox that is not running is read from its inventory
 
@@ -115,21 +123,33 @@ as `AcquireSandboxHTTPClient` does — the pool agent, not the row, says
 whether the sandbox is running — and refuses with `sandbox.ErrNotRunning`
 only a sandbox recorded as stopped whose pool is not reachable.
 
-## Attach waits, acquire does not
+## What a request is for
 
 `AcquireSandboxHTTPClient` is the choke point every route onto a sandbox goes
-through, and it answers now: the sandbox exists, and its pool is up.
+through, and it takes the request's **use** (`services.SandboxUse`,
+[ADR 26-10-12-711](../../../../docs/adr/26-10-12-711-using-a-failed-discobox-with-no-container-repairs-it-once.md)).
+The callers are the whole table of which route does what; the lease marks every
+pool token with the use, and the pool agent starts a sandbox, or refuses to, by
+that mark.
 
-`AwaitSandboxHTTPClient` (`attach_wait.go`) is the same acquire for a caller
-that means "I want to use this sandbox now" — the exec attach, or an exec
-create request with `wait=ready`. `AwaitSandboxHTTPClientForServer` is the same
-wait for a call the server makes itself, with no caller scopes to check:
-putting a job to the project's judge, which bounds it with `judge.ReachWait`
-so a judge whose pool has not reported since a server restart is waited on
-rather than refused.
-It waits for a sandbox that is still being provisioned instead of refusing it,
-which is what lets a client create a sandbox and attach to it in the next call
-rather than polling for readiness (ADR 0039 tier 1).
+| Use | Routes | Stopped sandbox | Not usable yet | Failed, no container |
+| --- | --- | --- | --- | --- |
+| action | exec attach, create, input, start, delete; service start, stop, restart; HTTP, tcp and udp; ssh; the worktree's git; the judge; harness configure; meta write | the pool is asked to start it before the lease is handed out | waited for | repaired, once |
+| read | exec list, get, logs, events, resources; service list, get, logs; tools; a source's origin | started by the pool agent when the request arrives | answered at once | answered at once |
+| observe | terminal screen, exec wait, exec-events, harness-hooks | refused by the pool agent | answered at once | answered at once |
+
+`AcquireSandboxHTTPClientForServer` is the same acquire for a call the server
+makes itself, with no caller scopes to check: putting a job to the project's
+judge, which bounds it with `judge.ReachWait`. An acquire for an attach is
+refused for a sandbox principal: a discobox does not attach to another.
+
+### An action waits
+
+`acquireForAction` (`attach_wait.go`) returns a lease only onto a sandbox that
+can take the request. It waits for a sandbox that is still being provisioned
+instead of refusing it, which is what lets a client create a sandbox and use it
+in the next call rather than polling for readiness (ADR 0039 tier 1, widened
+from attach to every action).
 
 - The wait polls, because what it waits on is a row (ADR 0081). Every pass
   re-reads authoritative state and asks again, so the transition that opens the
@@ -159,12 +179,12 @@ rather than polling for readiness (ADR 0039 tier 1).
 - Reachable is not usable, and the gap is a source its client has not delivered. Such a sandbox
   has a container — and so a runtime state naming its pool — from the moment it
   parks at `awaiting_source`, so the acquire succeeds while its workspace is
-  still empty; attaching then would auto-start it and launch the harness against
+  still empty; using it then would start it and launch the harness against
   an unmaterialized workspace. So the wait also holds while the sandbox is
   parked, and while its generation is unobserved — the window after
   complete-source-push in which the reconciler materializes what was pushed.
-  The push itself goes through the git proxy, which does *not* wait, so the
-  delivery a wait is waiting on can never be blocked by it.
+  The push itself goes to the source's origin, which is a read and does *not*
+  wait, so the delivery a wait is waiting on can never be blocked by it.
 - A caller's deadline also ends the wait, and is answered like the stall
   budget and the host ceiling: with the last refusal, which names what never
   became true. A cancel is the caller leaving, and gets the context's error.
@@ -173,9 +193,71 @@ rather than polling for readiness (ADR 0039 tier 1).
   has gone silent gives up. Tiers below take budgets that fit inside it, so the
   innermost stage to stall is the one that reports.
 
-Only this tier waits on control-plane facts; what the container and the sandbox
-agent are doing is waited on by the tiers that can see them
-(`pool-agent/DESIGN.md`, `sandbox-agent/DESIGN.md`).
+Only this tier waits on control-plane facts; what the sandbox agent is doing is
+waited on by the tiers that can see it (`pool-agent/DESIGN.md`,
+`sandbox-agent/DESIGN.md`).
+
+### An action starts the sandbox, and repairs it once
+
+Once the sandbox is usable, `ensureRunning` (`use.go`) has the pool start it and
+returns when the agent inside answers (`Provider.EnsureRunning`). It is asked
+before the lease is handed out so that "no container" is learned while nothing
+has been forwarded: the request, with its body, is still the caller's.
+
+- A `ready` sandbox the row reads as `running` is not asked about. The HTTP
+  port proxy acquires per request, and the pool agent starts the sandbox again
+  by the lease's mark if a stop landed after the look. A failed sandbox is
+  always asked: its last observation may be a complete sync old.
+- A pool agent from before the operation (`ErrPoolAgentUnsupported`) is not an
+  error: that agent starts sandboxes by its own table, and nothing is repaired
+  on its pool until it moves onto the current agent.
+- A sandbox archived by intent is refused before the pool is asked. A pool
+  that holds nothing of a settled sandbox, and a failed start, are answered at
+  once, with what to do.
+
+`ErrNoContainer` — from the ensure, or from a `start` or `restart` — goes to
+`rebuildOnUse`. So does the pool's `ErrArchived` for a row that is `present`
+(`runtimeHasNoContainer`): a repair's teardown leaves the archive marker until
+its create clears it, so that is a rebuild between its halves or one whose
+create failed, which is exactly what a failed automatic repair leaves.
+
+```mermaid
+flowchart TD
+    nc[pool: no container] --> present{desired present?}
+    present -- no --> refuse[answer the refusal]
+    present -- yes --> conv{generation observed?}
+    conv -- no --> wait[a rebuild is in flight: wait]
+    conv -- yes --> failed{failed?}
+    failed -- "no, ready" --> dirty[mark dirty] --> wait
+    failed -- yes --> auto{the failure an automatic repair's own?}
+    auto -- no --> record[record automatic repair intent] --> wait
+    auto -- "yes, and it did not land" --> both[refuse with both failures and the repair command]
+```
+
+- **The automatic repair is ADR 0035's repair with another author**
+  (`recordAutomaticRepair`): the same generation bump, `RepairGeneration`, and
+  dirty mark, so the reconciler tears down and rebuilds as for a typed one.
+  It is not driven inline and sends no start; the action that caused it is
+  waiting, and starts the sandbox itself when the reconcile lands.
+- **One, bounded by the generation.** The intent records itself on the row
+  (`Sandbox.AutomaticRepair`: generation, when, the trigger, the failure it
+  answers, and when it landed), and is never recorded for a failure that is
+  that record's own (`AutomaticRepairAllowed`): one on the record's generation
+  with the repair not landed. A repair that fails settles the sandbox there;
+  any explicit intent moves it on. The reconciler stamps `LandedAt` when the
+  repair converges, so a sandbox that fails again later on the same
+  generation — its container lost, the rebuild failing — is a new failure and
+  gets its own. No timers, no counts.
+- **Concurrent actions collapse to one.** Whether the repair is still due is
+  re-read in the transaction that records it, against the generation the pool
+  answered for. A loser finds a generation not yet observed, and waits.
+- **It re-pins only under an `automatic` upgrade policy.** Under `manual` it
+  rebuilds on the pin the sandbox has.
+- **Reports never trigger it.** "Container gone" arrives on every complete
+  sync; acting on it there is the loop a settled failure exists to prevent
+  (ADR 0017 §4). Only a use of the sandbox does.
+- The record stays after the repair lands, because landing clears the failure
+  it answered, and the server logs who caused it.
 
 ## Existence is three-valued
 
@@ -188,6 +270,7 @@ container (ADR 0022 §1). See [ADR 0022](../../../../docs/adr/0022-sandbox-delet
 | `POST .../unarchive` | `present` | orchestrated, 202 |
 | `POST .../purge` | `deleted` | **converges in the request**, 204 |
 | `POST .../repair` | `present` | **converges in the request**, 200 + start instruction |
+| an action on a failed sandbox with no container | `present` | the same repair intent, recorded once and waited for by the action ([above](#an-action-starts-the-sandbox-and-repairs-it-once)) |
 
 Delete archives, because getting a sandbox out of the way is the common request
 and the recoverable one. `archive.go` holds the archive branch and retention;
@@ -322,6 +405,9 @@ Two consequences worth stating:
 - **`displayState` is the composition** and the only thing clients should read
   (`services.SandboxDisplayState`). Existence answers first; the runtime axis
   fills in what the container is doing once existence is settled at `ready`.
+  A repair recorded and not yet landed is `repairing`, whoever authored it, and
+  answers before the failure it is repairing: recording it cleared the error
+  while the row still reads `failed`.
 
 `ErrorReason` classifies `ErrorMessage` for a client that acts on the failure
 rather than only showing it, and is set and cleared with it (`RecordFailure`,
@@ -335,7 +421,7 @@ upgrade. The reconciler still does not re-pin on its own (see above).
 sandbox that has never run — `pending`, or `awaiting_source` resuming after its
 push — because asking for a sandbox means asking for one that runs. A rebuild
 after the container was lost stays stopped until something uses it, and the
-pool agent starts it on demand when that happens.
+pool agent starts it when that happens.
 
 See [ADR 0017](../../../../docs/adr/0017-resource-state-is-desired-and-observed-with-no-operations.md)
 §§9–13.

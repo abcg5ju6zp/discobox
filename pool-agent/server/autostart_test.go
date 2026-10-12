@@ -15,20 +15,26 @@ import (
 )
 
 // ensureRecorder is a runtime whose only behavior is EnsureSandboxRunning: it
-// records whether the route asked to wait, and fails the way a sandbox with no
-// container does.
+// counts the calls, and fails the way a sandbox with no container does.
 type ensureRecorder struct {
 	sandboxruntime.Runtime
-	awaited []bool
+	ensured int
 	err     error
 }
 
-func (r *ensureRecorder) EnsureSandboxRunning(_ context.Context, _ string, awaitContainer bool) error {
-	r.awaited = append(r.awaited, awaitContainer)
+func (r *ensureRecorder) EnsureSandboxRunning(context.Context, string) error {
+	r.ensured++
 	return r.err
 }
 
-func TestAutoStartPreservesStartupFailure(t *testing.T) {
+// markedRequest is a request whose token the control plane marked with use.
+func markedRequest(t *testing.T, method, path, use string) *http.Request {
+	t.Helper()
+	request := httptest.NewRequestWithContext(t.Context(), method, path, nil)
+	return request.WithContext(withSignedTokenClaims(request.Context(), SignedTokenClaims{Use: use}))
+}
+
+func TestStartOnUsePreservesStartupFailure(t *testing.T) {
 	bindMount := errors.New("invalid mount config: bind source path does not exist")
 	for _, tc := range []struct {
 		name    string
@@ -51,12 +57,12 @@ func TestAutoStartPreservesStartupFailure(t *testing.T) {
 			service := &sandboxService{runtime: &ensureRecorder{err: tc.err}}
 			proxied := false
 			router := chi.NewRouter()
-			router.Get("/sandboxes/{sandboxId}/attach", service.autoStart(awaitContainer, tc.need, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			router.Get("/sandboxes/{sandboxId}/attach", service.onUse(tc.need, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				proxied = true
 				w.WriteHeader(http.StatusNoContent)
 			})).ServeHTTP)
 			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/sandboxes/sbx_1/attach", nil))
+			router.ServeHTTP(rec, markedRequest(t, http.MethodGet, "/sandboxes/sbx_1/attach", UseAction))
 			if rec.Code != tc.status || proxied != tc.proxied {
 				t.Fatalf("status %d, proxied %v, body %q", rec.Code, proxied, rec.Body.String())
 			}
@@ -67,12 +73,11 @@ func TestAutoStartPreservesStartupFailure(t *testing.T) {
 	}
 }
 
-// Only exec attach waits for a container to be rebuilt, because it is the only
-// route the control plane waits on; everything else is answered at once, so a
-// failed sandbox whose container is gone does not hold a transcript read,
-// tunnels or git for the whole rebuild wait. (Listing execs, services or tools
-// starts nothing at all: TestSandboxReadsNeverStartAStoppedSandbox.)
-func TestAutoStartWaitsForAContainerOnlyWhereTheControlPlaneDoes(t *testing.T) {
+// No route waits for a container to be rebuilt: the control plane is the tier
+// that knows whether one is coming, and waits there (ADR 26-10-12-711 §6). A
+// failed sandbox whose container is gone answers every route at once, so it
+// does not hold an attach, `discobox tools`, service listings, tunnels or git.
+func TestNoRouteWaitsForAContainer(t *testing.T) {
 	runtime := &ensureRecorder{err: sandboxruntime.ErrNoContainer}
 	service := &sandboxService{runtime: runtime}
 	router := chi.NewRouter()
@@ -80,26 +85,83 @@ func TestAutoStartWaitsForAContainerOnlyWhereTheControlPlaneDoes(t *testing.T) {
 	registerSandboxGitRoutes(router, service)
 
 	base := "/api/project/p/pool/w/sandboxes/sbx_1"
-	for path, wantWait := range map[string]bool{
-		base + "/execs/ex_1/logs":         false,
-		base + "/services/web/logs":       false,
-		base + "/execs/ex_1/events":       false,
-		base + "/execs/ex_1/attach":       true,
-		base + "/tcp/attach":              false,
-		base + "/http/8080/":              false,
-		base + "/git-repositories/r/info": false,
+	for _, path := range []string{
+		base + "/execs/ex_1/logs",
+		base + "/services/web/logs",
+		base + "/execs/ex_1/events",
+		base + "/execs/ex_1/attach",
+		base + "/tcp/attach",
+		base + "/http/8080/",
+		base + "/git-repositories/r/info",
 	} {
-		runtime.awaited = nil
+		runtime.ensured = 0
 		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
-		if len(runtime.awaited) != 1 || runtime.awaited[0] != wantWait {
-			t.Errorf("%s: awaited = %v, want %v", path, runtime.awaited, wantWait)
+		router.ServeHTTP(recorder, markedRequest(t, http.MethodGet, path, UseAction))
+		if runtime.ensured != 1 {
+			t.Errorf("%s: ensured %d times, want once", path, runtime.ensured)
 		}
 		// A sandbox with no container is a conflict the caller can act on,
 		// not a missing sandbox.
 		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "needs repair") {
 			t.Errorf("%s: %d %q, want 409 naming repair", path, recorder.Code, recorder.Body.String())
 		}
+	}
+}
+
+// useRuntime is a runtime holding one stopped sandbox, which counts the starts
+// it is asked for.
+type useRuntime struct {
+	sandboxruntime.Runtime
+	ensured int
+}
+
+func (r *useRuntime) EnsureSandboxRunning(context.Context, string) error {
+	r.ensured++
+	return nil
+}
+
+func (r *useRuntime) GetSandbox(context.Context, string) (*sandboxruntime.Sandbox, error) {
+	return &sandboxruntime.Sandbox{SandboxID: "sbx_1", Status: sandboxruntime.StatusStopped}, nil
+}
+
+func (r *useRuntime) SandboxBooting(string) bool { return false }
+
+// Whether a request starts a stopped sandbox is the control plane's decision,
+// carried on the token (ADR 26-10-12-711 §2), and the same route obeys
+// whichever it is given: an action or a read starts the sandbox; an inspect
+// and an observe are refused without starting it, marked so the control plane
+// can answer from the sandbox's last inventory; and so is a token with no mark.
+func TestOnUseObeysTheTokensUse(t *testing.T) {
+	for _, tc := range []struct {
+		use        string
+		wantStart  bool
+		wantStatus int
+	}{
+		{UseAction, true, http.StatusNoContent},
+		{UseRead, true, http.StatusNoContent},
+		{UseInspect, false, http.StatusConflict},
+		{UseObserve, false, http.StatusConflict},
+		{"", false, http.StatusConflict},
+	} {
+		t.Run("use="+tc.use, func(t *testing.T) {
+			runtime := &useRuntime{}
+			service := &sandboxService{runtime: runtime}
+			router := chi.NewRouter()
+			router.Handle("/sandboxes/{sandboxId}/execs", service.onUse(needsSandbox, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, markedRequest(t, http.MethodGet, "/sandboxes/sbx_1/execs", tc.use))
+			if started := runtime.ensured == 1; started != tc.wantStart || rec.Code != tc.wantStatus {
+				t.Fatalf("started = %v, status %d (%q); want started = %v, status %d", started, rec.Code, rec.Body.String(), tc.wantStart, tc.wantStatus)
+			}
+			if !tc.wantStart && !strings.Contains(rec.Body.String(), "does not start it") {
+				t.Fatalf("an observe of a stopped sandbox answered %q, want it to say reading does not start it", rec.Body.String())
+			}
+			if !tc.wantStart && rec.Header().Get(workerapimodel.SandboxNotRunningHeader) != "stopped" {
+				t.Fatalf("%s = %q, want the refusal marked stopped", workerapimodel.SandboxNotRunningHeader, rec.Header().Get(workerapimodel.SandboxNotRunningHeader))
+			}
+		})
 	}
 }
 
@@ -200,6 +262,25 @@ func TestRequireRunningWaitsOutABootForTheLists(t *testing.T) {
 			}
 			if !tc.wantServed && (rec.Code != http.StatusConflict || rec.Header().Get(workerapimodel.SandboxNotRunningHeader) != "stopped") {
 				t.Fatalf("status %d, %s = %q; want 409 marked stopped", rec.Code, workerapimodel.SandboxNotRunningHeader, rec.Header().Get(workerapimodel.SandboxNotRunningHeader))
+			}
+		})
+	}
+}
+
+// An inspect waits out a boot something else began and an observe does not:
+// that difference is the token's too, not the route's.
+func TestOnUseWaitsOutABootOnlyForAnInspect(t *testing.T) {
+	for use, wantAwaited := range map[string]int{UseInspect: 1, UseObserve: 0, "": 0} {
+		t.Run("use="+use, func(t *testing.T) {
+			runtime := &bootingRuntime{booting: true, afterBoot: sandboxruntime.StatusRunning}
+			service := &sandboxService{runtime: runtime}
+			served := false
+			router := chi.NewRouter()
+			router.Handle("/sandboxes/{sandboxId}/execs", service.onUse(needsSandbox, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { served = true })))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, markedRequest(t, http.MethodGet, "/sandboxes/sbx_1/execs", use))
+			if runtime.awaited != wantAwaited || served != (wantAwaited == 1) {
+				t.Fatalf("boot awaited %d times, served = %v (status %d); want %d and served only after a wait", runtime.awaited, served, rec.Code, wantAwaited)
 			}
 		})
 	}

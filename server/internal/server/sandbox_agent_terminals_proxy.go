@@ -18,34 +18,70 @@ import (
 	services "github.com/discobox-ai/discobox/server/internal/services"
 )
 
+// registerSandboxAgentTerminalRoutes forwards the sandbox agent's exec and
+// service API, and says of each route what a request on it is for
+// (ADR 26-10-12-711 §1). This is the one table of which of them starts a
+// stopped sandbox and which may repair one: the pool agent is told the answer
+// on the request's token and holds no table of its own. The use is fixed where
+// the route is registered, not read off the path, so an exec or a service whose
+// id is spelled like an operation is still what its route says it is.
+//
+//   - observe: a terminal's screen or a wait on it, and the sandbox's own
+//     audit data. Reading these must not start what an idle stop put down
+//     (ADR 0108, ADR 0137 §2), and what polls them wants an answer now.
+//   - inspect: listing execs, services or tools, and reading one exec or
+//     service. It starts nothing either, and waits out a boot something else
+//     began: a client that has just created or started a sandbox reads it
+//     next.
+//   - read: the reads with no last value — logs, events, resource samples.
+//     They start a stopped sandbox and repair nothing.
+//   - action: everything that changes something or acts in the sandbox —
+//     creating, starting, attaching to, typing into or deleting an exec, and
+//     starting, stopping or restarting a service.
+//
+// The inspects and the screen are the reads a sandbox's last inventory
+// answers while it is not running (sandboxInventoryRead, ADR 26-10-11-657 §4).
 func registerSandboxAgentTerminalRoutes(router chi.Router, service services.SandboxService) {
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/harness-hooks", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/exec-events", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodPost, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodDelete, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/logs", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/screen", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodPost, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/input", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodPost, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/wait", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodPost, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/attach", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/attach", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodPost, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/start", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/events", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/resources", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/resources/history", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/execs/{execId}/resources/stream", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/services", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/tools", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/services/{serviceId}", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodGet, "/api/projects/{projectId}/sandboxes/{sandboxId}/services/{serviceId}/logs", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodPost, "/api/projects/{projectId}/sandboxes/{sandboxId}/services/{serviceId}/start", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodPost, "/api/projects/{projectId}/sandboxes/{sandboxId}/services/{serviceId}/stop", sandboxAgentTerminalProxyHandler(service))
-	router.Method(http.MethodPost, "/api/projects/{projectId}/sandboxes/{sandboxId}/services/{serviceId}/restart", sandboxAgentTerminalProxyHandler(service))
+	const base = "/api/projects/{projectId}/sandboxes/{sandboxId}"
+	observe, inspect, read, action := services.SandboxObserve, services.SandboxInspect, services.SandboxRead, services.SandboxAction
+	attach := action("exec attach")
+	attach.Attach = true
+	for _, route := range []struct {
+		method, path string
+		use          services.SandboxUse
+	}{
+		{http.MethodGet, "/harness-hooks", observe},
+		{http.MethodGet, "/exec-events", observe},
+		{http.MethodGet, "/execs", inspect},
+		{http.MethodPost, "/execs", action("exec create")},
+		{http.MethodGet, "/execs/{execId}", inspect},
+		{http.MethodDelete, "/execs/{execId}", action("exec delete")},
+		{http.MethodGet, "/execs/{execId}/logs", read},
+		{http.MethodGet, "/execs/{execId}/screen", observe},
+		{http.MethodPost, "/execs/{execId}/input", action("exec input")},
+		// A wait is a POST only because it carries a body; it reads (ADR 0137).
+		{http.MethodPost, "/execs/{execId}/wait", observe},
+		// An attach is a GET when it is a websocket upgrade.
+		{http.MethodPost, "/execs/{execId}/attach", attach},
+		{http.MethodGet, "/execs/{execId}/attach", attach},
+		{http.MethodPost, "/execs/{execId}/start", action("exec start")},
+		{http.MethodGet, "/execs/{execId}/events", read},
+		{http.MethodGet, "/execs/{execId}/resources", read},
+		{http.MethodGet, "/execs/{execId}/resources/history", read},
+		{http.MethodGet, "/execs/{execId}/resources/stream", read},
+		{http.MethodGet, "/services", inspect},
+		{http.MethodGet, "/tools", inspect},
+		{http.MethodGet, "/services/{serviceId}", inspect},
+		{http.MethodGet, "/services/{serviceId}/logs", read},
+		{http.MethodPost, "/services/{serviceId}/start", action("service start")},
+		{http.MethodPost, "/services/{serviceId}/stop", action("service stop")},
+		{http.MethodPost, "/services/{serviceId}/restart", action("service restart")},
+	} {
+		router.Method(route.method, base+route.path, sandboxAgentTerminalProxyHandler(service, route.use))
+	}
 }
 
-func sandboxAgentTerminalProxyHandler(service services.SandboxService) http.Handler {
+func sandboxAgentTerminalProxyHandler(service services.SandboxService, use services.SandboxUse) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeSandboxAgentProxyError(w, http.StatusServiceUnavailable, "sandbox service is not configured")
@@ -59,22 +95,16 @@ func sandboxAgentTerminalProxyHandler(service services.SandboxService) http.Hand
 			return
 		}
 
-		// Attach always waits. Exec creation may opt in when its caller is
-		// about to use the exec immediately; list and status polls stay fast.
-		acquire := service.AcquireSandboxHTTPClient
-		waitForCreate := r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/execs") && r.URL.Query().Get("wait") == "ready"
-		if strings.HasSuffix(r.URL.Path, "/attach") || waitForCreate {
-			acquire = service.AwaitSandboxHTTPClient
-		}
 		// A read the sandbox's inventory answers never starts the sandbox
 		// (ADR 26-10-11-657 §4): its pool agent refuses it for a sandbox that
 		// is not running, and that refusal is answered from the inventory
 		// below. So is a stopped sandbox whose pool cannot be asked at all.
+		acquire := service.AcquireSandboxHTTPClient
 		inventoryRead, storedRead := sandboxInventoryRead(r)
 		if storedRead {
 			acquire = service.AcquireRunningSandboxHTTPClient
 		}
-		lease, sandboxModel, err := acquire(r.Context(), projectID, sandboxID, scopes)
+		lease, sandboxModel, err := acquire(r.Context(), projectID, sandboxID, scopes, use)
 		if storedRead && errors.Is(err, sandbox.ErrNotRunning) {
 			serveSandboxInventoryRead(w, r, service, projectID, sandboxID, scopes, inventoryRead)
 			return
@@ -117,8 +147,10 @@ func sandboxAgentTerminalProxyHandler(service services.SandboxService) http.Hand
 				sandboxPoolProxyError(w, r, err)
 			}
 		}
-		if waitForCreate {
-			// This option belongs to the control plane, not the sandbox agent.
+		if r.URL.Query().Has("wait") && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/execs") {
+			// `wait=ready` asked an exec create to wait for its sandbox,
+			// before every action did. It was this server's option and never
+			// the sandbox agent's, so it is still not forwarded.
 			query := r.URL.Query()
 			query.Del("wait")
 			r.URL.RawQuery = query.Encode()

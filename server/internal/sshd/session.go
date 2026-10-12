@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -19,6 +20,7 @@ import (
 	poolagentauth "github.com/discobox-ai/discobox/server/internal/auth/poolagent"
 	"github.com/discobox-ai/discobox/server/internal/model"
 	"github.com/discobox-ai/discobox/server/internal/sandboxagentclient"
+	services "github.com/discobox-ai/discobox/server/internal/services"
 	"github.com/discobox-ai/discobox/server/internal/transport"
 )
 
@@ -303,8 +305,9 @@ func (sess *sshSession) attach(ctx context.Context, req *ssh.Request, target exe
 
 	// The exact same choke point an API caller goes through: authorization
 	// against the connection's principal happens here, not anywhere in sshd.
+	acquireStarted := time.Now().UTC()
 	lease, sandboxModel, err := sess.server.sandboxes.AcquireSandboxHTTPClient(ctx, sess.projectID, sess.sandboxID,
-		[]string{poolagentauth.ScopeExecRead, poolagentauth.ScopeExecWrite})
+		[]string{poolagentauth.ScopeExecRead, poolagentauth.ScopeExecWrite}, services.SandboxAction("ssh"))
 	if err != nil {
 		sess.server.logger.Warn("ssh acquire sandbox failed", "project", sess.projectID, "sandbox", sess.sandboxID, "error", err)
 		sess.failRequest(req, target.subsystem, acquireFailureReason(err))
@@ -324,6 +327,20 @@ func (sess *sshSession) attach(ctx context.Context, req *ssh.Request, target exe
 	sess.attachConn = conn
 	sess.mu.Unlock()
 	sess.reply(req, true)
+	// A repair this session caused or waited on is said on its stderr before the shell
+	// writes anything: the repair landing cleared the failure from the
+	// sandbox, and a rebuilt container has lost whatever was installed
+	// outside its volumes (ADR 26-10-12-711 §8). Not on a subsystem's
+	// channel, where sftp and scp expect their own protocol's diagnostics.
+	if !target.subsystem && sandboxModel.AutomaticRepairLandedSince(acquireStarted) {
+		notice := "discobox: this discobox had failed and had no container, so it was repaired before this session started"
+		if failure := sandboxModel.AutomaticRepair.Failure; failure != "" {
+			notice += "; it had failed with: " + failure
+		}
+		if _, err := fmt.Fprintln(sess.channel.Stderr(), notice); err != nil {
+			sess.server.logger.Debug("ssh repair notice not written", "error", err)
+		}
+	}
 
 	go sess.pump(conn, lease)
 }

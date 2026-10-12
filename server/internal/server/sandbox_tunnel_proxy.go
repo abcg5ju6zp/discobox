@@ -15,15 +15,17 @@ import (
 // sandboxTunnel is one of the sandbox-agent's tunnels: the path it is served
 // at, and the scope a lease onto it is minted with.
 type sandboxTunnel struct {
+	// name is the protocol, as the use of the sandbox is named after it.
+	name   string
 	suffix string
 	scopes []string
 }
 
 var (
 	// sandboxTCPTunnel is ADR 0024 §3's direct-tcpip tunnel.
-	sandboxTCPTunnel = sandboxTunnel{suffix: "/tcp/attach", scopes: []string{poolagentauth.ScopeTCPConnect}}
+	sandboxTCPTunnel = sandboxTunnel{name: "tcp", suffix: "/tcp/attach", scopes: []string{poolagentauth.ScopeTCPConnect}}
 	// sandboxUDPTunnel is its datagram twin (ADR 0109 §4).
-	sandboxUDPTunnel = sandboxTunnel{suffix: "/udp/attach", scopes: []string{poolagentauth.ScopeUDPConnect}}
+	sandboxUDPTunnel = sandboxTunnel{name: "udp", suffix: "/udp/attach", scopes: []string{poolagentauth.ScopeUDPConnect}}
 )
 
 // registerSandboxTunnelRoutes exposes the sandbox-agent's tunnels at the
@@ -58,11 +60,11 @@ func sandboxTunnelProxyHandler(service services.SandboxService, tunnel sandboxTu
 
 		projectID := chi.URLParam(r, "projectId")
 		sandboxID := chi.URLParam(r, "sandboxId")
-		// Fail fast rather than wait for a sandbox that is still coming up
-		// (ADR 0039 tier 3): a forwarded connection is a browser or a client
-		// library on the other end, and one that hangs for minutes is worse
-		// than one that is refused now and retried when the user reloads.
-		lease, sandboxModel, err := service.AcquireSandboxHTTPClient(r.Context(), projectID, sandboxID, tunnel.scopes)
+		// A tunnel is traffic into the sandbox, so an action: it waits for a
+		// sandbox that is still coming up, under the stall budget every
+		// action shares, and repairs one that failed and lost its container
+		// (ADR 26-10-12-711 §§1, 6).
+		lease, sandboxModel, err := service.AcquireSandboxHTTPClient(r.Context(), projectID, sandboxID, tunnel.scopes, services.SandboxAction(tunnel.name+" tunnel"))
 		if err != nil {
 			writeSandboxAgentProxyError(w, statusCodeForProxyError(err), err.Error())
 			return

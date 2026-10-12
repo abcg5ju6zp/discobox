@@ -29,7 +29,11 @@ type metaAgentProvider struct {
 	baseURL string
 }
 
-func (p *metaAgentProvider) AcquireHTTPClient(context.Context, sandbox.SandboxRef, []byte, []string) (*transport.HTTPClientLease, error) {
+func (p *metaAgentProvider) EnsureRunning(context.Context, sandbox.SandboxRef, []byte) error {
+	return nil
+}
+
+func (p *metaAgentProvider) AcquireHTTPClient(context.Context, sandbox.SandboxRef, []byte, []string, sandbox.Use) (*transport.HTTPClientLease, error) {
 	return transport.NewHTTPClientLeaseWithBaseURL(http.DefaultClient, p.baseURL, func() {}), nil
 }
 

@@ -739,7 +739,7 @@ func (s *stubSandboxRuntime) CreateSandbox(_ context.Context, projectID string, 
 
 func (s *stubSandboxRuntime) DeleteSandbox(context.Context, string, string) error { return s.deleteErr }
 
-func (s *stubSandboxRuntime) AcquireSandboxHTTPClient(context.Context, string, string, []string) (*services.HTTPClientLease, *model.Sandbox, error) {
+func (s *stubSandboxRuntime) AcquireSandboxHTTPClient(context.Context, string, string, []string, services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
 	return nil, nil, errors.New("not used")
 }
 

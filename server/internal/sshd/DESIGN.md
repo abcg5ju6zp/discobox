@@ -145,9 +145,14 @@ collapses 401/403/404 into one generic message; everything else — a pool
 that is not reachable, a sandbox that is being deleted, an exec that cannot be
 created or started — says what happened, because reporting it as an
 authorization problem sends the reader to look at keys and grants for
-something that is neither. sshd uses the fail-fast `AcquireSandboxHTTPClient`,
-not `AwaitSandboxHTTPClient` (ADR 0039): an unreachable pool fails the session
-with its reason rather than waiting.
+something that is neither. A session and a `direct-tcpip` dial are actions
+(ADR 26-10-12-711 §1), so the acquire waits for a sandbox or pool that is still
+coming up, under the stall budget every action shares, and a session to a
+sandbox that failed and lost its container repairs it once. A repair the
+session caused is said on its stderr before the shell starts, with the failure
+it answered: landing clears that failure from the sandbox, and a rebuilt
+container has lost what was installed outside its volumes. A subsystem's
+channel is left alone.
 
 Exit always sends SSH's `exit-status`, never `exit-signal`: the shim already
 converts a signal death to the shell convention (128+signum), so
@@ -228,9 +233,10 @@ unique-constraint race, adapted to a filesystem one.
 ## Auto-start
 
 Inherited for free. Every session-channel attach and `direct-tcpip` dial
-goes through `AcquireSandboxHTTPClient` → the pool-agent's proxy routes,
-which wrap sandbox-directed handlers — the exec routes and `/tcp/attach`
-alike — in `autoStart` (`pool-agent/server/autostart.go`, ADR 0024 §7).
+goes through `AcquireSandboxHTTPClient` as an action, which has the pool start
+a stopped sandbox before anything is forwarded; the pool-agent's proxy routes
+start it again by the token's mark if it stopped in between (`onUse`,
+`pool-agent/server/autostart.go`, ADR 0024 §7, ADR 26-10-12-711 §2).
 
 ## Remote forwarding is out of scope by omission, not by a check
 

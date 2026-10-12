@@ -29,16 +29,16 @@ import (
 var testDefaultProjectID = id.NewString(id.PrefixProject)
 
 type routerTestServices struct {
-	mu                sync.Mutex
-	user              model.User
-	project           model.Project
-	harnessConfigs    map[string]model.HarnessConfig
-	providers         map[string]model.SandboxProviderInstance
-	pools             map[string]model.Pool
-	sandboxes         map[string]model.Sandbox
-	sandboxLease      *services.HTTPClientLease
-	sandboxScopes     []string
-	sandboxAwaitCalls int
+	mu             sync.Mutex
+	user           model.User
+	project        model.Project
+	harnessConfigs map[string]model.HarnessConfig
+	providers      map[string]model.SandboxProviderInstance
+	pools          map[string]model.Pool
+	sandboxes      map[string]model.Sandbox
+	sandboxLease   *services.HTTPClientLease
+	sandboxScopes  []string
+	sandboxUses    []services.SandboxUse
 	// sandboxLeases counts the clients leased onto a sandbox; inventoryReads
 	// is every read answered from an inventory, and inventory what answers
 	// it (inventoryErr instead, when set).
@@ -241,9 +241,10 @@ func (s *routerTestServices) GetSandbox(_ context.Context, projectID, sandboxID 
 	return &sandbox, nil
 }
 
-func (s *routerTestServices) AcquireSandboxHTTPClient(_ context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
+func (s *routerTestServices) AcquireSandboxHTTPClient(_ context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sandboxUses = append(s.sandboxUses, use)
 
 	sandbox, err := s.getSandbox(projectID, sandboxID)
 	if err != nil {
@@ -257,7 +258,7 @@ func (s *routerTestServices) AcquireSandboxHTTPClient(_ context.Context, project
 // AcquireRunningSandboxHTTPClient leases like AcquireSandboxHTTPClient, and
 // refuses with sandbox.ErrNotRunning when the test says the pool is
 // unreachable under a stopped sandbox, as the service does.
-func (s *routerTestServices) AcquireRunningSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
+func (s *routerTestServices) AcquireRunningSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string, use services.SandboxUse) (*services.HTTPClientLease, *model.Sandbox, error) {
 	s.mu.Lock()
 	sandboxModel, err := s.getSandbox(projectID, sandboxID)
 	unreachable := s.poolUnreachable
@@ -268,7 +269,7 @@ func (s *routerTestServices) AcquireRunningSandboxHTTPClient(ctx context.Context
 	if unreachable && sandboxModel.RuntimeState == model.SandboxRuntimeStateStopped {
 		return nil, &sandboxModel, apperrors.StatusError{Status: http.StatusConflict, Message: "discobox is stopped, and its pool is not reachable", Cause: sandbox.ErrNotRunning}
 	}
-	return s.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
+	return s.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes, use)
 }
 
 func (s *routerTestServices) ReadSandboxInventory(_ context.Context, _, _ string, scopes []string, read services.InventoryRead) ([]byte, error) {
@@ -280,13 +281,6 @@ func (s *routerTestServices) ReadSandboxInventory(_ context.Context, _, _ string
 		return nil, s.inventoryErr
 	}
 	return s.inventory, nil
-}
-
-// AwaitSandboxHTTPClient is the waiting acquire. The stub's sandboxes are
-// always either there or not, so the two answer the same.
-func (s *routerTestServices) AwaitSandboxHTTPClient(ctx context.Context, projectID, sandboxID string, scopes []string) (*services.HTTPClientLease, *model.Sandbox, error) {
-	s.sandboxAwaitCalls++
-	return s.AcquireSandboxHTTPClient(ctx, projectID, sandboxID, scopes)
 }
 
 func (s *routerTestServices) UpdateSandbox(_ context.Context, projectID, sandboxID string, input services.UpdateSandboxBody) (*model.Sandbox, error) {

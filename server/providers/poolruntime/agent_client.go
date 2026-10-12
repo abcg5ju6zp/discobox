@@ -460,13 +460,28 @@ func (p *poolAgentClient) Get(ctx context.Context, ref sandbox.SandboxRef, _ []b
 	return sandboxFromPool(poolSandbox, p.poolID), nil
 }
 
+// EnsureRunning asks the pool agent to have the sandbox running and its agent
+// answering before a request is forwarded into it (ADR 26-10-12-711 §2).
+func (p *poolAgentClient) EnsureRunning(ctx context.Context, ref sandbox.SandboxRef) error {
+	client, release, err := p.poolClient(ref, poolagentauth.ScopeSandboxWrite)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if _, err := client.PoolEnsureSandboxRunning(ctx, &poolapimodel.PoolSandboxOperationRequest{}, poolclient.PoolEnsureSandboxRunningParams{ProjectId: ref.ProjectID, PoolId: p.poolID, SandboxId: ref.SandboxID}); err != nil {
+		return mapPoolClientError(err)
+	}
+	return nil
+}
+
 // AcquireHTTPClient hands the lease to the caller with per-request token
-// providers attached; the caller owns releasing it.
-func (p *poolAgentClient) AcquireHTTPClient(_ context.Context, ref sandbox.SandboxRef, _ []byte, scopes []string) (*transport.HTTPClientLease, error) {
+// providers attached; the caller owns releasing it. Every pool token it mints
+// is marked with use.
+func (p *poolAgentClient) AcquireHTTPClient(_ context.Context, ref sandbox.SandboxRef, _ []byte, scopes []string, use sandbox.Use) (*transport.HTTPClientLease, error) {
 	lease := p.lease
 	p.lease = nil
 	if lease != nil && lease.AuthTokenProvider == nil {
-		lease.AuthTokenProvider = p.authTokenProvider(ref, scopes...)
+		lease.AuthTokenProvider = p.usePoolTokenProvider(ref, use, scopes...)
 	}
 	if lease != nil && lease.ForwardAuthTokenProvider == nil && requiresSandboxAgentToken(scopes) {
 		lease.ForwardAuthTokenProvider = p.sandboxAgentAuthTokenProvider(ref, scopes...)
@@ -497,6 +512,12 @@ func (p *poolAgentClient) poolClient(ref sandbox.SandboxRef, scopes ...string) (
 }
 
 func (p *poolAgentClient) authTokenProvider(ref sandbox.SandboxRef, scopes ...string) func(context.Context) (string, error) {
+	return p.usePoolTokenProvider(ref, "", scopes...)
+}
+
+// usePoolTokenProvider mints pool tokens marked with what the request is for.
+// The control operations pass no use: none of them is a route into a sandbox.
+func (p *poolAgentClient) usePoolTokenProvider(ref sandbox.SandboxRef, use sandbox.Use, scopes ...string) func(context.Context) (string, error) {
 	tokenScopes := append([]string(nil), scopes...)
 	return func(ctx context.Context) (string, error) {
 		if p.tokenIssuer == nil {
@@ -507,6 +528,7 @@ func (p *poolAgentClient) authTokenProvider(ref sandbox.SandboxRef, scopes ...st
 			PoolID:    p.poolID,
 			SandboxID: ref.SandboxID,
 			Scopes:    tokenScopes,
+			Use:       string(use),
 		})
 	}
 }

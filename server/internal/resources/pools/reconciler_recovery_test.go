@@ -466,7 +466,11 @@ func (stubPoolProvider) Get(context.Context, sandbox.SandboxRef, []byte) (*sandb
 	return nil, nil
 }
 
-func (stubPoolProvider) AcquireHTTPClient(context.Context, sandbox.SandboxRef, []byte, []string) (*transport.HTTPClientLease, error) {
+func (stubPoolProvider) EnsureRunning(context.Context, sandbox.SandboxRef, []byte) error {
+	return nil
+}
+
+func (stubPoolProvider) AcquireHTTPClient(context.Context, sandbox.SandboxRef, []byte, []string, sandbox.Use) (*transport.HTTPClientLease, error) {
 	return nil, nil
 }
 
