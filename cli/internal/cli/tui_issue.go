@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/discobox-ai/discobox/cli/internal/github"
 	"github.com/discobox-ai/discobox/cli/internal/tui"
@@ -14,8 +15,8 @@ import (
 // `gh` is logged in (github.LocalToken), and hands it over in the console's
 // own types. Everything in it was written by whoever can comment on the
 // issue, so every string is made safe to draw on the way: a title or a
-// comment carrying an escape sequence is shown, not obeyed — the same rule
-// the audit screen's records follow (terminalSafe).
+// comment carrying an escape sequence is shown, not obeyed — the rule the
+// audit screen's records follow, less what a page is written with (pageSafe).
 func (d *apiDataSource) Issue(ctx context.Context, repository string, number int, full bool) (tui.Issue, error) {
 	owner, name, err := githubRepository(repository)
 	if err != nil {
@@ -68,20 +69,26 @@ func githubRepository(repository string) (owner, name string, err error) {
 // server the discobox is on.
 var githubClient = sync.OnceValue(github.New)
 
-// tuiIssue is the issue as the tab draws it, every string made safe.
+// tuiIssue is the issue as the tab draws it, every string made safe. What is
+// written to be read on the page — a title, a description, a comment, a
+// commit's message, a label — is made safe as a page's text (pageSafe,
+// pageBlock). Everything else is a name or code — a login, a branch, a path, a
+// diff — where an invisible character is something to be shown, and keeps the
+// audit screen's rule (terminalSafe): two paths that differ are never drawn as
+// one on a tab that merges.
 func tuiIssue(in github.Issue) tui.Issue {
-	safe := terminalSafe
+	safe, page := terminalSafe, pageSafe
 	out := tui.Issue{
 		Repository:     safe(in.Repository),
 		Number:         in.Number,
-		Title:          safe(in.Title),
+		Title:          page(in.Title),
 		State:          safe(in.State),
 		StateReason:    safe(in.StateReason),
 		Type:           safe(in.Type),
 		Author:         safe(in.Author),
-		Body:           safeBlock(in.Body),
+		Body:           pageBlock(in.Body),
 		CreatedAt:      in.CreatedAt,
-		Milestone:      safe(in.Milestone),
+		Milestone:      page(in.Milestone),
 		Locked:         in.Locked,
 		Comments:       in.Comments,
 		Reactions:      tui.IssueReactions(in.Reactions),
@@ -104,10 +111,10 @@ func tuiIssue(in github.Issue) tui.Issue {
 			Kind:        safe(e.Kind),
 			Actor:       safe(e.Actor),
 			At:          e.At,
-			Body:        safeBlock(e.Body),
+			Body:        pageBlock(e.Body),
 			Reactions:   tui.IssueReactions(e.Reactions),
-			Subject:     safe(e.Subject),
-			Message:     safe(e.Message),
+			Subject:     page(e.Subject),
+			Message:     page(e.Message),
 			Review:      safe(e.Review),
 			From:        safe(e.From),
 			To:          safe(e.To),
@@ -122,10 +129,10 @@ func tuiIssue(in github.Issue) tui.Issue {
 			event.Source = &source
 		}
 		for _, thread := range e.Threads {
-			drawn := tui.ReviewThread{Path: safe(thread.Path), Line: thread.Line, Outdated: thread.Outdated, Hunk: safeBlock(thread.Hunk)}
+			drawn := tui.ReviewThread{Path: safe(thread.Path), Line: thread.Line, Outdated: thread.Outdated, Hunk: codeBlock(thread.Hunk)}
 			for _, comment := range thread.Comments {
 				drawn.Comments = append(drawn.Comments, tui.ReviewComment{
-					Author: safe(comment.Author), At: comment.At, Body: safeBlock(comment.Body),
+					Author: safe(comment.Author), At: comment.At, Body: pageBlock(comment.Body),
 					Reactions: tui.IssueReactions(comment.Reactions),
 				})
 			}
@@ -139,16 +146,16 @@ func tuiIssue(in github.Issue) tui.Issue {
 	return out
 }
 
-// tuiPull is the rest of a pull request's page, made safe the same way: a
-// branch name, a check's name and a diff are as much a stranger's text as a
-// comment is.
+// tuiPull is the rest of a pull request's page, made safe: a branch name, a
+// check's name and a diff are as much a stranger's text as a comment is, and
+// none of them is prose.
 func tuiPull(in github.Pull) *tui.PullRequest {
 	safe := terminalSafe
 	out := &tui.PullRequest{
 		Draft: in.Draft, Merged: in.Merged, MergedBy: safe(in.MergedBy), MergedAt: in.MergedAt,
 		Head: safe(in.Head), Base: safe(in.Base), HeadSHA: safe(in.HeadSHA),
 		Commits: in.Commits, Additions: in.Additions, Deletions: in.Deletions, ChangedFiles: in.ChangedFiles,
-		Mergeable: safe(in.Mergeable), FilesTruncated: in.FilesTruncated,
+		Mergeable: safe(in.Mergeable), ChecksPartial: in.ChecksPartial, FilesTruncated: in.FilesTruncated,
 	}
 	for _, method := range in.MergeMethods {
 		out.MergeMethods = append(out.MergeMethods, safe(method))
@@ -162,26 +169,71 @@ func tuiPull(in github.Pull) *tui.PullRequest {
 	for _, file := range in.Files {
 		out.Files = append(out.Files, tui.PullFile{
 			Path: safe(file.Path), Previous: safe(file.Previous), Status: safe(file.Status),
-			Additions: file.Additions, Deletions: file.Deletions, Patch: safeBlock(file.Patch),
+			Additions: file.Additions, Deletions: file.Deletions, Patch: codeBlock(file.Patch),
 		})
 	}
 	return out
 }
 
 func tuiLabel(in github.Label) tui.IssueLabel {
-	return tui.IssueLabel{Name: terminalSafe(in.Name), Color: terminalSafe(in.Color)}
+	return tui.IssueLabel{Name: pageSafe(in.Name), Color: terminalSafe(in.Color)}
 }
 
 func tuiRef(in github.Ref) tui.IssueRef {
 	return tui.IssueRef{
-		Repository: terminalSafe(in.Repository), Number: in.Number, Title: terminalSafe(in.Title),
+		Repository: terminalSafe(in.Repository), Number: in.Number, Title: pageSafe(in.Title),
 		State: terminalSafe(in.State), PullRequest: in.PullRequest, Merged: in.Merged,
 	}
 }
 
-// safeBlock is a comment or a description: lines kept, everything else a
-// terminal would act on escaped. GitHub stores the line breaks a browser sent,
-// which are \r\n.
-func safeBlock(body string) string {
-	return terminalSafeMultiline(strings.ReplaceAll(body, "\r\n", "\n"))
+// pageBlock is a comment or a description: a page's text (pageSafe) with its
+// lines kept. GitHub stores the line breaks a browser sent, which are \r\n.
+//
+// It is markdown, and this is not all that stands between it and the screen:
+// the renderer decodes character references, so `&#x1b;` is printable here
+// and an escape once drawn. The tab neutralizes those where it renders
+// (tui's markdownSource).
+func pageBlock(body string) string {
+	return escapeNonPrinting(dropBreakHints(strings.ReplaceAll(body, "\r\n", "\n")), func(r rune) bool {
+		return isLayoutRune(r) || isJoiner(r)
+	})
 }
+
+// codeBlock is a diff, or the lines of one a review thread is about: lines
+// kept, and every invisible character in it shown.
+func codeBlock(patch string) string {
+	return terminalSafeMultiline(strings.ReplaceAll(patch, "\r\n", "\n"))
+}
+
+// pageSafe is terminalSafe for text written to be read on a web page, which carries
+// invisible characters that are part of how it reads there and nothing a
+// terminal acts on. The audit screen escapes them because a record is shown
+// exactly as it was written; here that would put `\u200b` after every slash of
+// a path in a Copilot review, and split an emoji made of several in two.
+//
+// The hints at where a line may break are dropped: the window wraps the text
+// itself. The joiners are kept, since an emoji sequence and several scripts are
+// not the same text without them, and so are a page's other spaces. Everything else invisible — the controls,
+// ESC, the bidirectional overrides and marks — is still escaped.
+func pageSafe(value string) string {
+	return escapeNonPrinting(dropBreakHints(value), isJoiner)
+}
+
+// dropBreakHints removes the zero-width space, the soft hyphen, the word
+// joiner and the byte order mark, which say where a line may or may not break
+// and show nothing.
+func dropBreakHints(value string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\u200b', '\u00ad', '\u2060', '\ufeff':
+			return -1
+		}
+		return r
+	}, value)
+}
+
+// isJoiner reports whether r is one of the invisible characters a page's text
+// is written with and a terminal draws as it would any other: the zero-width
+// joiner and non-joiner, and the spaces that are not the ASCII one (a
+// no-break space is in every other comment pasted from a page).
+func isJoiner(r rune) bool { return r == '\u200d' || r == '\u200c' || unicode.Is(unicode.Zs, r) }

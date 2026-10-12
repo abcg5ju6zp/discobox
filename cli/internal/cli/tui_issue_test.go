@@ -75,3 +75,56 @@ func TestAPullRequestIsMadeSafeToDraw(t *testing.T) {
 		t.Errorf("the patch lost its lines or its tabs: %q", file.Patch)
 	}
 }
+
+// A page's text carries invisible characters a terminal has nothing to do
+// with: the hints at where a line may break are dropped rather than shown as
+// escapes, and the joiners an emoji sequence is made with are kept. That is
+// for what is written to be read. A path, a branch and a diff are code, where
+// an invisible character is shown: two that differ are not drawn as one.
+func TestAnIssueKeepsWhatAPageIsWrittenWith(t *testing.T) {
+	t.Parallel()
+	path := "`server/\u200binternal/\u200bpools/\u200bDESIGN.md`"
+	family := "\U0001F468\u200d\U0001F469\u200d\U0001F467"
+	issue := tuiIssue(github.Issue{
+		Title: "soft\u00adhyphen " + family,
+		Body:  "\ufeff" + path + " " + family + " word\u2060joiner \u202e",
+		Pull: &github.Pull{
+			Head:  "fix\u200b/x",
+			Files: []github.File{{Path: "a/\u200bb.go", Patch: "+a\u200db\r\n+c\u200bd"}},
+		},
+		Timeline: []github.Event{{
+			Kind: "reviewed", Body: path,
+			Threads: []github.Thread{{Path: "a/\u200bb.go", Hunk: "+x\u200by", Comments: []github.ThreadComment{{Body: path}}}},
+		}},
+	})
+	want := "`server/internal/pools/DESIGN.md`"
+	for name, value := range map[string]string{
+		"body": issue.Body, "review": issue.Timeline[0].Body,
+		"thread comment": issue.Timeline[0].Threads[0].Comments[0].Body,
+	} {
+		if !strings.Contains(value, want) {
+			t.Errorf("the %s shows its break hints: %q", name, value)
+		}
+	}
+	if issue.Title != "softhyphen "+family {
+		t.Errorf("title = %q", issue.Title)
+	}
+	if !strings.Contains(issue.Body, family) || !strings.Contains(issue.Body, "wordjoiner") {
+		t.Errorf("body = %q", issue.Body)
+	}
+	if !strings.Contains(issue.Body, `\u202e`) {
+		t.Errorf("a bidirectional override is no longer escaped: %q", issue.Body)
+	}
+	file, thread := issue.Pull.Files[0], issue.Timeline[0].Threads[0]
+	for name, got := range map[string][2]string{
+		"file path":   {file.Path, `a/\u200bb.go`},
+		"patch":       {file.Patch, "+a\\u200db\n+c\\u200bd"},
+		"branch":      {issue.Pull.Head, `fix\u200b/x`},
+		"thread path": {thread.Path, `a/\u200bb.go`},
+		"thread hunk": {thread.Hunk, `+x\u200by`},
+	} {
+		if got[0] != got[1] {
+			t.Errorf("the %s hides what is invisible in it: %q, want %q", name, got[0], got[1])
+		}
+	}
+}
