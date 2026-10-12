@@ -200,6 +200,13 @@ func mergeBanner(st *styles, issue Issue, width int) string {
 	return paint.Bold(true).Render(truncate(glyph+" Not ready to merge — "+said, width))
 }
 
+// mergeBandKeyFits reports whether a ready band that wide has its key on it:
+// narrower, the band gives the key up for the sentence (spread), and there is
+// nothing there to mark or light.
+func mergeBandKeyFits(width int) bool {
+	return width >= lipgloss.Width(pullMergeKey+mergeBandHint)+2
+}
+
 // pushedNotice says the branch was pushed to since the tab last showed the
 // person its head: what was read before then is not what would be merged.
 func pushedNotice(was, now string) string {

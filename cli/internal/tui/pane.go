@@ -2186,6 +2186,10 @@ func (m *Model) viewPaneBox(p *pane, top string, edge lipgloss.Style, width int)
 		if row := p.issue.mergeAt; row >= 0 && row < len(lines) {
 			w := min(lipgloss.Width(pullMergeKey+mergeBandHint), grid)
 			m.zones.mark(keyHit(pullMergeKey), x+grid-w, y+row, w, 1)
+			if m.zones.hovering(x+grid-w, y+row, w, 1) {
+				// Lit from the rectangle it is marked with (REVIEW.md).
+				lines[row] = ansi.Truncate(padANSI(lines[row], grid), grid-w, "") + m.st.hover.Render(pullMergeKey+mergeBandHint)
+			}
 		}
 		for row, line := range lines {
 			links := lineLinks(line)

@@ -86,8 +86,9 @@ func TestAnIssueKeepsWhatAPageIsWrittenWith(t *testing.T) {
 	path := "`server/\u200binternal/\u200bpools/\u200bDESIGN.md`"
 	family := "\U0001F468\u200d\U0001F469\u200d\U0001F467"
 	issue := tuiIssue(github.Issue{
-		Title: "soft\u00adhyphen " + family,
-		Body:  "\ufeff" + path + " " + family + " word\u2060joiner \u202e",
+		Title:  "soft\u00adhyphen " + family,
+		Labels: []github.Label{{Name: "b\u200bug"}},
+		Body:   "\ufeff" + path + " " + family + " word\u2060joiner \u202e",
 		Pull: &github.Pull{
 			Head:  "fix\u200b/x",
 			Files: []github.File{{Path: "a/\u200bb.go", Patch: "+a\u200db\r\n+c\u200bd"}},
@@ -123,6 +124,7 @@ func TestAnIssueKeepsWhatAPageIsWrittenWith(t *testing.T) {
 		"thread path": {thread.Path, `a/\u200bb.go`},
 		"thread hunk": {thread.Hunk, `+x\u200by`},
 		"subject":     {issue.Timeline[0].Subject, `bo\u200bb`},
+		"label":       {issue.Labels[0].Name, `b\u200bug`},
 	} {
 		if got[0] != got[1] {
 			t.Errorf("the %s hides what is invisible in it: %q, want %q", name, got[0], got[1])

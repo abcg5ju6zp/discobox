@@ -1682,10 +1682,10 @@ type SourcePush struct {
 // no format character a terminal acts on or that misleads — a bidirectional
 // override or mark — reaches the screen as itself. Two kinds of text, two
 // rules. What is written to be read on the page (a title, a body, a commit's
-// message, a label) may carry the zero-width joiner and non-joiner an emoji
+// message) may carry the zero-width joiner and non-joiner an emoji
 // sequence and several scripts are made with, and has lost the invisible hints
 // at where a line may break. Everything else is a name or code (a login, a
-// branch, a path, a diff, a hunk): every invisible character in it arrives
+// branch, a label, a path, a diff, a hunk): every invisible character in it arrives
 // escaped, so two that differ are never drawn as one.
 //
 // A body is markdown, and the character references in it are still to be

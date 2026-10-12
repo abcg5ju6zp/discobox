@@ -499,3 +499,19 @@ func TestMoreReviewCommentsThanAreReadIsSaid(t *testing.T) {
 		t.Errorf("a pull request read whole says it was cut short")
 	}
 }
+
+// A person and a team asked to review may share a name: they are two
+// reviewers, not one.
+func TestAUserAndATeamOfOneNameAreTwoReviewers(t *testing.T) {
+	t.Parallel()
+	var raw rawPull
+	raw.RequestedReviewers = []rawUser{{Login: "core"}}
+	raw.RequestedTeams = append(raw.RequestedTeams, struct {
+		Name string `json:"name"`
+	}{Name: "core"})
+	timeline := []Event{{Kind: "reviewed", Actor: "core", Review: "approved"}}
+	got := reviewers("alice", timeline, raw)
+	if len(got) != 2 || got[0].State != "requested" || got[1].State != "requested" {
+		t.Errorf("reviewers = %+v, want the person (asked again) and the team", got)
+	}
+}
