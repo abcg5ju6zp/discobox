@@ -40,8 +40,10 @@ func TestGetSandboxAgentStatusReportsMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, ok := status.Meta.Get()
-	if !ok || got.Tags.Set || got.Description.Set || got.Name.Set {
-		t.Fatalf("meta with no file = %+v (set %v), want a meta with nothing set", got, ok)
+	// Nothing is set but the tags, which are sent empty rather than left out
+	// for a control plane from before they were optional.
+	if tags, sent := got.Tags.Get(); !ok || !sent || len(tags) != 0 || got.Description.Set || got.Name.Set {
+		t.Fatalf("meta with no file = %+v (set %v), want empty tags and nothing else", got, ok)
 	}
 
 	path := filepath.Join(home, sandboxmeta.RelativePath)

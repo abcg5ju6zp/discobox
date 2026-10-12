@@ -469,8 +469,9 @@ A rename is not that edit. It is a meta write (below) that names `name`.
 A sandbox's name, description and tags live in the sandbox, in its meta file,
 and the row holds a copy (ADR 0136, ADR 26-10-12-026): the `meta_name` and
 `description` columns, `tags`, and `meta_observed_at`, stamped on the sandbox's
-clock. Each is optional there and on the wire, and one that is unset is left
-out of `Sandbox.meta`. `UpdateSandboxMeta` carries
+clock. Each is optional there and on the wire. A name or description that is
+unset is left out of `Sandbox.meta`; `tags` is always sent, empty or not, for
+clients generated while the schema still required it. `UpdateSandboxMeta` carries
 a change to the sandbox agent (`PATCH .../meta`, as `exec:write`) and records
 what it answers; the status report (pools) records what the file holds. Either
 write lands only when newer, and both are observed columns `UpdateSandbox`
