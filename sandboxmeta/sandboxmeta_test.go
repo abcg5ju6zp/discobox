@@ -27,6 +27,11 @@ func TestParse(t *testing.T) {
 			data: `{"name": "Daily GH Check In"}`,
 			want: Meta{Name: "Daily GH Check In", Tags: map[string]string{}},
 		},
+		{
+			name: "a padded name is read trimmed, and measured trimmed",
+			data: `{"name": "  ` + strings.Repeat("n", MaxNameLength) + `  "}`,
+			want: Meta{Name: strings.Repeat("n", MaxNameLength), Tags: map[string]string{}},
+		},
 		{name: "a line break in the name is refused", data: `{"name": "a\nb"}`, wantErr: "one line"},
 		{name: "a name too long is refused", data: `{"name": "` + strings.Repeat("n", MaxNameLength+1) + `"}`, wantErr: "longer than"},
 		{name: "a list is not meta", data: `["wip"]`, wantErr: "JSON object"},
