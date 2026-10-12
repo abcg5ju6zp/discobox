@@ -59,12 +59,12 @@ func sandboxGitProxyHandler(service services.SandboxService, route gitRoute) htt
 		sandboxID := chi.URLParam(r, "sandboxId")
 		// The worktree is inside the sandbox, served by its agent, so reaching
 		// it is an action: the sandbox is started, and repaired once if it
-		// failed and lost its container. An origin is the pool's own
-		// repository, so reaching it repairs nothing and waits for nothing:
-		// it is a read, which the pool agent still starts a stopped sandbox
-		// for, as it did before. Not waiting is what keeps the push a parked
-		// sandbox is waiting on from waiting on that sandbox
-		// (ADR 26-10-12-711 §1).
+		// failed and lost its container. An origin, and what the pool's cache
+		// holds of a source, are the pool's own repositories, so reaching one
+		// repairs nothing and waits for nothing: it is a read. Not waiting is
+		// what lets a source be delivered to a sandbox that is still being
+		// made, and keeps the push a parked sandbox is waiting on from waiting
+		// on that sandbox (ADR 26-10-12-711 §1, ADR 26-10-10-545 §3).
 		use := services.SandboxRead
 		if route == gitRouteWorktree {
 			use = services.SandboxAction("git")
