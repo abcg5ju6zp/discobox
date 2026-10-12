@@ -385,11 +385,16 @@ func (m *Model) press(what hit, clicks int) (tea.Cmd, bool) {
 		return m.openLink(what.url), true
 
 	case hitIssue, hitPull:
-		// The header's issue and pull request open as tabs of the workspace
+		// The header's issue and pull request, and a tag on the list that
+		// numbers one, open as tabs of the workspace
 		// rather than in a browser: they are read while the work goes on.
 		// Ctrl-click is still the page (leftPress). Once, as a link is.
 		if clicks > 1 {
 			return nil, true
+		}
+		if what.box != "" {
+			// A tag on the list: the same tab, beside that row's workspace.
+			return m.openIssueOf(what.box, what.idx, what.kind == hitPull), true
 		}
 		return m.openIssue(what.idx, what.kind == hitPull), true
 
