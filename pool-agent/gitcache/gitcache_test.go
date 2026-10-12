@@ -514,6 +514,50 @@ func TestAnImportRunsNothingTheImportedRepositoryNames(t *testing.T) {
 		t.Fatalf("the imported objects went with the repository they came from: %v", err)
 	}
 
+	// An object that is not what its name says is refused, not copied in:
+	// the cache is shared, and would serve it under that name to everyone.
+	forged := filepath.Join(t.TempDir(), "forged.git")
+	other := newWork(t)
+	other.commit("first")
+	blob := other.git("rev-parse", "HEAD:first")
+	if err := os.WriteFile(filepath.Join(other.dir, "second"), []byte("something else\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	impostor := other.git("hash-object", "-w", "second")
+	other.git("clone", "--quiet", "--bare", "--no-local", other.dir, forged)
+	loose := func(dir, object string) string { return filepath.Join(dir, "objects", object[:2], object[2:]) }
+	if err := os.MkdirAll(filepath.Dir(loose(forged, blob)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	packs, _ := filepath.Glob(filepath.Join(forged, "objects", "pack", "*"))
+	for _, pack := range packs {
+		_ = os.Remove(pack)
+	}
+	for _, object := range strings.Fields(other.git("rev-list", "--objects", "--no-object-names", "HEAD")) {
+		data, err := os.ReadFile(loose(filepath.Join(other.dir, ".git"), object))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if object == blob {
+			if data, err = os.ReadFile(loose(filepath.Join(other.dir, ".git"), impostor)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(loose(forged, object)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(loose(forged, object), data, 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Import(ctx, path, "sbx-forged", "widget", forged); err == nil || !strings.Contains(err.Error(), "not what their names say") {
+		t.Logf("import error: %v", err)
+		t.Fatal("a repository holding one blob under another's name was imported")
+	}
+	if _, err := git(ctx, path, nil, nil, "cat-file", "-e", blob); err == nil {
+		t.Fatal("the forged object is in the cache")
+	}
+
 	// A repository that borrows objects from elsewhere on this host, by an
 	// alternates file or a link, is refused: it would hand the importer
 	// whatever those objects are.
