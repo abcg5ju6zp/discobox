@@ -359,6 +359,9 @@ func (m *Model) issueLoaded(msg issueLoadedMsg) tea.Cmd {
 		v.err = msg.err.Error()
 		return nil
 	}
+	if asked {
+		v.pushed = ""
+	}
 	issue := msg.issue
 	was := v.issue
 	v.issue, v.err = &issue, ""
@@ -524,8 +527,9 @@ func (m *Model) issueKeyPress(p *pane, msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		// Asked for: what it brings is what the person has now seen, a head
-		// newer than the last one included (issueLoaded).
-		v.pushed, v.asked = "", true
+		// newer than the last one included. The notice goes when the read
+		// lands, not before: one that fails has shown them nothing new.
+		v.asked = true
 		return tea.Batch(m.loadIssue(p, true), status("reading #%d again", v.number))
 	case "x":
 		if v.files {
