@@ -3,6 +3,7 @@ package gitcache
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -178,8 +179,10 @@ func preReceive(stdin io.Reader) error {
 // hookGit runs git in the environment receive-pack gave the hook, with
 // overrides applied on top.
 func hookGit(stdin []byte, overrides []string, args ...string) (string, error) {
+	// No deadline of its own: receive-pack is waiting on this hook, and ends
+	// it with the push.
 	//nolint:gosec // The executable is fixed; object ids come from receive-pack and git itself.
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Env = append(os.Environ(), overrides...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)

@@ -68,20 +68,36 @@ so there is no remote", "the check exited nonzero, so it is not there". Ask for
 the value and read the answer, and prefer one write that both creates and
 corrects over deciding between add and update.
 
-## Serving a live origin
+## Serving a cache to a sandbox
 
-A live origin is the developer's own repository, so the ref allow-list is the
-whole of what keeps a sandbox from the rest of it, and it holds only with every
-one of `githttp`'s restrictions in place. Each has a bypass of its own: the dumb
-protocol reads objects as files, a v2 upload-pack serves any object asked for
-by id (the `allow*SHA1InWant` switches do not stop it), and hideRefs reveals
-by prefix, so any design that lets the backend read the developer's refs for
-itself — checked first or not — serves whatever appears beneath an allowed
-name before it reads them. Do not forward `Git-Protocol` for a live origin, do
-not let it answer anything but the two upload-pack requests, and do not point
-the backend at the developer's repository instead of its snapshot.
-`githttp/live_test.go` fetches by id under both protocols, and mutates the
-developer's refs after a snapshot is taken, for these reasons.
+A sandbox's namespace shares an object store with every other sandbox of its
+remote, so `githttp`'s `FetchOnly` restrictions are the whole of what keeps it
+from the rest, and they hold only together. Each has a bypass of its own: the
+dumb protocol reads objects as files, a v2 upload-pack serves any object asked
+for by id (the `allow*SHA1InWant` switches do not stop it), and a switch left
+to the cache's own configuration can be loosened there. Do not forward
+`Git-Protocol` on a sandbox's fetch, do not let it answer anything but the two
+upload-pack requests, and keep the switches on the command line.
+`githttp/namespace_test.go` fetches by id under every protocol for these
+reasons.
+
+- **`X-Discobox-Git-Cache` and `X-Discobox-Git-Cache-Caller` are the control
+  plane's word.** They are read only on routes behind the control plane's
+  token. A route a sandbox's own token reaches takes the cache from
+  `source-caches.json`, never from a header.
+- **Hold the cache for the whole request.** Everything that reads or writes a
+  cache takes it through `gitcache.Store.Use` and releases it when the
+  response is finished. A read outside it can meet the sweep's prune.
+- **A sandbox's push needs both halves.** `receive.hideRefs` limits what it is
+  told; the pre-receive hook, with `receive.unpackLimit=1`, limits what it can
+  name. Unpacked, an object the store already holds is not written again, and
+  the hook could not tell a push that sent it from one that only named it.
+- **Mark a namespace before writing it** (`Receiving`, `markNamespace`). One
+  with refs and no record is one the sweep cannot attribute, and so never
+  removes.
+- **A cache is never shallow, and never fetches.** Do not add a path that runs
+  `git fetch` against a remote from the pool, or one that accepts a shallow
+  push.
 
 ## Error responses
 

@@ -1,14 +1,16 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2164 # bats runs tests and hooks under set -e, so a failed cd already fails.
 #
-# A discobox clones its own sources and fetches its origin over Git HTTP from
-# its pool (ADR 0126 §4, ADR 26-10-08-561): no origin is bound into it and the
-# pool runs no git in its checkout. Against a real Docker pool and real
-# sandboxes, this drives what a person sees of that — `git fetch origin`
-# inside the discobox sees the developer's new commit, a branch the developer
-# did not share is not fetchable, `discobox apply` works, a linked worktree
-# and a submodule are delivered through the bare origin instead, and a
-# rebuild does not clone over the work in the checkout.
+# A discobox's source is delivered by a client into its pool's cache of the
+# source's remote, and the discobox clones its own namespace of that cache
+# (ADR 26-10-10-545): nothing is bound into it, the pool fetches nothing, and
+# no pool reads the developer's directory. Against a real Docker pool and real
+# sandboxes, this drives what a person sees of that — the checkout reads as a
+# clone of the source's remote, with the pool as its `discobox` remote; a
+# commit made after the create shows up only once `discobox push` sends it;
+# another discobox's commit in the same cache is not fetchable; `discobox
+# apply` works; a linked worktree, a submodule and a remote URL are delivered
+# the same way; and a rebuild does not clone over the work in the checkout.
 #
 # Like worktree_git.bats it drives the development stack that is already
 # running (`task dev`) and owns only what it creates, purged by recorded ID.
@@ -33,34 +35,31 @@ setup_file() {
   export DISCOBOX_BATS_HOME="$BATS_SUITE_TMPDIR/home"
   mkdir -p "$DISCOBOX_BATS_HOME"
   export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
-  # The CLI is this host as the development server knows it: a source is
-  # served live only to a client on the pool's own host, and the server
-  # decides that by the client's host ID, which the CLI keeps under the HOME
-  # this suite replaces.
-  local host_id_file="${XDG_CONFIG_HOME:-$HOME/.config}/discobox/host-id"
-  [ -s "$host_id_file" ] || skip "no host ID at $host_id_file to share with the development server"
-  DISCOBOX_HOST_ID="$(cat "$host_id_file")"
-  export DISCOBOX_HOST_ID
   : >"$BATS_SUITE_TMPDIR/sandboxes"
   : >"$BATS_SUITE_TMPDIR/work"
 
   cli admin harness ls -o json 2>/dev/null | jq -e '.harnessConfigs[] | select(.slug == "shell" and .configured)' >/dev/null ||
     skip "the shell harness is not configured on the development server"
 
-  # The developer's repository, with a branch it never names to the discobox.
-  # Under $HOME, which is what a development pool can see of this host
-  # (DISCOBOX_POOL_HOST_MOUNT_PREFIX): one it cannot see is pushed instead,
-  # and served from the bare origin, which is not live.
-  DISCOBOX_BATS_WORK="$(mktemp -d "$HOME/.discobox-bats-origins.XXXXXX")"
+  # The developer's repository: a checkout of a remote nothing here can
+  # reach, one commit ahead of where it last saw that remote, with a branch
+  # it never delivers to the suite's discobox.
+  DISCOBOX_BATS_WORK="$(mktemp -d "$BATS_SUITE_TMPDIR/origins.XXXXXX")"
   export DISCOBOX_BATS_WORK
-  echo "$DISCOBOX_BATS_WORK" >"$BATS_SUITE_TMPDIR/work"
+  export DISCOBOX_BATS_REMOTE="https://git.invalid/bats/widget-$$.git"
   export DISCOBOX_BATS_LOCAL="$DISCOBOX_BATS_WORK/local"
   git init -q -b main "$DISCOBOX_BATS_LOCAL"
   git -C "$DISCOBOX_BATS_LOCAL" config user.name Bats
   git -C "$DISCOBOX_BATS_LOCAL" config user.email bats@example.com
-  echo one >"$DISCOBOX_BATS_LOCAL/README.md"
+  git -C "$DISCOBOX_BATS_LOCAL" remote add origin "$DISCOBOX_BATS_REMOTE"
+  echo zero >"$DISCOBOX_BATS_LOCAL/README.md"
   git -C "$DISCOBOX_BATS_LOCAL" add README.md
-  commit_in "$DISCOBOX_BATS_LOCAL" one
+  commit_in "$DISCOBOX_BATS_LOCAL" zero
+  DISCOBOX_BATS_PUBLISHED="$(git -C "$DISCOBOX_BATS_LOCAL" rev-parse HEAD)"
+  export DISCOBOX_BATS_PUBLISHED
+  git -C "$DISCOBOX_BATS_LOCAL" update-ref refs/remotes/origin/main "$DISCOBOX_BATS_PUBLISHED"
+  echo one >>"$DISCOBOX_BATS_LOCAL/README.md"
+  commit_in "$DISCOBOX_BATS_LOCAL" one -a
   git -C "$DISCOBOX_BATS_LOCAL" checkout -q -b private
   echo private >"$DISCOBOX_BATS_LOCAL/private.txt"
   git -C "$DISCOBOX_BATS_LOCAL" add private.txt
@@ -73,19 +72,14 @@ setup_file() {
   export DISCOBOX_BATS_SANDBOX_ID
 }
 
-# teardown_file purges the discoboxes this suite made, by their recorded IDs,
-# and removes the repositories it made under $HOME.
+# teardown_file purges the discoboxes this suite made, by their recorded IDs.
 teardown_file() {
   cd "$REPO_ROOT"
-  local id work
+  local id
   while read -r id; do
     [ -n "$id" ] || continue
     cli admin box purge "$id" >/dev/null 2>&1 </dev/null || true
   done <"$BATS_SUITE_TMPDIR/sandboxes"
-  work="$(cat "$BATS_SUITE_TMPDIR/work" 2>/dev/null || true)"
-  case "$work" in
-  "$HOME"/.discobox-bats-origins.*) rm -rf "$work" ;;
-  esac
 }
 
 cli() {
@@ -93,14 +87,18 @@ cli() {
 }
 
 commit_in() {
-  git -C "$1" -c user.name=Bats -c user.email=bats@example.com commit -q -m "$2"
+  local dir="$1" message="$2"
+  shift 2
+  git -C "$dir" -c user.name=Bats -c user.email=bats@example.com commit -q -m "$message" "$@"
 }
 
-# new_box makes a discobox from the repository at $1, records it for teardown,
-# waits for it, and prints its ID.
+# new_box makes a discobox from the repository at $1, with any further
+# arguments to `discobox new`, records it for teardown, waits for it, and
+# prints its ID.
 new_box() {
-  local created id
-  created="$(cd "$1" && cli new -H shell -d --include-dirty=false -o json)" ||
+  local created id dir="$1"
+  shift
+  created="$(cd "$dir" && cli new -H shell -d --include-dirty=false -o json "$@")" ||
     { echo "$created" >&2; return 1; }
   id="$(printf '%s' "$created" | jq -r .id)"
   [ -n "$id" ] && [ "$id" != null ]
@@ -137,48 +135,95 @@ sandbox_container() {
   echo "discobox-sandbox-$(printf '%s' "$box" | jq -r .poolId)-$1"
 }
 
-@test "the discobox's origin is its pool's Git route, and nothing is bound" {
-  run in_box 'git remote get-url origin; test -e /.discobox/origins && echo bound || echo unbound'
+pool_route() {
+  echo "https://git.discobox.internal/*/sandboxes/$1/git-origins/primary.git"
+}
+
+@test "the checkout reads as a clone of the source's remote, and the pool is its discobox remote" {
+  run cli admin box get "$DISCOBOX_BATS_SANDBOX_ID" -o json
+  [ "$(printf '%s' "$output" | jq -r .config.source.delivery)" = cache ]
+  [[ "$(printf '%s' "$output" | jq -r .config.source.cacheKey)" == remote/git.invalid/bats/widget-* ]]
+
+  run in_box 'git remote get-url origin; git remote get-url discobox; git remote | sort | tr "\n" " "; echo; git rev-parse origin/main; git rev-parse discobox/main HEAD; test -e /.discobox/origins && echo bound || echo unbound'
   echo "$output"
   [ "$status" -eq 0 ]
-  [[ "${lines[0]}" == https://git.discobox.internal/*/sandboxes/"$DISCOBOX_BATS_SANDBOX_ID"/git-origins/primary.git ]]
-  [ "${lines[1]}" = unbound ]
+  [ "${lines[0]}" = "$DISCOBOX_BATS_REMOTE" ]
+  # shellcheck disable=SC2053 # the right side is a pattern on purpose
+  [[ "${lines[1]}" == $(pool_route "$DISCOBOX_BATS_SANDBOX_ID") ]]
+  [ "${lines[2]}" = "discobox origin " ]
+  # origin/main is where the remote was, not where the developer's unpushed
+  # commit is; the pool's branch and the checkout are at that commit.
+  [ "${lines[3]}" = "$DISCOBOX_BATS_PUBLISHED" ]
+  local head
+  head="$(git -C "$DISCOBOX_BATS_LOCAL" rev-parse main)"
+  [ "${lines[4]}" = "$head" ]
+  [ "${lines[5]}" = "$head" ]
+  [ "${lines[6]}" = unbound ]
+
+  run in_box 'git rev-parse --abbrev-ref "main@{upstream}"'
+  [ "${lines[0]}" = origin/main ]
 
   run docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "$(sandbox_container "$DISCOBOX_BATS_SANDBOX_ID")"
   [ "$status" -eq 0 ]
   [[ "$output" != *"/.discobox/origins"* ]]
 }
 
-@test "git fetch origin in the discobox sees the developer's new commit" {
+@test "the discobox sees the developer's new commit once discobox push sends it" {
+  local before want
+  before="$(git -C "$DISCOBOX_BATS_LOCAL" rev-parse HEAD)"
   echo two >>"$DISCOBOX_BATS_LOCAL/README.md"
-  git -C "$DISCOBOX_BATS_LOCAL" add README.md
-  commit_in "$DISCOBOX_BATS_LOCAL" two
-  local want
+  commit_in "$DISCOBOX_BATS_LOCAL" two -a
   want="$(git -C "$DISCOBOX_BATS_LOCAL" rev-parse HEAD)"
 
-  run cli admin box get "$DISCOBOX_BATS_SANDBOX_ID" -o json
-  [ "$(printf '%s' "$output" | jq -r .config.source.delivery)" = clone ]
+  # Nothing follows the developer's directory unattended.
+  run in_box 'git fetch -q discobox && git rev-parse discobox/main'
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "$before" ]
 
-  run in_box 'git fetch -q origin && git rev-parse origin/main'
+  run bash -c "cd '$DISCOBOX_BATS_LOCAL' && HOME='$DISCOBOX_BATS_HOME' '$REPO_ROOT/build/discobox' --server '$DISCOBOX_BATS_SERVER' push '$DISCOBOX_BATS_SANDBOX_ID'"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"git fetch discobox && git rebase discobox/main"* ]]
+
+  run in_box 'git fetch -q discobox && git rev-parse discobox/main'
   echo "$output"
   [ "$status" -eq 0 ]
   [ "${lines[-1]}" = "$want" ]
 }
 
-@test "a branch the developer did not share is not fetchable, by name or by object" {
-  run in_box 'git ls-remote origin'
+@test "another discobox's commit in the same cache is not fetchable, by name or by object" {
+  # A second discobox from the same remote, at the private branch: its
+  # commit is now in the cache the first one's namespace shares.
+  local other
+  other="$(new_box "$DISCOBOX_BATS_LOCAL" -C "$DISCOBOX_BATS_LOCAL@private")"
+  run in_box "$other" 'git rev-parse HEAD'
+  echo "$output"
+  [ "${lines[0]}" = "$DISCOBOX_BATS_PRIVATE" ]
+  run cli admin box get "$other" -o json
+  [ "$(printf '%s' "$output" | jq -r .config.source.cacheKey)" = "$(cli admin box get "$DISCOBOX_BATS_SANDBOX_ID" -o json | jq -r .config.source.cacheKey)" ]
+
+  run in_box 'git ls-remote discobox'
   echo "$output"
   [ "$status" -eq 0 ]
   [[ "$output" == *refs/heads/main* ]]
   [[ "$output" != *private* ]]
+  [[ "$output" != *"$DISCOBOX_BATS_PRIVATE"* ]]
 
-  run in_box 'git fetch -q origin private'
+  run in_box 'git fetch -q discobox private'
   echo "$output"
   [ "$status" -ne 0 ]
-  run in_box "git fetch -q origin $DISCOBOX_BATS_PRIVATE"
-  echo "$output"
-  [ "$status" -ne 0 ]
+  local protocol
+  for protocol in 0 2; do
+    run in_box "git -c protocol.version=$protocol fetch -q discobox $DISCOBOX_BATS_PRIVATE"
+    echo "$output"
+    [ "$status" -ne 0 ]
+  done
   run in_box "git cat-file -e $DISCOBOX_BATS_PRIVATE"
+  [ "$status" -ne 0 ]
+  # And it pushes nothing into its own namespace.
+  run in_box 'git push -q discobox HEAD:refs/heads/from-the-box'
+  echo "$output"
   [ "$status" -ne 0 ]
 }
 
@@ -212,7 +257,7 @@ sandbox_container() {
   [ "${lines[2]}" = "$head" ]
 }
 
-@test "a linked worktree is delivered through the bare origin" {
+@test "a linked worktree is delivered like any other checkout" {
   local worktree="$DISCOBOX_BATS_WORK/linked"
   git -C "$DISCOBOX_BATS_LOCAL" worktree add -q -b linked "$worktree" main
   echo linked >"$worktree/linked.txt"
@@ -222,16 +267,17 @@ sandbox_container() {
   want="$(git -C "$worktree" rev-parse HEAD)"
   id="$(new_box "$worktree")"
 
-  run in_box "$id" 'git rev-parse HEAD && cat linked.txt && git remote get-url origin && git fetch -q origin && echo fetched'
+  run in_box "$id" 'git rev-parse HEAD && cat linked.txt && git remote get-url discobox && git fetch -q discobox && echo fetched'
   echo "$output"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "$want" ]
   [ "${lines[1]}" = linked ]
-  [[ "${lines[2]}" == https://git.discobox.internal/*/sandboxes/"$id"/git-origins/primary.git ]]
+  # shellcheck disable=SC2053 # the right side is a pattern on purpose
+  [[ "${lines[2]}" == $(pool_route "$id") ]]
   [ "${lines[3]}" = fetched ]
 }
 
-@test "a submodule checkout is delivered through the bare origin" {
+@test "a submodule checkout is delivered like any other checkout" {
   local sub="$DISCOBOX_BATS_WORK/sub" super="$DISCOBOX_BATS_WORK/super"
   git init -q -b main "$sub"
   echo sub >"$sub/sub.txt"
@@ -244,10 +290,35 @@ sandbox_container() {
   want="$(git -C "$super/sub" rev-parse HEAD)"
   id="$(new_box "$super/sub")"
 
-  run in_box "$id" 'git rev-parse HEAD && cat sub.txt && git remote get-url origin'
+  run in_box "$id" 'git rev-parse HEAD && cat sub.txt && git remote get-url discobox'
   echo "$output"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "$want" ]
   [ "${lines[1]}" = sub ]
-  [[ "${lines[2]}" == https://git.discobox.internal/*/sandboxes/"$id"/git-origins/primary.git ]]
+  # shellcheck disable=SC2053 # the right side is a pattern on purpose
+  [[ "${lines[2]}" == $(pool_route "$id") ]]
+}
+
+@test "a remote URL is delivered by this client, and the discobox clones it from its pool" {
+  local served="$DISCOBOX_BATS_WORK/served.git" url want id
+  git clone -q --bare "$DISCOBOX_BATS_LOCAL" "$served"
+  url="file://$served"
+  want="$(git -C "$served" rev-parse refs/heads/main)"
+  # HOME is the suite's, so this client's cache of the remote is too.
+  id="$(new_box "$DISCOBOX_BATS_WORK" -C "$url@main")"
+
+  run in_box "$id" 'git rev-parse HEAD origin/main discobox/main && git remote get-url origin && git branch -r | grep -c origin/private'
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$want" ]
+  [ "${lines[1]}" = "$want" ]
+  [ "${lines[2]}" = "$want" ]
+  [ "${lines[3]}" = "$url" ]
+  # Every branch of the remote is there, as a clone of it would have them.
+  [ "${lines[4]}" = 1 ]
+
+  # A second discobox from the same commit needs nothing fetched or pushed.
+  id="$(new_box "$DISCOBOX_BATS_WORK" -C "$url@main")"
+  run in_box "$id" 'git rev-parse HEAD'
+  [ "${lines[0]}" = "$want" ]
 }

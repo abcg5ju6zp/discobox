@@ -138,29 +138,48 @@ sandbox create requests.
   (`declared.go`). It is read here, on the client, because deciding what a
   declared source resolves to means looking at this machine's disk for a
   checkout of it — which is also why it is not a field of `.discobox/project.json`,
-  read by pool-agent out of the materialized clone. Reporting is the frontend's
+  read by pool-agent out of the materialized clone. A remote primary source
+  declares sources too (`readRemoteDeclaredSources`): the file is read from
+  the remote at the pinned commit, by fetching that commit alone
+  (`--depth=1 --filter=tree:0`, at depth 1 when the remote refuses the filter)
+  into a repository thrown away afterwards. It has no directory to look
+  beside, so each source it declares resolves to its URL ([ADR 26-10-10-545](../../../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md) §4). Reporting is the frontend's
   (`ReportDeclaredSource`); this package prints nothing. See the CLI design
   doc's "Declared Sources" and
   [ADR 0056](../../../docs/adr/0056-a-repository-declares-the-sources-it-is-worked-on-with.md).
-- `DeliverSource` pushes the sources the server marked push-delivered — the
-  server decides that per source — out of the `LocalSources` the create
-  returned, records each delivered commit as the origin lease ref a later
-  `discobox push` leases against
+- `DeliverSource` delivers the sources the server recorded as a client's to
+  deliver. Every source created now is delivered into its pool's cache
+  (`cachedeliver.go`, [ADR 26-10-10-545](../../../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md) §3):
+  a pin naming every ref of the delivery, then one `git push --atomic` of what
+  the pool could not create. A local checkout is delivered out of the
+  `LocalSources` the create returned — its branch at the pinned commit, its
+  snapshot, and its remote's branches (as `refs/remotes/origin/*`) and tags. A
+  remote URL is listed with `ls-remote`, and only when the pool lacks
+  something fetched into this client's bare cache of that remote
+  (`clientGitCacheRoot`, `<user cache dir>/discobox/client/git`): first what
+  the pool has, best effort, then the remote, with the user's own Git
+  configuration and no prompt. Cache deliveries start at once, run together,
+  and wait only for a pool that is not up yet. A `push` source of a discobox
+  created earlier still waits for `awaiting_source` and is pushed into its
+  own repository. Each local source's delivered commit is recorded as the
+  origin lease ref a later `discobox push` leases against
   ([ADR 0058](../../../docs/adr/0058-a-push-delivered-source-has-a-pool-side-origin.md)
-  §6), and reports completion only once every push has landed, since that
-  report resumes the sandbox. It is a no-op when nothing awaits a push, so
-  callers invoke it unconditionally. See the CLI design doc's "Origin and
+  §6), and completion is reported only once every source has landed, since
+  that report starts the sandbox. It is a no-op when nothing awaits delivery,
+  so callers invoke it unconditionally. See the CLI design doc's "Origin and
   Source Delivery".
 - Delivery is also reachable from outside a create: `PendingSourcePushes`,
   `NewLocalSources`, and `CheckDeliverable` let `discobox push` hand a discobox
   parked in `awaiting_source` the source its create never delivered, out of the
-  repositories still on the client. The push and the completion call are the
+  repositories still on the client — or, for a source that is a remote URL
+  (`PendingSourcePush.Remote`), from that remote, by any client that can read
+  it. The push and the completion call are the
   same `DeliverSource`; only where the repositories come from differs — a create
   has just resolved them, a later delivery finds them again from each source's
   recorded local directory. See the CLI design doc's "Re-delivering Source".
 - A source directory in no Git repository gets a throwaway repository built over
   it — after the user has been asked whether to copy it at all — and is
-  delivered by push. Create returns every source's repository as
+  delivered out of that. Create returns every source's repository as
   `LocalSources`, which delivery pushes out of and the caller closes; see the
   CLI design doc's "A Directory That Is Not a Repository" and
   [ADR 0045](../../../docs/adr/0045-a-directory-with-no-repository-is-delivered-by-push.md).
@@ -168,7 +187,7 @@ sandbox create requests.
   leaves — is resolved into the same shape without building anything: the empty
   base commit, the snapshot, and their refs go into the user's own repository,
   no branch moves, and the source records `noLocalCommits` rather than
-  `noLocalRepository`, so it is pushed but stays deliverable afterwards. Nobody
+  `noLocalRepository`, so it stays deliverable afterwards. Nobody
   is asked. The two questions about an unborn repository — is HEAD one, and
   what does the working tree hold with no HEAD to read it against — come from
   `internal/gitunborn`, because `discobox apply` asks them again coming back
@@ -176,20 +195,24 @@ sandbox create requests.
   See the CLI design doc's "A Repository With No Commits" and
   [ADR 0083](../../../docs/adr/0083-a-repository-with-no-commits-is-uncommitted-work-on-an-empty-base.md).
 - A source repository whose `.git` is not a real directory — a linked worktree
-  or submodule checkout — records `noLocalGitDirectory`, so it is pushed rather
-  than bound: a bound origin is only ever the repository's own Git directory.
+  or submodule checkout — records `noLocalGitDirectory`. It is delivered like
+  any other checkout; the fact is recorded and decides nothing.
   See the CLI design doc's "A Repository Whose `.git` Is Not Its Git Directory"
   and [ADR 0093](../../../docs/adr/0093-a-local-sources-origin-is-its-git-directory.md).
-- A local source checked out at a branch records the URL of the remote that
-  branch tracks (`upstreamUrl`, `localUpstreamURL`), which the sandbox adds as
-  its `upstream` remote — its `origin` is this repository, so the project's real
-  remote is otherwise unknown there. It is the remote's first URL, the one Git
-  fetches from: as written when written in full, so this machine's `insteadOf`
-  rewrites (https to ssh for a key the sandbox lacks) stay here, and as Git
-  resolves it otherwise, so an alias like `gh:org/repo` arrives as a real URL.
-  Credentials written into it are dropped, and a remote the sandbox cannot
-  reach (another local branch, a path on this machine) sends nothing rather
-  than a broken remote.
+- A shallow checkout is refused as a source (`refuseShallowRepository`), with
+  `git fetch --unshallow` as the remedy: a pool's cache is never shallow.
+- A local source records the URL of its remote (`upstreamUrl`, `localRemote`):
+  the remote its checked-out branch tracks, else `origin`, else the
+  repository's only remote. The sandbox has it as `origin`, and the server
+  keys the pool cache by it ([ADR 26-10-10-545](../../../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md) §§2, 6).
+  A remote on a pool's origins host is passed over: inside a discobox that is
+  the checkout's route to its own pool. It is the remote's first URL, the one
+  Git fetches from: as written when written in full, so this machine's
+  `insteadOf` rewrites (https to ssh for a key the sandbox lacks) stay here,
+  and as Git resolves it otherwise, so an alias like `gh:org/repo` arrives as
+  a real URL. Credentials written into it are dropped, and a remote the
+  sandbox cannot reach (another local branch, a path on this machine) sends
+  nothing rather than a broken remote.
 - Do not depend on `internal/cli` or `internal/tui`. Both frontends consume this
   package through their adapters.
 - Keep terminal waiting, attach, and rendering in the frontend packages; those

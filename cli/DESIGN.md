@@ -14,7 +14,7 @@ transport helpers where OpenAPI does not model the stream.
 | `internal/sandboxapply` | `discobox apply`'s fetch: a source's sandbox commits fetched into the local repository under `refs/discobox/apply/<sandbox>/<slug>` (ADR 0014). |
 | `internal/gitapply` | Landing a fetched range on the local branch by cherry-pick in a disposable worktree (`Attempt`), and onto a repository with no commits (`AttemptRoot`, ADR 0084). |
 | `internal/sandboxgit` | The client's git transport to a sandbox: the worktree and origin repository URLs the control plane proxies, bearer-token auth on those requests, and the client-side ref names that record what has been sent. Shared by create, apply and push. |
-| `internal/sandboxpush` | `discobox push`: re-delivering a push-delivered source's commits into the origin repository its sandbox fetches from, under a lease (ADR 0058), and resolving locally whether there is anything to send (ADR 26-09-05-008). |
+| `internal/sandboxpush` | `discobox push`: sending a local source's commits into the origin on its pool that its sandbox fetches from, under a lease (ADR 0058), and resolving locally whether there is anything to send (ADR 26-09-05-008). |
 | `internal/origin` | Resolves the client host a sandbox is created from, and a directory's project root (its repository root). Host identity itself is shared, in the root module's `internal/hostid`. |
 | `internal/gitunborn` | A repository with no commits: whether HEAD is unborn, and the tree of a working tree that has no HEAD to be read against. Shared by create (ADR 0083) and apply (ADR 0084), which both have to ask. |
 | `internal/tui` | The `discobox console` window: Bubble Tea presentation and interaction state, expressed against its own `DataSource` interface. See [`internal/tui/DESIGN.md`](internal/tui/DESIGN.md). |
@@ -2082,39 +2082,52 @@ this machine's discoboxes cut from there and its sourceless ones, and never
 another machine's: a local path identifies a repository only on the machine
 holding it, and collides across hosts and users.
 
-Host identity comes from `internal/hostid` in the root module, deliberately
-shared: a CLI and a server on the same machine must resolve the same value from
-the same file, which is how the server recognizes a request as coming from its
-own filesystem and binds the source instead of asking for a push.
+Host identity comes from `internal/hostid` in the root module. The server does
+not compare it with anything of its own: it files a discobox under its client,
+and names the pool cache of a source that has no remote.
 
 After create, `sandboxcreate.DeliverSource` is called unconditionally and is a
-no-op unless the server marked a source `delivery: push`. When it did, the
-client waits for the sandbox to reach `awaiting_source`, pushes each such
-source's commit to its branch in that source's *origin* repository (plus the
-workspace snapshot ref, when that workspace is dirty — without it the sandbox
-comes up clean and the edits are lost), and then reports the pushes complete. It
-pushes the commits the server recorded at create, by explicit refspec, rather
-than whatever the local branches now point at, and records each under
-`refs/discobox/origin/<sandbox>/<slug>/<branch>` as the lease a later
+no-op unless the server recorded a source a client delivers. Every source
+created now is `delivery: cache`: delivered into its pool's cache of its remote
+([ADR 26-10-10-545](../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)).
+For each one the client:
+
+1. **Pins.** It names every ref of the delivery and the object each points at
+   — the source's branch at the commit the server recorded at create, the
+   workspace snapshot ref when that workspace is dirty, and the remote's
+   branches and tags — and the pool creates those its cache already holds.
+   When that is all of them, nothing is transferred.
+2. **Pushes the rest**, in one `git push --atomic`. A local checkout already
+   holds the objects. A remote URL is fetched into this client's own bare cache
+   of that remote (`<user cache dir>/discobox/client/git`) — first what the
+   pool has, then the remote — and pushed from there.
+
+It then reports the delivery complete, and records each local source's commit
+under `refs/discobox/origin/<sandbox>/<slug>/<branch>` as the lease a later
 `discobox push` holds.
 
-Delivery is decided per source, so the primary source and each `--include`
-reference (below) are pushed or bound independently. Every push-delivered source
-is pushed before any of them is reported: the sandbox resumes on that one
-report, keyed by source slug, and resuming it earlier would start the harness
-against a workspace still missing a source.
+A cache delivery does not wait for the sandbox: it starts when the create
+returns and runs while the image is pulled, waiting only for a pool that is not
+up yet. Sources are delivered together. A discobox created before pools cached
+Git can hold a `delivery: push` source, whose repository is made with the
+sandbox; that one still waits for `awaiting_source` before it is pushed.
 
-The pushes run out of the `sandboxcreate.LocalSources` that create returned, not
-out of repositories re-resolved from the source arguments. For a directory with
+Every source is delivered before any of them is reported: the sandbox starts on
+that one report, keyed by source slug, and starting it earlier would run the
+harness against a workspace still missing a source.
+
+A local source is delivered out of the `sandboxcreate.LocalSources` that create
+returned, not out of a repository re-resolved from the source argument. For a directory with
 no repository (below) that repository is a throwaway one holding the only copy
 of what the sandbox was configured against, so it cannot be found again. Callers
 `Close` them as soon as the sources have been delivered.
 
-The push goes through the control plane's Git proxy, never directly to the
-sandbox, which sits on a network the client cannot reach.
+The delivery goes through the control plane's Git proxy, never directly to the
+pool, which sits on a network the client cannot reach.
 `internal/sandboxgit` owns that addressing for every direction it runs in — the
-two repository URLs, the bearer token as a config override rather than in the
-URL, and the client-side ref names.
+repository URLs (worktree, origin, pin, and the cache's record of a remote),
+the bearer token as a config override rather than in the URL, and the
+client-side ref names.
 
 `CreatePromptSandbox` and `DeliverSource` both take a `sandboxcreate.Report` and
 call it as they enter each step. These steps are this process's own work, so
@@ -2122,17 +2135,22 @@ nothing else can say which one is underway; the words live in `sandboxcreate`
 so `discobox new` and the console cannot describe the same stage differently,
 while where the line is drawn and when it is cleared stays each frontend's.
 
-See [ADR 0001](../docs/adr/0001-sandbox-origin-and-remote-source-push.md).
+See [ADR 0001](../docs/adr/0001-sandbox-origin-and-remote-source-push.md),
+[ADR 26-10-10-545](../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md) and
+[`internal/sandboxcreate`](internal/sandboxcreate/DESIGN.md).
 
 ## Re-delivering Source (`discobox push`)
 
 `discobox push` (`internal/cli/push.go`, `internal/sandboxpush`) sends local commits
-into the origin repository a push-delivered source's sandbox fetches from, so
-work done here since create can be rebased onto there. It acts per source —
-every push-delivered source of the sandbox, or the one `--source` names — since
-delivery is decided per source and a reference can need a push while the primary
-source is bound. Nothing in the sandbox moves: it gains `origin/<branch>`, and
-whoever is working in it rebases when they choose. It is transport only — no
+into the origin on its pool that a source's sandbox fetches from, so work done
+here since create can be rebased onto there. It acts per source — every source
+of the sandbox that came from a directory on a machine, or the one `--source`
+names; a source that is a remote URL has no checkout to push from
+(`sandboxpush.CheckPushDelivered`). Nothing in the sandbox moves: it gains
+`discobox/<branch>` (`sandboxpush.PoolRemote` — `origin/<branch>` in a discobox
+created before pools cached Git), and whoever is working in it rebases when
+they choose. A sandbox no longer follows the developer's repository unattended
+anywhere: a push is the only way it sees new local commits. It is transport only — no
 phase, no completion call, no state change.
 
 The ref update is a lease rather than a force or a plain fast-forward. A local
@@ -2215,10 +2233,10 @@ The console's workspace delivers when the row says `AwaitsDelivery`
 **An attached client pushes on its own** (`internal/cli/push_auto.go`). Going to
 work in a discobox is when the commits made here belong in its origin, and
 attaching a terminal is that moment — so for as long as an attach lasts, its
-client pushes that discobox's push-delivered sources: at the start, and every
+client pushes that discobox's local sources: at the start, and every
 5s. What the command exists for is a discobox whose origin is stale because
-nobody remembered, and that origin is a repository belonging to one discobox
-which nothing else reads.
+nobody remembered, and that origin — a namespace of the pool's cache, or a
+repository of its own — belongs to one discobox, which nothing else reads.
 
 Both front ends run the same rule, over one resolver (`App.pushSandboxSources`,
 `pushable`, and a per-discobox cache of what its sources resolve to here):
@@ -2457,8 +2475,8 @@ resolved exactly like `--include`:
   mismatch and is what the caller has. The disagreement is reported rather than
   resolved silently, because a directory that merely shares the name looks
   identical from here.
-- **A clone lands at the same path.** With no checkout, the declared URL is
-  cloned to the sibling path the checkout would have occupied, not to
+- **A fallback lands at the same path.** With no checkout, the declared URL is
+  delivered to the sibling path the checkout would have occupied, not to
   `/workspace/<name>`. That is the point of declaring a source: `../foo` from
   the primary source resolves inside the sandbox whether or not the caller had
   foo checked out, so a script in the repository works for everyone.
@@ -2471,12 +2489,16 @@ resolved exactly like `--include`:
   resolves to something already brought in is skipped rather than refused.
 - Only the primary source's file is read. There is no recursion, so a declared
   source's own declarations do nothing.
-- The file is read from the working tree, not the checked-out commit. With
+- For a local primary source the file is read from the working tree, not the
+  checked-out commit. With
   `--include-dirty=false` the sandbox runs committed code from a source list the
   caller can see on disk, which is the less surprising of the two.
-- A remote primary source declares nothing: the file lives in a checkout, and
-  reading it would mean cloning the repository here first, which is the
-  sandbox's job.
+- A remote primary source declares sources too. Its file is read from the
+  remote at the commit the source is pinned to, by fetching that commit alone
+  with no trees or blobs — no clone. It has no directory on this machine to
+  look beside, so each source it declares is its URL, placed beside where the
+  primary lands
+  ([ADR 26-10-10-545](../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md) §4).
 - `--declared-sources=false` leaves them out, for a caller who wants only what
   they named — or does not want a large clone on every run.
 
@@ -2509,7 +2531,7 @@ workspace, and the sandbox comes up with the files as uncommitted changes.
   all, the request "No Source At All" below describes, and nothing is built over
   the directory to reach it. `--include-dirty` answers ahead of time, `false`
   meaning the same. What declining does *not* produce is a checkout of nothing at
-  the directory's own path: that put an empty, push-delivered repository over
+  the directory's own path: that put an empty repository over
   whatever lives at that path inside the discobox, which is `$HOME` in the case
   the question exists to catch.
 - The question is asked before `gitutil.InitOverWorkTree`, because indexing the
@@ -2577,17 +2599,15 @@ See [ADR 0083](../docs/adr/0083-a-repository-with-no-commits-is-uncommitted-work
 
 ## A Repository Whose `.git` Is Not Its Git Directory
 
-A bound source's origin is the repository's `.git` directory and never its
-working tree, whose ignored files — `.env` first — are exactly what a developer
-keeps out of git. A linked worktree or a submodule checkout has a *file* at
-`.git` naming a Git directory elsewhere, so there is nothing at that path to
-bind, and following the pointer would widen a worktree into the main checkout
-it was cut from.
+A linked worktree or a submodule checkout has a *file* at `.git` naming a Git
+directory elsewhere.
 
 - The source records `noLocalGitDirectory` whenever `<repo root>/.git` is not a
-  real directory (a file, a symlink, or absent), and that is what makes the
-  server choose `push`. It sits beside `noLocalCommits` and can be set with it:
-  an orphan worktree is both.
+  real directory (a file, a symlink, or absent). It sits beside
+  `noLocalCommits` and can be set with it: an orphan worktree is both. It
+  decides nothing now — every source is delivered by its client
+  ([ADR 26-10-10-545](../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)) —
+  and is recorded as a fact about the client's filesystem.
 - The commits are in the user's repository and stay there, so a later
   `discobox push` delivers the source as it would any other.
 

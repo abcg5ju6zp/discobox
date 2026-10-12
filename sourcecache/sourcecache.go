@@ -109,7 +109,7 @@ func NormalizeRemote(remote string) string {
 	if remote == "" || strings.ContainsAny(remote, " \t\r\n\x00") {
 		return ""
 	}
-	host, port, repository := "", "", ""
+	var host, port, repository string
 	if strings.Contains(remote, "://") {
 		parsed, err := url.Parse(remote)
 		if err != nil {

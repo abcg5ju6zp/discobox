@@ -538,7 +538,7 @@ func (s *Service) acquireSandboxHTTPClient(ctx context.Context, projectID, sandb
 	if err != nil {
 		return nil, nil, err
 	}
-	lease, err := provider.AcquireHTTPClient(ctx, sandbox.SandboxRef{ProjectID: sandboxModel.ProjectID, SandboxID: sandboxModel.ID}, sandboxModel.ProviderState, scopes)
+	lease, err := provider.AcquireHTTPClient(ctx, sandboxRefFromSandbox(sandboxModel), sandboxModel.ProviderState, scopes)
 	if err != nil {
 		// The row outlives the host: a pool whose container is being replaced,
 		// or whose agent has not passed its healthcheck yet, still reads ready

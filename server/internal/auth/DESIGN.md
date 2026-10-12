@@ -131,11 +131,14 @@ Current authorizers:
   why it runs first. It is decided by the route; no grant or use text is
   read ([ADR 0140](../../../docs/adr/0140-a-discobox-reaches-the-discobox-api-through-its-pool-with-a-fixed-role.md)
   §§4–5). Some routes also ask what they name to belong to the caller (the
-  route's `owner`): source delivery — the push into a discobox's `git-origins`
-  and `complete-source-push` — only into a discobox the caller created, by its
-  recorded `CreatedBySandboxID`
+  route's `owner`): source delivery — the pin and the push into a discobox's
+  `git-origins`, and `complete-source-push` — only into a discobox the caller
+  created, by its recorded `CreatedBySandboxID`
   ([ADR 26-09-24-630](../../../docs/adr/26-09-24-630-a-discobox-delivers-the-source-of-the-discoboxes-it-creates.md)
-  §2); its terminals — the exec listing, `screen`, `wait`, and `input`, but
+  §2). Fetching an origin is not delivery, and neither is fetching what a
+  pool's cache remembers of a remote (`git-caches`): no sandbox role route
+  names either
+  ([ADR 26-10-10-545](../../../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md) §7); its terminals — the exec listing, `screen`, `wait`, and `input`, but
   not `attach` or creating or ending an exec — only for a discobox the caller
   created
   ([ADR 26-10-01-397](../../../docs/adr/26-10-01-397-a-discobox-reads-and-types-into-the-terminals-of-the-discoboxes-it-creates.md));

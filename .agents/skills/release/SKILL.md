@@ -109,11 +109,12 @@ Where both exist, `upstream` is GitHub (`ibuildthecloud/discobox`, which
 redirects to `discobox-ai/discobox`) and `origin` is a Depot mirror. Releases,
 tags, CI, and the `gh` CLI all mean **upstream**. Push there.
 
-**Inside a discobox `origin` is not GitHub** — it is
-the pool's `https://git.discobox.internal/...` route to the host's repository —
-and `gh` is not logged
-in. There may be an `upstream`: the remote the host's branch tracks, which is
-the Depot mirror as readily as GitHub. Point it at GitHub whether or not it
+**Inside a discobox no remote is known to be GitHub**, and `gh` is not logged
+in. `origin` is the host checkout's own remote, which is the Depot mirror as
+readily as GitHub, and `discobox` is the pool's
+`https://git.discobox.internal/...` route. In a discobox created before ADR
+26-10-10-545, `origin` is that pool route and there may be an `upstream`: the
+remote the host's branch tracks. Point `upstream` at GitHub whether or not it
 exists. `discobox-ai/discobox` is public, so `git fetch` and
 `git ls-remote` need no credential; every push and every `gh` call runs under
 the token asked for once, up front (below). A push needs the token named

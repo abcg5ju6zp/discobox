@@ -510,6 +510,7 @@ func sandboxRefFromSandbox(sb *model.Sandbox) SandboxRef {
 	return SandboxRef{
 		SandboxID: sb.ID,
 		ProjectID: sb.ProjectID,
+		PoolID:    sb.PoolID,
 	}
 }
 

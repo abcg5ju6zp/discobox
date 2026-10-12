@@ -21,14 +21,11 @@
   unmount of both disks while Docker is writing to them.
 - **The `/Users` share is read-only, at the same path, from one list.** The host
   enforces read-only; a sandbox writing to a developer's files is not a feature
-  behind a flag. The guest must mount it at `/Users` and nowhere else — the
-  pool agent reads a source's live origin through the engine's host mount of
-  the guest's `/Users`, at the host path under the host-mount prefix, and
-  serves it over its git-origins route; nothing is bound into a sandbox (ADR
-  0126 §4) — and the driver's virtiofs shares, the engine's host mounts, and
-  the published `LocalSourceRoots` all come from `hostShares`.
-  Setting any of them separately is how a pool ends up claiming it can clone a
-  path its guest cannot see.
+  behind a flag. The guest mounts it at `/Users` and nowhere else, and the
+  driver's virtiofs shares and the engine's host mounts both come from
+  `hostShares`. No source delivery reads the share
+  ([ADR 26-10-10-545](../../../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)):
+  do not add a path that serves or clones a source from it.
 - **Adding the host mount needs the guest that has the mount point.** Docker
   refuses to bind a source the daemon does not have, and the guest root is
   read-only, so `/Users` exists only if the image created it. A server that

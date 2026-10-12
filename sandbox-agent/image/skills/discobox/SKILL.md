@@ -63,15 +63,12 @@ No command allowlist, no approval prompts. The isolation is the boundary.
 The user's machine: no host filesystem, no processes, no network, no SSH keys,
 no cloud credentials.
 
-Your `origin` is the closest thing to an exception. Where the box was made
-from a repository on the user's own disk, it is a URL at
-`git.discobox.internal`, which your pool serves from that repository's git
-directory — live, so the user's new commits arrive with a `git fetch origin`.
-What it serves is the branch the user is on, `HEAD`, and the refs this box was
-made from, and nothing else: not their other branches, their stash, their
-reflogs or their `.git/config`, and never their working tree. A source
-delivered by pushing is served from a repository on the pool the user pushes
-into, and one cloned from a remote URL has that remote as its `origin`.
+Your pool is the closest thing to an exception. It holds this box's source
+as the user's client delivered it — a URL at `git.discobox.internal`, served
+to this box fetch-only: the branch this box was made from, the remote's
+branches and tags as that client knew them, and nothing of any other box. It
+moves only when a client pushes; nothing here reads the user's disk, their
+other branches, their stash or their working tree.
 
 ### Credentials here are sentinels, not values
 
@@ -110,24 +107,22 @@ requests for this box's own networks (a nested container's IP) directly.
 
 Commit it. That is the mechanism.
 
-Check `git remote -v` before reasoning about `origin` — it is one of two
-things, and they behave differently:
+Check `git remote -v` before reasoning about a remote. Which names you have
+depends on when the box was created:
 
-- **`https://git.discobox.internal/...`** — the usual case. Your pool serves
-  it fetch-only, so fetch works and push always fails. Behind it is the git
-  directory of the user's own repository when the source was cloned from their
-  disk, or a pool-side repository they push into when it was delivered that
-  way. Its credential is this box's own, handed to git by the sandbox agent;
-  there is nothing to configure.
-- **A remote URL** (`github.com/...`) — the source was cloned from a remote.
-  `origin` is that real remote, and a push is a live push upstream. Do not push
-  there unless the user asked for it.
-
-A source cloned from the user's disk may also have an **`upstream`** remote:
-the URL the user's own checkout of that branch tracks — their GitHub remote, a
-fork, or a mirror. It is live, it is not what your branch tracks, and a push
-there is a push to the real remote. The same rule holds: not unless the user
-asked, and check its URL first.
+- **`discobox`** → `https://git.discobox.internal/...` is your pool. It is
+  fetch-only: fetch works and push always fails. Its credential is this box's
+  own, handed to git by the sandbox agent; there is nothing to configure.
+  **`origin`** is then the source's real remote (`github.com/...`), set up as
+  though the box had cloned it. It is live, and a push there is a push to the
+  real remote. Do not push there unless the user asked for it. A source with
+  no remote has `discobox` alone.
+- **A box created earlier** has no `discobox` remote. There `origin` is the
+  pool (`https://git.discobox.internal/...`, fetch-only) and the real remote,
+  when there is one, is **`upstream`** — or, for a source that was a remote
+  URL, `origin` is that remote itself. The same rule holds for the real
+  remote under either name: not unless the user asked, and check its URL
+  first.
 
 The user runs `discobox apply` on their side, which cherry-picks your commits
 onto their working tree with your commit boundaries preserved.
@@ -139,19 +134,19 @@ onto their working tree with your commit boundaries preserved.
   `--allow-dirty`. A stray scratch file blocks the whole change.
 - Do not print a patch to apply, or upload the diff anywhere.
 
-To build on commits made since this box started, fetch them yourself —
-`git fetch origin && git rebase origin/<branch>` — and what that reaches
-depends on which origin you have:
+To build on commits the user made since this box started, fetch them from
+the pool yourself — `git fetch discobox && git rebase discobox/<branch>`
+(`origin` in place of `discobox` in a box created earlier, where the pool is
+`origin`). What that reaches is what a client has pushed:
 
-- **A live bind** always has the user's newest commits; nothing has to happen
-  first.
-- **A push-delivered source** gets them from whichever client is attached,
-  which pushes every few seconds for as long as it stays attached. `discobox
-  push` is the fallback for when nobody is, not the first move.
-- **A remote URL** fetches that remote, not the user's machine. Their unpushed
-  work is not reachable from here at all, and `discobox push` does not cover
-  this case — say so rather than sending them after a command that will report
-  nothing to send.
+- **A source from the user's disk** gets them from whichever client is
+  attached, which pushes every few seconds for as long as it stays attached.
+  `discobox push` is the fallback for when nobody is, not the first move.
+- **A source that is a remote URL** has no checkout on the user's machine to
+  push from. Fetch the real remote instead. Their unpushed work is not
+  reachable from here at all, and `discobox push` does not cover this case —
+  say so rather than sending them after a command that will report nothing to
+  send.
 
 ## What the user sees
 

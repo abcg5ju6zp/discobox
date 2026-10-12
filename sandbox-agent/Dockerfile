@@ -139,6 +139,7 @@ COPY sandboxshell ./sandboxshell
 COPY sandboxuser ./sandboxuser
 COPY secretformat ./secretformat
 COPY serverstage ./serverstage
+COPY sourcecache ./sourcecache
 COPY tools ./tools
 COPY version ./version
 COPY wellknown ./wellknown

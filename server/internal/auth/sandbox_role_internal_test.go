@@ -77,6 +77,12 @@ func TestSandboxRoleDeliversSourceOnlyToWhatItCreated(t *testing.T) {
 		{"push refs of its worker", http.MethodGet, "/projects/default/sandboxes/sbx-worker/git-origins/primary.git/info/refs?service=git-receive-pack", http.StatusOK},
 		{"push into its worker", http.MethodPost, "/projects/proj-1/sandboxes/sbx-worker/git-origins/primary.git/git-receive-pack", http.StatusOK},
 		{"complete its worker's push", http.MethodPost, "/projects/default/sandboxes/sbx-worker/complete-source-push", http.StatusOK},
+		{"pin its worker's source", http.MethodPost, "/projects/default/sandboxes/sbx-worker/git-origins/primary.git/pin", http.StatusOK},
+		{"pin a person's source", http.MethodPost, "/projects/default/sandboxes/sbx-persons/git-origins/primary.git/pin", http.StatusForbidden},
+		// What a pool's cache remembers of a remote is a project member's to
+		// fetch, never a sandbox's (ADR 26-10-10-545 §7).
+		{"fetch refs of its worker's cache", http.MethodGet, "/projects/default/sandboxes/sbx-worker/git-caches/primary.git/info/refs?service=git-upload-pack", http.StatusForbidden},
+		{"fetch from its worker's cache", http.MethodPost, "/projects/default/sandboxes/sbx-worker/git-caches/primary.git/git-upload-pack", http.StatusForbidden},
 		{"fetch refs of its worker", http.MethodGet, "/projects/default/sandboxes/sbx-worker/git-origins/primary.git/info/refs?service=git-upload-pack", http.StatusForbidden},
 		{"fetch from its worker", http.MethodPost, "/projects/default/sandboxes/sbx-worker/git-origins/primary.git/git-upload-pack", http.StatusForbidden},
 		{"push into a person's discobox", http.MethodPost, "/projects/default/sandboxes/sbx-persons/git-origins/primary.git/git-receive-pack", http.StatusForbidden},

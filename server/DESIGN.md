@@ -74,13 +74,30 @@ Current proxy routes:
   It serves the sandbox's own worktree repository, which the sandbox agent
   serves and the pool forwards to (ADR 0126 §4), so the lease for it also
   carries a sandbox-agent token of the same scope for the pool to forward.
-- `/projects/{projectId}/sandboxes/{sandboxId}/git-origins/{slug}.git...` forwards
-  the same way to the pool-agent `git-origins` route, and serves a
-  push-delivered source's origin repository instead — a different repository, on
-  its own route rather than a synthesized repository id, because source slugs are
-  client-supplied and any suffix convention could collide with a real one. Both
-  routes derive scopes identically: `receive-pack` needs `ScopeSandboxWrite`,
-  everything else `ScopeSandboxRead`. See ADR 0058 §3.
+- `/projects/{projectId}/sandboxes/{sandboxId}/git-origins/{slug}.git...` serves
+  the origin a client delivers a source into — a different repository from the
+  worktree, on its own route rather than a synthesized repository id, because
+  source slugs are client-supplied and any suffix convention could collide with
+  a real one (ADR 0058 §3). Where it forwards depends on the source's recorded
+  delivery (`sandboxSourceCacheKey`):
+  - `cache` — the pool-agent `git-cache-origins` route, with the source's cache
+    key in `X-Discobox-Git-Cache` (`sourcecache`). The pool needs no
+    record of the sandbox to serve it, so a delivery lands while the sandbox is
+    still being provisioned
+    ([ADR 26-10-10-545](../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md) §3).
+    `POST …/{slug}.git/pin` is the one request there that is not git's own.
+  - anything else — the pool-agent `git-origins` route, the bare repository a
+    pool made for a sandbox created before pools cached Git.
+- `/projects/{projectId}/sandboxes/{sandboxId}/git-caches/{slug}.git...` forwards
+  to the pool-agent `git-cache-remotes` route: what the pool's cache remembers
+  of a cache-delivered source's remote, fetch-only. It answers 404 for a source
+  that is not cache-delivered, and no sandbox role route names it.
+- All three derive scopes identically: `receive-pack` and a pin need
+  `ScopeSandboxWrite`, everything else `ScopeSandboxRead`. The proxy drops any
+  `X-Discobox-Git-Cache` or `X-Discobox-Git-Cache-Caller` header a client sent
+  and sets its own: the key from the sandbox's record, and the caller's sandbox
+  id when the principal is a sandbox, which the pool holds to what it sends and
+  what its own sources hold (§7).
 - `/projects/{projectId}/sandboxes/{sandboxId}/http/{port}/{path...}` forwards
   to the pool-agent route
   `/api/project/{projectId}/pool/{poolId}/sandboxes/{sandboxId}/http/{port}/{path...}`.
@@ -256,13 +273,19 @@ sandbox IDs are runtime evidence, not user authorization input.
 
 ## Delivering and Re-delivering Source (`discobox push`)
 
-A push-delivered source's commits arrive over the `git-origins` proxy above:
-create's delivery push (ADR 0001) and every later `discobox push` (ADR 0058) write
-the same bare repository, which the sandbox fetches from as `origin`. Only
-delivery at create involves the control plane's state machine — `awaiting_source`
-plus `CompleteSandboxSourcePush`. A re-push is transport and nothing else: no
-phase, no completion call, and no server-side validation of what was pushed. The
-server stays a byte proxy, as it is for the worktree route.
+A source's commits arrive over the `git-origins` proxy above: create's
+delivery (a pin, then a push of what the pin could not create) and every later
+`discobox push` (ADR 0058) write the same origin on the pool — the source's
+namespace of the pool's cache of its remote
+([ADR 26-10-10-545](../docs/adr/26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md)),
+which the sandbox fetches as its `discobox` remote, or, for a sandbox created
+before that, a bare repository of its own, which it fetches as `origin`. Only
+delivery at create involves the control plane's state machine —
+`CompleteSandboxSourcePush`, and `awaiting_source` when the sandbox is
+provisioned before that report arrives. A re-push is transport and nothing
+else: no phase, no completion call, and no server-side validation of what was
+pushed. The server never runs Git: it stays a byte proxy, as it is for the
+worktree route.
 
 ## Applying Sandbox Commits to a Host (`discobox apply`)
 
