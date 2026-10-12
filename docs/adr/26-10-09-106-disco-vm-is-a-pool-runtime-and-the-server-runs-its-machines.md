@@ -2,15 +2,29 @@
 
 - **Status**: Accepted (supersedes [0144](0144-a-pool-of-host-vm-sandboxes-runs-its-agent-on-the-host.md)
   §2's hypervisor handle in the agent and its helper that serves no API, and
-  narrows §1's "Linux sandboxes keep the existing VM-and-container pools" and
-  §3's reason with it, by extending 0144's Docker-free pool to a Linux machine
-  of a remote driver; supersedes
+  narrows §1's "Linux sandboxes keep the existing VM-and-container pools": a
+  Linux disco-vm sandbox runs on a pool of a remote driver, which is not a host
+  pool; supersedes
   [0145](0145-a-sandbox-declares-its-platform-and-a-non-linux-one-is-a-vm-template.md)
   §2's pool-assembled template, narrows its §1 with an image kind, and narrows
   its §5 for macOS; supersedes [0126](0126-a-sandbox-does-not-share-a-host-or-a-filesystem-with-its-pool.md)'s
   consequence that a provider credential stays in the pool; builds on
   ADR 26-10-09-143, [PR #105](https://github.com/discobox-ai/discobox/pull/105))
 - **Date**: 2026-10-09
+- **Amended**: 2026-10-12, §§1 and 5, the Consequences, one rejected
+  alternative and the Status line (which no longer narrows 0144 §3), before
+  anything shipped against what they said of boxd (#175).
+  As accepted, one Docker-free pool agent served every driver: natively beside
+  the server for `vz`, and in a Linux boxd machine for `boxd`. The owner decided
+  otherwise: a `boxd` pool's machine runs the ordinary Linux pool agent, and the
+  Docker-free agent is for a native macOS or Windows host and nothing else. A
+  boxd machine is a whole Linux machine with systemd and root, which is what
+  the ordinary agent already runs on, so the second composition bought nothing
+  there and made a Linux backend wait on work only a native host needs. §1 now
+  says which agent each driver runs and what the boxd pool machine is; §5 no
+  longer extends 0144 §§3–6 to a boxd pool. Each boxd sandbox is still a
+  machine of its own, driven through §2's seam, and §§2–4 and 6 are as
+  accepted.
 - **Relates to**: [0006](0006-pool-is-the-runtime-host.md),
   [0017](0017-resource-state-is-desired-and-observed-with-no-operations.md),
   [0030](0030-pool-agent-polls-and-pushes-sandbox-agent-status.md),
@@ -87,18 +101,73 @@ The server gains a **`discovm` pool runtime provider**: a
 provider with drivers — `vz`, `hcs` and `boxd`, which are disco-vm's. A pool on
 it is a pool whose sandboxes are disco-vm machines, one per sandbox, named by
 its sandbox ID so a lost create is found by name rather than duplicated. A
-pool still hosts one platform (0145 §1), and its pool agent runs no Docker,
-BuildKit, registry or runc wrapper (0144 §3).
+pool still hosts one platform (0145 §1). No `discovm` pool runs a sandbox as a
+container or a sandbox's build on a pool-shared builder, on any driver: each
+sandbox is a machine of its own.
 
-Where the pool agent runs is the driver's:
+Where the pool agent runs, and which agent it is, is the driver's *(amended
+2026-10-12)*:
 
 - **A local hypervisor (`vz`, later `hcs`)** — the discobox server runs
   natively on that Mac or Windows machine, and the pool agent runs beside it as
   a native host process, staged and supervised by the provider as 0144 §1 has
-  it.
+  it. This is 0144's Docker-free agent, and a native macOS or Windows host is
+  the only place it runs.
 - **A remote one (`boxd`)** — the pool agent runs in a Linux boxd machine the
-  provider creates for the pool, as the same portable, Docker-free agent, and
-  its sandboxes are boxd machines of their own.
+  provider creates for the pool, and its sandboxes are boxd machines of their
+  own. That agent is the **ordinary Linux pool agent**, the one a Docker pool's
+  container runs, not the Docker-free one: the same binary and entrypoint, as
+  root, on the container's state root (`layout.Container()`), with its proxy
+  as a systemd unit.
+
+**The boxd pool machine** *(added 2026-10-12)* differs from a Docker pool's
+container in these ways:
+
+- **Its image is the pool-agent image's boxd twin**, built from the base
+  image's twin as the sandbox images' twins are, with the same agent binary
+  at the same path. A machine boots its own init (26-10-09-143), so the agent
+  is a unit of the machine's systemd rather than PID 1. The child systemd
+  namespace and the PID-1 reaper, which a container's agent has because it is
+  PID 1, have no subject there. Nor does the order a container gets from
+  that: its agent writes the proxy's environment, CA and control key before
+  systemd exists, so in a machine the proxy's unit is ordered after the agent
+  has written them.
+- **Its bootstrap arrives as a file.** A container is started with its
+  bootstrap in its environment; a machine is already running when the
+  provider places one in it. It is the same contract, with one addition: the
+  pool's runtime, which for a container is always Docker and is nowhere said.
+  The agent's unit starts when the file exists, and the agent reads it from
+  there. This is 26-10-09-143 §1's shape, which that ADR decides for a
+  sandbox's agent only; the file's path and form are the pool image's.
+- **It carries nothing a machine sandbox cannot use**: no BuildKit, mediator,
+  pool registry or `discobox-pool-runc`, and it needs no Docker daemon. No
+  sandbox is a container in it and no sandbox's build reaches it. A Docker the
+  guest's base image ships may stay installed, and the twin disables its
+  units.
+- **Its sandbox runtime is the machine runtime**, whose sandboxes are §2's
+  seam instances, in place of the Docker runtime. The bootstrap's runtime says
+  which, and a pool runs one kind of image (§4), so an agent never runs both.
+  What only the Docker runtime needs — preparing BuildKit, image reclamation,
+  the uid-partitioned pool cache — belongs to that runtime and is absent here.
+- **It declares the driver's image kind and capacity, not its machine's.**
+  The image kind it registers with, and repeats on every report, is the one
+  its bootstrap's runtime names (`discovm/boxd`), never the `oci` a container's
+  agent declares: registration comes before the seam, and a pool registered
+  without its kind would be placed as a Docker pool of its platform. Its
+  platform is its own, as a container's agent's is, since its sandboxes are
+  machines of the same driver. Its capacity is the driver's limits, learned
+  through the seam (§§2, 4). ADR 0071's arithmetic — the pool's services,
+  measured in the pool container's own cgroup, plus the sum of its sandboxes'
+  own counters, and a walk of the sandboxes' trees — has no subject where each
+  sandbox is a machine elsewhere; a sandbox's usage is what its own agent
+  reports.
+
+What the `boxd` driver asks of that machine is small: that it is created from
+that image and keeps its disk across stop and start, since the agent's
+identity key and state live on it; that the provider can place the bootstrap
+in it through disco-vm's guest agent; that it can dial the control plane; and
+that it serves one port, the agent's API, at an HTTPS URL (§3). It asks for no
+Docker socket, no nested virtualization and no credential of boxd's (§2).
 
 ### 2. The server runs the machines; the pool agent decides
 
@@ -211,28 +280,31 @@ From **0144**:
 - **§1 stands** for a local driver: host roots (#51), git on a host (#60) and
   staging and supervising the agent (#64) are still needed. It is **narrowed**
   where it says Linux sandboxes keep the existing VM-and-container pools: a
-  Linux sandbox built as a disco-vm image runs on a `discovm` pool, whose agent
-  is the same Docker-free composition in a Linux machine of the driver's.
+  Linux sandbox built as a disco-vm image runs on a `discovm` pool of a remote
+  driver. That pool is not a host pool: its agent is the ordinary Linux pool
+  agent in a machine of the driver's (§1), and nothing of 0144 is extended to
+  it *(amended 2026-10-12)*.
 - **§2's hypervisor handle in the agent, and its helper that serves no API,
   are superseded** by §2 above. Its authority argument stands. On Windows the
   hcs engine needs the elevation 0144 deferred; that stays deferred with
   Windows.
-- **§§3–6 stand** for a local pool: no Docker services, nothing needing a
+- **§§3–6 stand, for a local pool**: no Docker services, nothing needing a
   network interface, capacity that describes the machine, and the trust
-  posture it states. For a `boxd` pool:
-  - **§3's absences hold**, and its reason changes: a `discovm` pool has no
-    pool-shared builder, registry or `discobox-pool-runc` because its
-    sandboxes are machines of their own. A Linux disco-vm sandbox image that
-    carries Docker runs it as the machine's own, with no pool builder behind
-    it, and its manifest declares the pool-shared build path absent. The
+  posture it states. They say nothing of a `boxd` pool, which §1 above governs
+  instead *(amended 2026-10-12)*:
+  - **It has no pool-shared builder, registry or `discobox-pool-runc`**, and
+    the reason is its own, not 0144 §3's: its sandboxes are machines of their
+    own. A Linux disco-vm sandbox image that carries Docker runs it as the
+    machine's own, with no pool builder behind it, and its manifest declares
+    the pool-shared build path absent. The
     sandbox's own `discobox-runc` and `discobox-docker` (ADR 0020) stay: they
     need no pool service, and they are what makes nested containers trust the
     pool proxy that is their only way out.
-  - **§5's capacity** is the driver's limits (§4).
-  - **§6's posture** is the pool machine's: it is the pool's alone, the agent
-    runs there as a dedicated unprivileged user — not root, so `layout.Host`
-    serves it as it does a Mac's — and the MITM CA is trusted only inside
-    sandboxes.
+  - **Its capacity** is the driver's limits (§4).
+  - **Its posture** is a pool container's, in a machine that is the pool's
+    alone: the agent runs there as root, as it does in its container, the MITM
+    CA is trusted only inside sandboxes, and the boxd key never reaches it
+    (§2).
 
 From **0145**:
 
@@ -280,6 +352,14 @@ Nothing here changes how a container boots or how a `dockerworker` pool runs.
   key able to operate every machine in the org, on a machine of that org; and
   there would be an engine, an image store and a set of shims per pool rather
   than per server.
+- **The Docker-free agent in the boxd machine too**, as this ADR was first
+  accepted *(added 2026-10-12)*. It gives every `discovm` pool one agent
+  shape. But that composition exists for a host that is the user's own
+  machine, where there is no pool container to be PID 1 in and 0144 §6 forbids
+  root. A boxd machine is the pool's alone and boots systemd, so an
+  unprivileged agent without systemd units answers no constraint of the
+  machine's, and it ties a Linux backend to work only a native macOS or
+  Windows host needs.
 - **The server owns machine sandboxes**, deciding and reporting their state.
   0144 rejected it for splitting the runtime authority, and that still holds:
   the provider here performs the pool agent's requests and reports nothing to
@@ -312,9 +392,12 @@ Nothing here changes how a container boots or how a `dockerworker` pool runs.
   drivers, the machine seam it serves to a pool, and the shim subcommand in
   the server binary. The server module imports `github.com/discobox-ai/vm` by
   commit.
-- pool-agent gains a Docker-free composition (0144 §1's) that runs as a host
-  process on darwin and as a process in a Linux boxd machine, and a machine
-  runtime whose sandboxes are the seam's instances.
+- pool-agent gains a machine runtime whose sandboxes are the seam's
+  instances, and two agents run it: the ordinary Linux agent in a boxd pool's
+  machine, in place of its Docker runtime, and a Docker-free composition
+  (0144 §1's) that runs as a native host process, on darwin and later on
+  Windows, and nowhere else. The pool-agent image gains a boxd twin *(amended
+  2026-10-12)*.
 - A `boxd` pool needs a control plane its machines can reach, and puts the
   pool agent's API on a public URL whose unauthenticated surface is audited.
 - A harness's image and a pool declare an image kind, and placement matches
