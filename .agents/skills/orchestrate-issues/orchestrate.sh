@@ -3,10 +3,12 @@
 #
 # State lives in $ORCH_DIR (default ~/.local/state/orchestrate), which survives a
 # wiped scratchpad: workers.tsv ("<issue>\t<discobox-id>\t<pr>", pr may be "-"),
-# pool.tsv (triage mode: "<discobox-id>\t<issue>\t<triaging|done>"), verdicts.log,
+# triage.tsv (triage mode: "<discobox-id>\t<issue>\t<triaging|done|retired>"), verdicts.log,
 # tried.txt (request IDs already answered), rebased.txt, retired.txt, idle-seen.txt,
 # idle-reported.txt, github.last, watch-issues.txt, closed-issues.txt, approvals.log, kicks.log.
-# A box is in one of workers.tsv (delivering) and pool.tsv (triaging) at a time.
+# A box belongs to one issue for its whole life: it is in triage.tsv while it triages that issue
+# and in workers.tsv once it delivers it, and it is never handed another. ORCH_MAX (default 4)
+# caps how many of this run's boxes are up at once, triaging and delivering together.
 #
 # Use IDs are looked up by their descriptions on every call, so a renewed grant
 # is picked up without editing anything. discobox-access always gets
@@ -19,10 +21,13 @@ export -n out
 
 ORCH_DIR=${ORCH_DIR:-$HOME/.local/state/orchestrate}
 REPO=${ORCH_REPO:-discobox-ai/discobox}
+MAX=${ORCH_MAX:-4}
 mkdir -p "$ORCH_DIR"
 W=$ORCH_DIR/workers.tsv
-P=$ORCH_DIR/pool.tsv
-touch "$W" "$P" "$ORCH_DIR/tried.txt" "$ORCH_DIR/rebased.txt" "$ORCH_DIR/retired.txt"
+T=$ORCH_DIR/triage.tsv
+# A run started before triage.tsv had its name kept the same rows in pool.tsv.
+[ -f "$ORCH_DIR/pool.tsv" ] && [ ! -f "$T" ] && mv "$ORCH_DIR/pool.tsv" "$T"
+touch "$W" "$T" "$ORCH_DIR/tried.txt" "$ORCH_DIR/rebased.txt" "$ORCH_DIR/retired.txt"
 
 # A box's harness says whether it is working in the title of its primary terminal (Claude Code leads
 # it with "✳" when idle). That is not .displayName: a box that has been given a name is listed by the
@@ -50,10 +55,24 @@ gh_()  { local u; u=$(use github 'pulls \(with query parameters\), repos/[^ ]+/p
 
 workers() { grep -v '^\s*$' "$W" || true; }
 id_of()   { awk -v n="$1" '$1==n{print $2}' "$W"; }
-# boxes: every box of this run as "<label>\t<discobox-id>\t<pr>" — "#<issue>" delivering, "t#<issue>" triaging.
-boxes()   { workers | awk -F'\t' '{print "#"$1"\t"$2"\t"$3}'; grep -v '^\s*$' "$P" | awk -F'\t' '{print "t#"$2"\t"$1"\t-"}'; }
-# pool_set <discobox-id> <issue> <state>: one pool row per box.
-pool_set() { { awk -F'\t' -v i="$1" '$1!=i' "$P"; printf '%s\t%s\t%s\n' "$1" "$2" "$3"; } >"$P.tmp" && mv "$P.tmp" "$P"; }
+# boxes: every box of this run as "<label>\t<discobox-id>\t<pr>" — "#<issue>" delivering, "t#<issue>" triaging
+# (a retired triage box is left out: it is stopped for good and nothing watches it).
+boxes()   { workers | awk -F'\t' '{print "#"$1"\t"$2"\t"$3}'; awk -F'\t' '$1!="" && $3!="retired"{print "t#"$2"\t"$1"\t-"}' "$T"; }
+# triage_set <discobox-id> <issue> <state>: one triage row per box.
+triage_set() { { awk -F'\t' -v i="$1" '$1!=i' "$T"; printf '%s\t%s\t%s\n' "$1" "$2" "$3"; } >"$T.tmp" && mv "$T.tmp" "$T"; }
+# up_count: how many of this run's boxes are not stopped, triaging and delivering alike. This is
+# what ORCH_MAX caps: every box that is up builds its own images on the one host disk.
+up_count() {
+	local j
+	j=$(box ls -o json 2>/dev/null) || { echo "$j"; return 1; }
+	echo "$j" | jq -r '(.sandboxes // .)[] | select(.runtime.runtimeState != "stopped") | .id' | grep -cFxf <(boxes | cut -f2) || true
+}
+
+cmd_slots() { # slots: how many more boxes may be started under ORCH_MAX
+	local up
+	up=$(up_count) || { echo "$up"; return 1; }
+	echo "$((MAX - up)) free of $MAX ($up up)"
+}
 
 cmd_status() {
 	local j
@@ -103,7 +122,7 @@ running() {
 # "discobox tag" writes the tag through the server, which the sandbox role allows only on a box this
 # lead created (ADR 26-10-08-447). The lead cannot delete a box. A stopped worker cannot move its own
 # state tag (deliver-issue §7), so retire drops ready/blocked and, for a merged PR, sets merged.
-cmd_retire() { # retire <issue>|<discobox-id> [merged]: a pool box has no issue in workers.tsv, so take its ID
+cmd_retire() { # retire <issue>|<discobox-id> [merged]: a triage box has no issue in workers.tsv, so take its ID
 	local n=$1 id u out tags=(to-delete)
 	[ "${2:-}" = merged ] && tags+=(merged)
 	case "$n" in sbx_*) id=$n ;; *) id=$(id_of "$n") ;; esac
@@ -113,6 +132,7 @@ cmd_retire() { # retire <issue>|<discobox-id> [merged]: a pool box has no issue 
 	out=$(discobox-access run --use "$u" -- discobox tag "$id" "${tags[@]}" --rm ready --rm blocked </dev/null 2>&1) ||
 		{ echo "#$n $id not tagged: $(echo "$out" | tail -1)"; return 1; }
 	echo "$id" >>"$ORCH_DIR/retired.txt"
+	awk -F'\t' -v OFS='\t' -v i="$id" '$1==i{$3="retired"} 1' "$T" >"$T.tmp" && mv "$T.tmp" "$T"
 	cmd_power stop "$id" >/dev/null
 	echo "#$n $id tagged ${tags[*]} and stopped"
 }
@@ -128,7 +148,7 @@ cmd_approve() { # approve pending com.github.api use requests from workers, once
 		grep -qx "$rid" "$ORCH_DIR/tried.txt" && continue
 		echo "$rid" >>"$ORCH_DIR/tried.txt"
 		local n; n=$(awk -v s="$sid" '$2==s{print $1}' "$W")
-		[ -z "$n" ] && n=$(awk -v s="$sid" '$1==s{print "t"$2}' "$P")
+		[ -z "$n" ] && n=$(awk -v s="$sid" '$1==s{print "t"$2}' "$T")
 		if [ -n "$n" ] && [ "$purpose" = use ] && [ "$wk" = com.github.api ]; then
 			local res; res=$(discobox-access run --use "$ua" -- discobox secret request approve "$rid" </dev/null 2>&1 | tail -3 | head -1 | cut -c1-300)
 			echo "$(date -u +%FT%H:%M) approve $rid for #$n: $res" >>"$ORCH_DIR/approvals.log"
@@ -186,11 +206,10 @@ cmd_after_merge() { # wait for GitHub to recompute, retire merged PRs' workers, 
 	local s now last
 	for _ in $(seq 1 10); do s=$(cmd_prs); echo "$s" | grep ' open ' | grep -q ' unknown$' || break; sleep 20; done
 	echo "$s"
-	# A merged PR's worker is done: tag it for the human to delete and stop it, once. In triage
-	# mode (a pool exists) it may rejoin the pool instead (SKILL.md §6), so it is only named.
+	# A merged PR's worker is done: tag it for the human to delete and stop it, once. Its slot is
+	# free for a new box; the box itself is never given another issue.
 	echo "$s" | awk '$3=="closed" && $4=="true"{print $2}' | while read -r n; do
 		grep -qx "$(id_of "$n")" "$ORCH_DIR/retired.txt" && continue
-		if grep -q . "$P"; then echo "MERGED #$n $(id_of "$n"): triage it the next issue, or retire $n merged"; continue; fi
 		cmd_retire "$n" merged
 	done
 	now=$(date +%s)
@@ -211,51 +230,58 @@ cmd_untriaged() { # untriaged: open issues with no triaged or platform/* label a
 			| select([.labels[].name] | any(. == "triaged" or startswith("platform/")) | not)
 			| "\(.number)\t\(.title)"')$'\n'
 	done
-	printf '%s' "$all" | awk -F'\t' 'FILENAME==ARGV[1]{held[$1]=1; next} $1!="" && !held[$1]' <({ cut -f2 "$P"; cut -f1 "$W"; }) -
+	printf '%s' "$all" | awk -F'\t' 'FILENAME==ARGV[1]{held[$1]=1; next} $1!="" && !held[$1]' <({ cut -f2 "$T"; cut -f1 "$W"; }) -
 }
 
 verdict() { cmd_screen "$1" 40 | grep -o "triaged #$2: deliver=.*" | tail -1; }
 
-cmd_verdicts() { # print TRIAGED for each triaging pool box whose screen now ends on its verdict line, and mark it done
+cmd_verdicts() { # print TRIAGED for each triaging box whose screen now ends on its verdict line, and mark it done
 	local id n st v
 	while IFS=$'\t' read -r id n st; do
 		[ "$st" = triaging ] || continue
 		v=$(verdict "$id" "$n")
 		[ -z "$v" ] && continue
-		pool_set "$id" "$n" "done"
+		triage_set "$id" "$n" "done"
 		printf '%s\t%s\t%s\n' "$(date -u +%FT%H:%M)" "$id" "$v" >>"$ORCH_DIR/verdicts.log"
 		echo "TRIAGED $id $v"
-	done < <(grep -v '^\s*$' "$P")
+	done < <(grep -v '^\s*$' "$T")
 }
 
-cmd_pool() { # one line per pool box: <discobox-id> <issue> <state> <its last verdict>
+cmd_triages() { # one line per triage box: <discobox-id> <issue> <state> <its verdict>
 	local id n st
 	while IFS=$'\t' read -r id n st; do
 		echo "$id #$n $st $(grep -F "$id"$'\t'"triaged #$n:" "$ORCH_DIR/verdicts.log" 2>/dev/null | tail -1 | cut -f3)"
-	done < <(grep -v '^\s*$' "$P")
+	done < <(grep -v '^\s*$' "$T")
 }
 
-cmd_triage() { # triage <discobox-id> <issue>: clear an idle box's context and hand it the next issue (a merged worker rejoins the pool)
-	local id=$1 n=$2
-	cmd_power start "$id" >/dev/null
-	running "$id" || { echo "$id did not come back to a prompt; #$n not handed over"; return 1; }
-	cmd_say "$id" /clear Enter >/dev/null
-	sleep 5
-	running "$id" 120 || { echo "$id did not come back after /clear; #$n not handed over"; return 1; }
-	awk -F'\t' -v i="$id" '$2!=i' "$W" >"$W.tmp" && mv "$W.tmp" "$W"
-	pool_set "$id" "$n" triaging
-	cmd_say "$id" "Triage issue #$n in discobox-ai/discobox." Enter
+cmd_triage() { # triage <issue>: launch a new box for this one issue, when a slot is free under ORCH_MAX
+	local n=$1 u up out id
+	if awk -F'\t' -v n="$n" '$2==n{f=1} END{exit !f}' "$T" || [ -n "$(id_of "$n")" ]; then echo "#$n already has a box"; return 1; fi
+	up=$(up_count) || { echo "$up"; return 1; }
+	[ "$up" -lt "$MAX" ] || { echo "no free slot: $up of $MAX boxes are up; #$n not launched"; return 1; }
+	u=$(use ai.discobox.sandbox '^discobox new -d'); need "$u" "discobox new" || return 1
+	out=$(discobox-access run --use "$u" -- discobox new -d -C "https://github.com/$REPO@main" -p "Triage issue #$n in $REPO." </dev/null 2>&1)
+	id=$(echo "$out" | grep -o 'sbx_[a-z0-9]*' | head -1)
+	[ -n "$id" ] || { echo "#$n not launched: $(echo "$out" | tail -1)"; return 1; }
+	triage_set "$id" "$n" triaging
+	echo "#$n $id launched"
 }
 
-cmd_deliver() { # deliver <issue>: the pool box that triaged it goes on to deliver it, keeping its context
-	local n=$1 id
-	id=$(awk -F'\t' -v n="$n" '$2==n{print $1}' "$P" | tail -1)
-	[ -n "$id" ] || { echo "no pool box holds #$n"; return 1; }
+cmd_deliver() { # deliver <issue>: the box that triaged it goes on to deliver it, keeping its context
+	local n=$1 id st up
+	id=$(awk -F'\t' -v n="$n" '$2==n && $3!="retired"{print $1}' "$T" | tail -1)
+	[ -n "$id" ] || { echo "no triage box holds #$n"; return 1; }
+	# A box stopped while its verdict waited on the user takes a slot again when it starts.
+	st=$(box get "$id" -o json 2>/dev/null | jq -r '.runtime.runtimeState // empty')
+	if [ "$st" = stopped ]; then
+		up=$(up_count) || { echo "$up"; return 1; }
+		[ "$up" -lt "$MAX" ] || { echo "no free slot: $up of $MAX boxes are up; #$n not handed over"; return 1; }
+	fi
 	cmd_power start "$id" >/dev/null
 	running "$id" || { echo "$id did not come back to a prompt; #$n not handed over"; return 1; }
-	awk -F'\t' -v i="$id" '$1!=i' "$P" >"$P.tmp" && mv "$P.tmp" "$P"
+	awk -F'\t' -v i="$id" '$1!=i' "$T" >"$T.tmp" && mv "$T.tmp" "$T"
 	printf '%s\t%s\t-\n' "$n" "$id" >>"$W"
-	cmd_say "$id" "Deliver issue #$n in discobox-ai/discobox." Enter
+	cmd_say "$id" "Deliver issue #$n in $REPO." Enter
 }
 
 # idle: print "IDLE <label> <discobox-id>" for each box (labelled as boxes() does) whose harness has been idle (Claude Code titles
@@ -396,7 +422,7 @@ cmd_watch() { # watch [minutes]: approve, kick, and exit on an issue or PR chang
 }
 
 case "${1:-}" in
-status | screen | say | power | retire | approve | kick | idle | github | prs | rebase | watch | untriaged | pool | triage | deliver) c=$1; shift; "cmd_$c" "$@" ;;
+status | screen | say | power | retire | approve | kick | idle | github | prs | rebase | watch | slots | untriaged | triages | triage | deliver) c=$1; shift; "cmd_$c" "$@" ;;
 after-merge) shift; cmd_after_merge "$@" ;;
-*) sed -n '2,14p' "$0"; echo "usage: $0 status|screen|say|power|retire|approve|kick|idle|github|prs|rebase|after-merge|watch|untriaged|pool|triage|deliver ..."; exit 2 ;;
+*) sed -n '2,16p' "$0"; echo "usage: $0 status|screen|say|power|retire|approve|kick|idle|github|prs|rebase|after-merge|watch|slots|untriaged|triages|triage|deliver ..."; exit 2 ;;
 esac
