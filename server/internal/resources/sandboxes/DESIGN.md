@@ -135,7 +135,7 @@ that mark.
 | Use | Routes | Stopped sandbox | Not usable yet | Failed, no container |
 | --- | --- | --- | --- | --- |
 | action | exec attach, create, input, start, delete; service start, stop, restart; HTTP, tcp and udp; ssh; the worktree's git; the judge; harness configure; meta write | the pool is asked to start it before the lease is handed out | waited for | repaired, once |
-| read | exec list, get, logs, events, resources; service list, get, logs; tools; a source's origin | started by the pool agent when the request arrives | answered at once | answered at once |
+| read | exec list, get, logs, events, resources; service list, get, logs; tools; a source's origin, and what the pool's cache holds of it | started by the pool agent when the request arrives | answered at once | answered at once |
 | observe | terminal screen, exec wait, exec-events, harness-hooks | refused by the pool agent | answered at once | answered at once |
 
 `AcquireSandboxHTTPClientForServer` is the same acquire for a call the server
