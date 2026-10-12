@@ -2209,8 +2209,15 @@ push nobody is making. An attach runs the same delivery with no overrides
 attach wait gives up after a stall budget, and nothing it watches moves while
 the client pushes.
 
-It delivers only when the delivery is owed and this machine created the
-discobox (`deliverableHere`). Owed means parked with no `runtime.sourceDeliveredAt`.
+It delivers only when the delivery is owed and is this machine's to make
+(`deliverableHere`): this machine created the discobox, or every source it
+waits for is a remote, which is on no machine and any client that can read it
+delivers (ADR 26-10-10-545 §1). A discobox that a discobox created is never
+delivered by an attach: its origin is the creating sandbox's own claim, and
+what a person's machine delivers — from their directories, with their Git
+credentials — that sandbox could then read. It delivers its own, held to its
+own reach by the pool (§7); an explicit `discobox push` naming the discobox
+remains the person's to make. Owed means parked with no `runtime.sourceDeliveredAt`.
 A discobox stays parked after its delivery is reported, until the reconciler
 acts on the report, which is exactly what `new --raw` attaches to. The same
 field ends `DeliverSource`'s wait early when somebody else's delivery was

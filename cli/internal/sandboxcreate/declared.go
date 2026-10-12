@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/discobox-ai/discobox/sourcecache"
 	"github.com/discobox-ai/x/gitutil"
 )
 
@@ -153,8 +154,17 @@ func parseDeclaredSources(data []byte, path string) (map[string]string, error) {
 		// and a relative path here would otherwise be resolved against whatever
 		// directory the caller happened to run from, quietly bringing in some
 		// other repository entirely.
-		if source, _, _ := splitRunSourceRef(url); !IsRemoteGitSource(source) {
+		source, _, _ := splitRunSourceRef(url)
+		if !IsRemoteGitSource(source) {
 			return nil, fmt.Errorf("%s: declared source %q is %q, which is not a Git URL; the local checkout beside the source is found by name, so only the URL to fall back to belongs here",
+				path, name, url)
+		}
+		// Nor a URL that names a path on this machine. A declared source is
+		// fetched by this client and delivered into the discobox, and the
+		// file naming it is repository content: it must not be able to name
+		// a repository on the disk of whoever happens to run the create.
+		if sourcecache.NormalizeRemote(ExpandGitHubShorthand(source)) == "" {
+			return nil, fmt.Errorf("%s: declared source %q is %q, which names a path on this machine and not a repository on a network",
 				path, name, url)
 		}
 	}

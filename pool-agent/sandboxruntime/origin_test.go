@@ -3,12 +3,15 @@ package sandboxruntime
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	workerclient "github.com/discobox-ai/discobox/pool-agent/api/gen"
 	workerapimodel "github.com/discobox-ai/discobox/pool-agent/api/model"
+	"github.com/discobox-ai/discobox/pool-agent/proxyagent"
 	"github.com/discobox-ai/discobox/sandboxconfig"
 )
 
@@ -205,5 +208,44 @@ func TestSandboxDocumentCarriesEachSourcesCheckout(t *testing.T) {
 	}
 	if hooks := bySlug["hooks"]; hooks.Workspace != nil || hooks.RefName != "" {
 		t.Fatalf("a clean source with no checkout = %+v, want neither", hooks)
+	}
+}
+
+// A sandbox whose source this pool once served live from the developer's Git
+// directory has no bare origin until its container is next rebuilt, which may
+// be never. It gets one the first time its origin is asked for, empty until a
+// client pushes — and only for a source the pool told the sandbox to fetch
+// from it (ADR 26-10-10-545 §8).
+func TestAFormerlyLiveOriginGetsItsRepositoryWhenFirstAsked(t *testing.T) {
+	requirePOSIXHost(t)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	r := originTestRuntime(t)
+	user := currentUser()
+	env := map[string]string{"DISCOBOX_USER_UID": strconv.FormatInt(*user.UID, 10), "DISCOBOX_USER_GID": strconv.FormatInt(*user.GID, 10)}
+	if err := r.recordRuntimeConfig(deliveryTestSandboxID, func(doc *sandboxconfig.RuntimeConfig) {
+		doc.Sources = []sandboxconfig.RuntimeSource{
+			{Slug: "primary", Target: "/workspace/app", OriginURL: proxyagent.OriginURL(r.projectID, r.poolID, deliveryTestSandboxID, "primary")},
+			{Slug: "remote", Target: "/workspace/remote", OriginURL: "https://github.com/example/remote.git"},
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	location, err := r.originLocation(t.Context(), deliveryTestSandboxID, "primary", env)
+	if err != nil {
+		t.Fatalf("a formerly live origin: %v", err)
+	}
+	if location.Path != r.sandboxOriginPath(deliveryTestSandboxID, "primary") || location.FetchOnly || location.Namespace != "" {
+		t.Fatalf("origin = %+v, want the sandbox's own bare repository", location)
+	}
+	if _, err := os.Stat(filepath.Join(location.Path, "HEAD")); err != nil {
+		t.Fatalf("the repository was not made: %v", err)
+	}
+	for _, slug := range []string{"remote", "absent"} {
+		if _, err := r.originLocation(t.Context(), deliveryTestSandboxID, slug, env); !errors.Is(err, ErrRepositoryNotFound) {
+			t.Fatalf("origin of %q = %v, want ErrRepositoryNotFound", slug, err)
+		}
 	}
 }

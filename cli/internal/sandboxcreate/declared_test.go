@@ -50,10 +50,15 @@ func TestBuildPromptSandboxBodyPrefersACheckoutOfADeclaredSource(t *testing.T) {
 func TestBuildPromptSandboxBodyClonesADeclaredSourceToTheSamePath(t *testing.T) {
 	workspace := testWorkspace(t)
 	primary := newRunSourceTestRepoIn(t, workspace, "app")
-	// A file:// URL is a remote as far as source resolution is concerned — it
-	// is cloned by the sandbox rather than taken from disk here — without a
-	// test needing the network.
-	remote := "file://" + filepath.ToSlash(newRunSourceTestRepoIn(t, t.TempDir(), "foo"))
+	// A repository on a network as far as the declaration is concerned,
+	// which this machine's Git is told to find on disk, so the test needs no
+	// network. A file:// URL itself is refused: a declaration is repository
+	// content, and may not name a path on whoever's machine runs the create.
+	const remote = "https://git.invalid/acme/foo"
+	served := "file://" + filepath.ToSlash(newRunSourceTestRepoIn(t, t.TempDir(), "foo"))
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url."+served+".insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", remote)
 	declareSources(t, primary, map[string]string{"foo": remote})
 
 	var reported []DeclaredSource
@@ -363,6 +368,12 @@ func TestARemotePrimarySourceDeclaresItsSources(t *testing.T) {
 	arg, report := resolveDeclaredSourceArg(context.Background(), "", "lib", got["lib"])
 	if arg != got["lib"] || report.Local || report.Checkout != "" {
 		t.Fatalf("a remote primary's declared source resolved to %q (%+v), want its URL and no local checkout", arg, report)
+	}
+
+	// A declaration is repository content, fetched by this client and
+	// delivered into the discobox: it may not name this machine's disk.
+	if _, err := parseDeclaredSources([]byte(`{"lib": "file:///home/me/private"}`), "sources.json"); err == nil || !strings.Contains(err.Error(), "a path on this machine") {
+		t.Fatalf("a declared file:// URL was accepted: %v", err)
 	}
 
 	// A malformed file is an error there as it is on disk.

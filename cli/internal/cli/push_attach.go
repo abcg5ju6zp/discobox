@@ -31,15 +31,35 @@ import (
 // delivery returns. A discobox created elsewhere is left to its own machine,
 // which may be delivering it right now and is the only one its recorded
 // directories describe.
+//
+// Two things changed that with ADR 26-10-10-545. A source that is a remote
+// is on no machine, so a discobox waiting only for remotes is delivered by
+// whichever client attaches (§1). And a discobox that a discobox created is
+// never delivered by an attach: its origin is the creating sandbox's own
+// claim, a delivery from here is made with this person's reach — their
+// directories, their Git credentials, everything a project member may pin —
+// and what lands in it can be read by the sandbox that created it. That
+// sandbox delivers it, held to what it can reach itself (§7).
 func deliverableHere(sb apimodel.Sandbox, hostID string) bool {
 	if hostID == "" || !sandboxAwaitingSource(sb) || sb.Runtime.SourceDeliveredAt.IsSet() {
 		return false
 	}
-	origin, ok := sb.Origin.Get()
-	if !ok || origin.HostId != hostID {
+	if sb.CreatedBySandboxId.Or("") != "" {
 		return false
 	}
-	return len(sandboxcreate.PendingSourcePushes(&sb)) > 0
+	pending := sandboxcreate.PendingSourcePushes(&sb)
+	if len(pending) == 0 {
+		return false
+	}
+	remotesOnly := true
+	for _, source := range pending {
+		remotesOnly = remotesOnly && source.Remote != ""
+	}
+	if remotesOnly {
+		return true
+	}
+	origin, ok := sb.Origin.Get()
+	return ok && origin.HostId == hostID
 }
 
 // delivery is one delivery to a parked discobox in flight: done closes when it

@@ -478,12 +478,21 @@ func (s *Store) Delivered(ctx context.Context, path, sandboxID, slug string, mem
 	if !member {
 		return nil
 	}
+	return recordRemote(ctx, path, namespace)
+}
+
+// recordRemote makes the cache's record of its remote what namespace was
+// just delivered: the remote's branches exactly — one the remote no longer
+// has is dropped, which is also what lets a branch be replaced by branches
+// beneath its name — and every tag delivered, added to those it has.
+func recordRemote(ctx context.Context, path, namespace string) error {
 	prefix := "refs/namespaces/" + namespace + "/"
 	out, err := git(ctx, path, nil, nil, "for-each-ref", "--format=%(objectname) %(refname)",
 		prefix+"refs/remotes/origin/", prefix+"refs/tags/")
 	if err != nil {
 		return fmt.Errorf("read delivered remote refs: %w", err)
 	}
+	heads := map[string]string{}
 	var updates bytes.Buffer
 	for _, line := range strings.Split(out, "\n") {
 		object, ref, ok := strings.Cut(line, " ")
@@ -492,9 +501,33 @@ func (s *Store) Delivered(ctx context.Context, path, sandboxID, slug string, mem
 		}
 		ref = strings.TrimPrefix(ref, prefix)
 		if branch, ok := strings.CutPrefix(ref, "refs/remotes/origin/"); ok && branch != "HEAD" {
-			fmt.Fprintf(&updates, "update %s%s %s\n", remoteHeads, branch, object)
+			heads[remoteHeads+branch] = object
 		} else if tag, ok := strings.CutPrefix(ref, "refs/tags/"); ok {
 			fmt.Fprintf(&updates, "update %s%s %s\n", remoteTags, tag, object)
+		}
+	}
+	if len(heads) > 0 {
+		// A delivery that names no branch of the remote says nothing about
+		// them: a source with no remote, or a checkout that never fetched.
+		current, err := git(ctx, path, nil, nil, "for-each-ref", "--format=%(refname)", remoteHeads)
+		if err != nil {
+			return fmt.Errorf("read recorded remote refs: %w", err)
+		}
+		var deletes bytes.Buffer
+		for _, ref := range strings.Fields(current) {
+			if _, ok := heads[ref]; !ok {
+				fmt.Fprintf(&deletes, "delete %s\n", ref)
+			}
+		}
+		// Its own transaction, first: a ref cannot be created beneath the
+		// name of one that still exists.
+		if deletes.Len() > 0 {
+			if _, err := git(ctx, path, deletes.Bytes(), nil, "update-ref", "--stdin"); err != nil {
+				return fmt.Errorf("drop remote refs the remote no longer has: %w", err)
+			}
+		}
+		for ref, object := range heads {
+			fmt.Fprintf(&updates, "update %s %s\n", ref, object)
 		}
 	}
 	if updates.Len() == 0 {
@@ -507,17 +540,20 @@ func (s *Store) Delivered(ctx context.Context, path, sandboxID, slug string, mem
 }
 
 // HasBranches reports whether a source's namespace holds a branch, which is
-// what a sandbox starts from: a delivery has landed.
-func (s *Store) HasBranches(ctx context.Context, path, sandboxID, slug string) bool {
-	return firstBranch(ctx, path, Namespace(sandboxID, slug)) != ""
+// what a sandbox starts from: a delivery has landed. A cache that cannot be
+// read is an error, never "not yet": the caller would otherwise wait on a
+// source that has arrived.
+func (s *Store) HasBranches(ctx context.Context, path, sandboxID, slug string) (bool, error) {
+	branch, err := firstBranch(ctx, path, Namespace(sandboxID, slug))
+	return branch != "", err
 }
 
-func firstBranch(ctx context.Context, path, namespace string) string {
+func firstBranch(ctx context.Context, path, namespace string) (string, error) {
 	out, err := git(ctx, path, nil, nil, "for-each-ref", "--count=1", "--format=%(refname)", namespaceRef(namespace, "refs/heads/"))
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("list the branches of git cache namespace %s: %w", namespace, err)
 	}
-	return out
+	return out, nil
 }
 
 // EnsureHead points a namespace's HEAD at branch when it holds it, and
@@ -537,11 +573,11 @@ func (s *Store) EnsureHead(ctx context.Context, path, sandboxID, slug, branch st
 	if resolve(ctx, path, head) != "" {
 		return nil
 	}
-	target := firstBranch(ctx, path, namespace)
-	if target == "" {
-		return nil
+	target, err := firstBranch(ctx, path, namespace)
+	if err != nil || target == "" {
+		return err
 	}
-	_, err := git(ctx, path, nil, nil, "symbolic-ref", head, target)
+	_, err = git(ctx, path, nil, nil, "symbolic-ref", head, target)
 	return err
 }
 

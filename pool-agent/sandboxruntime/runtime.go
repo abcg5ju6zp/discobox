@@ -1719,18 +1719,15 @@ func (r *DockerSandboxRuntime) WatchSandboxVolumes(ctx context.Context, logger *
 	}
 	ticker := time.NewTicker(sandboxVolumeReapInterval)
 	defer ticker.Stop()
-	// The first sweep waits a full interval: a pool agent that restarts often
-	// must not repack every cache each time it does.
-	lastGitCacheSweep := time.Now()
 	for {
 		reapUnheldSandboxVolumes(ctx, r.sandboxesRoot(), held, sandboxVolumeRetention, time.Now(), logger)
-		if time.Since(lastGitCacheSweep) >= gitCacheSweepInterval {
-			lastGitCacheSweep = time.Now()
-			r.gitCache.Sweep(ctx, gitcache.Held(held), gitcache.SweepOptions{
-				NamespaceRetention: sandboxVolumeRetention,
-				CacheRetention:     gitCacheRetention,
-			}, time.Now(), logger)
-		}
+		// When the last sweep ran is the store's to remember, on disk: a pool
+		// agent that restarts often neither repacks every cache each time it
+		// does nor goes without ever collecting one.
+		r.gitCache.SweepIfDue(ctx, gitCacheSweepInterval, gitcache.Held(held), gitcache.SweepOptions{
+			NamespaceRetention: sandboxVolumeRetention,
+			CacheRetention:     gitCacheRetention,
+		}, time.Now(), logger)
 		select {
 		case <-ctx.Done():
 			return
