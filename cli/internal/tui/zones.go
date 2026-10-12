@@ -53,7 +53,8 @@ const (
 	hitOptionRow
 	hitOptionCycle
 
-	// hitDialogItem is one action of the menu a dialog is showing;
+	// hitDialogItem is one action of the menu a dialog is showing, or with
+	// idx -1 the row of a windowed menu that says there are more;
 	// hitFormRow is one row of a card being filled in.
 	hitDialogItem
 	hitFormRow

@@ -593,7 +593,8 @@ func TestAMenuLongerThanTheWindowFollowsItsCursor(t *testing.T) {
 	lines := strings.Split(view(), "\n")
 	marks := 0
 	for _, mark := range z.marks {
-		if mark.what.kind != hitDialogItem {
+		// idx -1 is the menu's summary row, which is no action.
+		if mark.what.kind != hitDialogItem || mark.what.idx < 0 {
 			continue
 		}
 		marks++
@@ -603,6 +604,33 @@ func TestAMenuLongerThanTheWindowFollowsItsCursor(t *testing.T) {
 	}
 	if marks == 0 {
 		t.Error("no menu row is marked")
+	}
+}
+
+// The row under a windowed menu that says there are more belongs to the menu:
+// the wheel over it walks the menu rather than the body above, and a press on
+// it runs nothing.
+func TestTheWheelOverAMenusSummaryRowWalksTheMenu(t *testing.T) {
+	t.Parallel()
+	m := newTestModel(t, newFakeSource())
+	var items []action
+	for i := range 40 {
+		items = append(items, action{key: "item-" + itoa(i), label: "secret " + itoa(i), enabled: true})
+	}
+	ran := ""
+	m.dialog = actionsDialog("Title", longBody(), items, func(key string) tea.Cmd { ran = key; return nil })
+	x, y := at(t, m, "of 40")
+	offset := m.dialog.offset
+	send(t, m, tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown})
+	if m.dialog.cursor == 0 {
+		t.Error("the wheel over the summary row did not move the menu's cursor")
+	}
+	if m.dialog.offset != offset {
+		t.Error("the wheel over the summary row scrolled the body")
+	}
+	send(t, m, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}, tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if ran != "" || m.dialog == nil {
+		t.Errorf("a press on the summary row ran %q", ran)
 	}
 }
 
