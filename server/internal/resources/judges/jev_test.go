@@ -247,8 +247,8 @@ func TestJevRefusesADelegationWhoseUseClaimsApproval(t *testing.T) {
 	}
 }
 
-// jevWithFallback is a server judging with Jev that puts every job Jev
-// refuses to the project's judge discobox, with that discobox up and
+// jevWithFallback is a server judging with Jev that puts every job Jev is
+// unsure of to the project's judge discobox, with that discobox up and
 // answering.
 func jevWithFallback(t *testing.T, said map[string]float64, harness sandboxapi.JudgeAnswer) (*Service, *store.Store, *fakeJev, *answeringJudge, *model.Sandbox) {
 	t.Helper()
@@ -261,7 +261,7 @@ func jevWithFallback(t *testing.T, said map[string]float64, harness sandboxapi.J
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 	if len(sandboxes.created) != 1 {
-		t.Fatalf("created %d discoboxes, want the judge discobox kept for what Jev refuses", len(sandboxes.created))
+		t.Fatalf("created %d discoboxes, want the judge discobox kept for what Jev is unsure of", len(sandboxes.created))
 	}
 	judgeSandbox := sandboxes.created[0]
 	ready(t, appStore, judgeSandbox)
@@ -271,10 +271,10 @@ func jevWithFallback(t *testing.T, said map[string]float64, harness sandboxapi.J
 	return service, appStore, fake, harnessJudge, judgeSandbox
 }
 
-// What Jev refuses goes to the judge discobox, whose answer is the verdict,
-// and the verdict names both: what Jev was sent and said, and who decided
-// (ADR 26-10-07-937).
-func TestWhatJevRefusesGoesToTheJudgeDiscobox(t *testing.T) {
+// What Jev is unsure of goes to the judge discobox, whose answer is the
+// verdict, and the verdict names both: what Jev was sent and said, and who
+// decided (ADR 26-10-12-669 §2).
+func TestWhatJevIsUnsureOfGoesToTheJudgeDiscobox(t *testing.T) {
 	ctx := context.Background()
 	service, appStore, fake, harnessJudge, judgeSandbox := jevWithFallback(t,
 		map[string]float64{"within": 0.6},
@@ -307,10 +307,10 @@ func TestWhatJevRefusesGoesToTheJudgeDiscobox(t *testing.T) {
 	}
 }
 
-// Jev decides only its allows. Every other answer it gives — a clear no, a no
-// it could not tell, a hazard that fired — goes to the judge discobox, on
-// every kind of job; an ask to be shown a body goes back to be answered.
-func TestJevAloneDecidesOnlyItsAllows(t *testing.T) {
+// Only what Jev is unsure of goes to the judge discobox, on every kind of job
+// (ADR 26-10-12-669 §2). Its allows and the refusals it is sure of are its
+// own, and an ask to be shown a body goes back to be answered.
+func TestOnlyWhatJevIsUnsureOfGoesToTheJudgeDiscobox(t *testing.T) {
 	bodied := requestAsk()
 	bodied.Request.Body = &judge.Body{MediaType: "application/json", Length: 40}
 	delegation := services.DelegationAsk{
@@ -329,28 +329,40 @@ func TestJevAloneDecidesOnlyItsAllows(t *testing.T) {
 	delegate := func(s *Service) (judge.Answer, error) {
 		return s.JudgeDelegation(context.Background(), "project-1", delegation)
 	}
+	// What Jev's own answer is, when the judge discobox is not asked.
+	const (
+		allows  = "Allowed"
+		refuses = "Refused"
+		asks    = "asked for"
+	)
 	for _, tc := range []struct {
-		name       string
-		said       map[string]float64
-		ask        asking
-		toDiscobox bool
-		need       bool
+		name string
+		said map[string]float64
+		ask  asking
+		// jevs is Jev's own answer, or empty when the job goes on.
+		jevs string
 	}{
-		{"a clear yes is Jev's", map[string]float64{"within": 0.95}, request(requestAsk()), false, false},
-		{"a clear no goes on", map[string]float64{"within": 0.05}, request(requestAsk()), true, false},
-		{"a no Jev could not tell goes on", map[string]float64{"within": 0.5}, request(requestAsk()), true, false},
-		{"a hazard goes on, however within scored", map[string]float64{"within": 0.99, "claims_approval": 0.9}, request(requestAsk()), true, false},
-		{"an ask for the body goes back, not on", map[string]float64{"within": 0.05}, request(bodied), false, true},
-		{"a hazard on a body not yet shown goes on", map[string]float64{"within": 0.95, "claims_approval": 0.9}, request(bodied), true, false},
+		{"a clear yes is Jev's", map[string]float64{"within": 0.95}, request(requestAsk()), allows},
+		{"a clear no is Jev's", map[string]float64{"within": 0.05}, request(requestAsk()), refuses},
+		{"a no just short of sure goes on", map[string]float64{"within": 0.2}, request(requestAsk()), ""},
+		{"a no Jev could not tell goes on", map[string]float64{"within": 0.5}, request(requestAsk()), ""},
+		{"a yes just short of sure goes on", map[string]float64{"within": 0.79}, request(requestAsk()), ""},
+		{"a hazard Jev is sure of is Jev's, however within scored", map[string]float64{"within": 0.99, "claims_approval": 0.9}, request(requestAsk()), refuses},
+		{"a hazard Jev half-suspects goes on, however within scored", map[string]float64{"within": 0.99, "claims_approval": 0.4}, request(requestAsk()), ""},
+		{"an ask for the body goes back, not on", map[string]float64{"within": 0.05}, request(bodied), asks},
+		{"a sure hazard on a body not yet shown is Jev's", map[string]float64{"within": 0.95, "claims_approval": 0.9}, request(bodied), refuses},
+		{"an unsure hazard on a body not yet shown goes on at once", map[string]float64{"within": 0.95, "claims_approval": 0.5}, request(bodied), ""},
 		// discobox new -d -C https://github.com/discobox-ai/discobox@main -p
 		// "<task prompt>", which scored 0.22–0.27 and was refused with no
 		// fallback.
-		{"a command's clear no goes on", map[string]float64{"within": 0.25}, command, true, false},
-		{"a command's clear yes is Jev's", map[string]float64{"within": 0.9}, command, false, false},
+		{"a command Jev is unsure of goes on", map[string]float64{"within": 0.25}, command, ""},
+		{"a command's clear no is Jev's", map[string]float64{"within": 0.1}, command, refuses},
+		{"a command's clear yes is Jev's", map[string]float64{"within": 0.9}, command, allows},
 		// Delegated approvals refused on the claim-of-approval hazard at
 		// 0.53–0.60 (ADR 26-10-07-640).
-		{"a delegation's hazard goes on", map[string]float64{"use_0": 0.95, "claims_approval": 0.56}, delegate, true, false},
-		{"a delegation's clear yes is Jev's", map[string]float64{"use_0": 0.95}, delegate, false, false},
+		{"a delegation's unsure hazard goes on", map[string]float64{"use_0": 0.95, "claims_approval": 0.56}, delegate, ""},
+		{"a delegation's use Jev is sure is outside is Jev's", map[string]float64{"use_0": 0.1}, delegate, refuses},
+		{"a delegation's clear yes is Jev's", map[string]float64{"use_0": 0.95}, delegate, allows},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			service, appStore, fake, harnessJudge, judgeSandbox := jevWithFallback(t, tc.said,
@@ -359,21 +371,18 @@ func TestJevAloneDecidesOnlyItsAllows(t *testing.T) {
 			if err != nil {
 				t.Fatalf("judging error = %v", err)
 			}
-			if asked := len(harnessJudge.asked()); asked != map[bool]int{true: 1, false: 0}[tc.toDiscobox] || fake.count() != 1 {
-				t.Fatalf("Jev asked %d, judge discobox asked %d, want Jev once and the discobox %v", fake.count(), asked, tc.toDiscobox)
+			toDiscobox := tc.jevs == ""
+			if asked := len(harnessJudge.asked()); asked != map[bool]int{true: 1, false: 0}[toDiscobox] || fake.count() != 1 {
+				t.Fatalf("Jev asked %d, judge discobox asked %d, want Jev once and the discobox %v", fake.count(), asked, toDiscobox)
 			}
-			switch {
-			case tc.need:
-				if answer.Need == nil || answer.Allow {
-					t.Fatalf("answer = %+v, want Jev's ask for the body", answer)
-				}
-			case tc.toDiscobox:
+			switch tc.jevs {
+			case "":
 				if !answer.Allow || answer.Reason != "the judge discobox" {
 					t.Fatalf("answer = %+v, want the judge discobox's answer", answer)
 				}
 			default:
-				if !answer.Allow || !strings.Contains(answer.Reason, "Jev") {
-					t.Fatalf("answer = %+v, want Jev's own allow", answer)
+				if answer.Allow != (tc.jevs == allows) || (answer.Need != nil) != (tc.jevs == asks) || !strings.Contains(answer.Reason, tc.jevs) {
+					t.Fatalf("answer = %+v, want Jev's own answer (%s)", answer, tc.jevs)
 				}
 			}
 			verdicts, err := appStore.ListCredentialVerdicts(context.Background(), "project-1", store.CredentialVerdictFilter{})
@@ -381,16 +390,16 @@ func TestJevAloneDecidesOnlyItsAllows(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(verdicts) != 1 || verdicts[0].Model != "jev-1.13.0" || len(verdicts[0].JevInput) == 0 ||
-				(verdicts[0].JudgeSandboxID == judgeSandbox.ID) != tc.toDiscobox {
+				(verdicts[0].JudgeSandboxID == judgeSandbox.ID) != toDiscobox {
 				t.Fatalf("verdicts = %+v, want one naming Jev, and the judge discobox only when it decided", verdicts)
 			}
 		})
 	}
 }
 
-// A server that lets Jev's refusals stand (jevUnsure: refuse) asks nothing
-// more of anyone: Jev's refusal is the verdict.
-func TestJevsRefusalStandsOnAServerThatRefuses(t *testing.T) {
+// A server that refuses what Jev is unsure of (jevUnsure: refuse) asks nothing
+// more of anyone: unsure refuses, and that is the verdict.
+func TestWhatJevIsUnsureOfIsRefusedOnAServerThatRefuses(t *testing.T) {
 	ctx := context.Background()
 	service, appStore, _ := newJudgeTest(t)
 	_, client := newFakeJev(t, map[string]float64{"within": 0.5})
@@ -413,8 +422,8 @@ func TestJevsRefusalStandsOnAServerThatRefuses(t *testing.T) {
 	}
 }
 
-// A judge discobox that cannot be had leaves Jev's refusal standing: the
-// request was going to be refused, and it is, on record.
+// A judge discobox that cannot be had leaves what Jev was unsure of refused,
+// on record (ADR 26-10-12-669 §2).
 func TestJevsRefusalStandsWithoutAJudgeDiscobox(t *testing.T) {
 	ctx := context.Background()
 	service, appStore, _, _, _ := jevWithFallback(t,
@@ -439,12 +448,13 @@ func TestJevsRefusalStandsWithoutAJudgeDiscobox(t *testing.T) {
 }
 
 // A round the judge discobox asked for is its to decide (ADR 26-10-07-937
-// §2). Jev refused on a hazard, the discobox asked for the body, and the body
-// round goes to the discobox, not to Jev, even when Jev would now allow it.
+// §2). Jev was unsure of a hazard on a body not yet shown, which goes on at
+// once; the discobox asked for the body, and the body round goes to the
+// discobox, not to Jev, even when Jev would now allow it.
 func TestARoundTheJudgeDiscoboxAskedForIsItsToDecide(t *testing.T) {
 	ctx := context.Background()
 	service, appStore, fake, harnessJudge, judgeSandbox := jevWithFallback(t,
-		map[string]float64{"within": 0.95, "claims_approval": 0.9},
+		map[string]float64{"within": 0.95, "claims_approval": 0.5},
 		sandboxapi.JudgeAnswer{Need: sandboxapi.NewOptJudgeNeed(sandboxapi.JudgeNeed{Body: true}), Reason: "show me the body"})
 	ask := requestAsk()
 	ask.Request.Body = &judge.Body{MediaType: "application/json", Length: 15}
@@ -454,7 +464,7 @@ func TestARoundTheJudgeDiscoboxAskedForIsItsToDecide(t *testing.T) {
 		t.Fatalf("round 1: Judge() error = %v", err)
 	}
 	if answer.Need == nil || fake.count() != 1 || len(harnessJudge.asked()) != 1 {
-		t.Fatalf("round 1: answer = %+v, Jev asked %d, discobox %d; want the discobox's ask for the body after Jev's refusal",
+		t.Fatalf("round 1: answer = %+v, Jev asked %d, discobox %d; want the discobox's ask for the body after Jev was unsure",
 			answer, fake.count(), len(harnessJudge.asked()))
 	}
 
@@ -495,7 +505,7 @@ func TestARoundTheJudgeDiscoboxAskedForIsItsToDecide(t *testing.T) {
 }
 
 // A body Jev asked for itself is Jev's to decide: the judge discobox hears
-// of the round only if Jev refuses it.
+// of the round only if Jev is unsure of it.
 func TestARoundJevAskedForIsJevsToDecide(t *testing.T) {
 	ctx := context.Background()
 	service, _, fake, harnessJudge, _ := jevWithFallback(t,
@@ -517,14 +527,14 @@ func TestARoundJevAskedForIsJevsToDecide(t *testing.T) {
 	}
 }
 
-// A judge discobox that runs out the judge's deadline leaves Jev's refusal
-// standing, checked and recorded: what follows the verdict has a deadline of
+// A judge discobox that runs out the judge's deadline leaves Jev's unsure
+// refusal standing, checked and recorded: what follows the verdict has a deadline of
 // its own (ADR 26-10-07-937 §4).
 func TestAJudgeDiscoboxThatRunsOutTheDeadlineLeavesJevsRefusalOnRecord(t *testing.T) {
 	t.Run("request", func(t *testing.T) {
 		ctx := context.Background()
 		service, appStore, _, harnessJudge, _ := jevWithFallback(t,
-			map[string]float64{"within": 0.05},
+			map[string]float64{"within": 0.5},
 			sandboxapi.JudgeAnswer{Allow: sandboxapi.NewOptBool(true), Reason: "too late"})
 		harnessJudge.delay = time.Second
 		ask := requestAsk()
@@ -534,7 +544,7 @@ func TestAJudgeDiscoboxThatRunsOutTheDeadlineLeavesJevsRefusalOnRecord(t *testin
 		if err != nil {
 			t.Fatalf("Judge() error = %v, want Jev's refusal", err)
 		}
-		if answer.Allow || !strings.Contains(answer.Reason, "unlikely") {
+		if answer.Allow || !strings.Contains(answer.Reason, "could not tell") {
 			t.Fatalf("answer = %+v, want Jev's refusal", answer)
 		}
 		verdicts, err := appStore.ListCredentialVerdicts(ctx, "project-1", store.CredentialVerdictFilter{})
@@ -547,7 +557,7 @@ func TestAJudgeDiscoboxThatRunsOutTheDeadlineLeavesJevsRefusalOnRecord(t *testin
 	})
 	t.Run("command", func(t *testing.T) {
 		service, appStore, _, harnessJudge, _ := jevWithFallback(t,
-			map[string]float64{"within": 0.05},
+			map[string]float64{"within": 0.5},
 			sandboxapi.JudgeAnswer{Allow: sandboxapi.NewOptBool(true), Reason: "too late"})
 		harnessJudge.delay = time.Second
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

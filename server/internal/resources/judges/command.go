@@ -81,7 +81,7 @@ func (s *Service) JudgeCommand(ctx context.Context, poolID string, ask services.
 		decided.Answer = judge.Answer{Reason: "the judge asked to be shown more, and a command has nothing more to show"}
 	}
 	// What follows the verdict has a deadline of its own, as for a request,
-	// so a judge discobox that ran the judge's out leaves Jev's refusal
+	// so a judge discobox that ran the judge's out leaves Jev's unsure refusal
 	// checked and recorded.
 	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancelRecord()

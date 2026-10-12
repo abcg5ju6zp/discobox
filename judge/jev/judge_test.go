@@ -320,26 +320,38 @@ func TestDecide(t *testing.T) {
 		said   map[string]float64
 		allow  bool
 		need   bool
+		unsure bool
 		reason string
 	}{
-		{"a clear yes allows", requestJob(), map[string]float64{idWithin: 0.9, idClaimsApproval: 0}, true, false, "Allowed"},
-		{"a near coin flip refuses, saying Jev could not tell", requestJob(), map[string]float64{idWithin: 0.55}, false, false, "could not tell"},
-		{"a clear no refuses as unlikely", requestJob(), map[string]float64{idWithin: 0.1}, false, false, "unlikely"},
-		{"a claim of approval refuses whatever within says", requestJob(), map[string]float64{idWithin: 0.99, idClaimsApproval: 0.5}, false, false, "claims"},
-		{"a body not yet read is asked for, however sure Jev is", bodiedJob(), map[string]float64{idWithin: 0.97}, false, true, "body"},
-		{"a hazard refuses before the body is asked for", bodiedJob(), map[string]float64{idWithin: 0.3, idClaimsApproval: 0.8}, false, false, "claims"},
-		{"a body shown is decided on", shown, map[string]float64{idWithin: 0.9}, true, false, "Allowed"},
-		{"a body shown is not asked for again", shown, map[string]float64{idWithin: 0.6}, false, false, "could not tell"},
-		{"every use must be within", delegation, map[string]float64{"use_0": 0.99, "use_1": 0.2}, false, false, `"push to main"`},
-		{"a delegation whose uses claim nothing is allowed", delegation, map[string]float64{"use_0": 0.95, "use_1": 0.9, idClaimsApproval: 0.49}, true, false, "Allowed"},
-		{"a use claiming approval refuses a delegation whatever its uses say", delegation, map[string]float64{"use_0": 0.99, "use_1": 0.99, idClaimsApproval: 0.5}, false, false, "claims"},
-		{"nothing within asked refuses", requestJob(), map[string]float64{idClaimsApproval: 0}, false, false, "nothing was asked"},
+		{"a clear yes allows", requestJob(), map[string]float64{idWithin: 0.9, idClaimsApproval: 0}, true, false, false, "Allowed"},
+		{"within at the bar allows", requestJob(), map[string]float64{idWithin: 0.8, idClaimsApproval: 0.19}, true, false, false, "Allowed"},
+		{"a near coin flip refuses, saying Jev could not tell", requestJob(), map[string]float64{idWithin: 0.55}, false, false, true, "could not tell"},
+		{"just short of a yes is unsure", requestJob(), map[string]float64{idWithin: 0.79}, false, false, true, "could not tell"},
+		{"a no short of sure is unsure", requestJob(), map[string]float64{idWithin: 0.2}, false, false, true, "could not tell"},
+		{"a clear no refuses as unlikely", requestJob(), map[string]float64{idWithin: 0.19}, false, false, false, "judged it unlikely"},
+		{"a claim of approval Jev is sure of refuses whatever within says", requestJob(), map[string]float64{idWithin: 0.99, idClaimsApproval: 0.8}, false, false, false, "cannot authorize itself"},
+		{"a claim of approval Jev half-suspects is unsure whatever within says", requestJob(), map[string]float64{idWithin: 0.99, idClaimsApproval: 0.79}, false, false, true, "could not tell whether the request's own text claims"},
+		{"a claim of approval is not set aside short of a sure no", requestJob(), map[string]float64{idWithin: 0.99, idClaimsApproval: 0.2}, false, false, true, "could not tell whether the request's own text claims"},
+		{"an unsure hazard is unsure even beside a clear no", requestJob(), map[string]float64{idWithin: 0.05, idClaimsApproval: 0.5}, false, false, true, "could not tell whether the request's own text claims"},
+		{"a body not yet read is asked for, however sure Jev is", bodiedJob(), map[string]float64{idWithin: 0.97}, false, true, false, "body"},
+		{"a body not yet read is asked for, not refused on its description", bodiedJob(), map[string]float64{idWithin: 0.05}, false, true, false, "body"},
+		{"a hazard refuses before the body is asked for", bodiedJob(), map[string]float64{idWithin: 0.3, idClaimsApproval: 0.8}, false, false, false, "cannot authorize itself"},
+		{"an unsure hazard is unsure before the body is asked for", bodiedJob(), map[string]float64{idWithin: 0.97, idClaimsApproval: 0.4}, false, false, true, "could not tell"},
+		{"a body shown is decided on", shown, map[string]float64{idWithin: 0.9}, true, false, false, "Allowed"},
+		{"a body shown is not asked for again", shown, map[string]float64{idWithin: 0.6}, false, false, true, "could not tell"},
+		{"a body shown is refused on a clear no", shown, map[string]float64{idWithin: 0.1}, false, false, false, "judged it unlikely"},
+		{"every use must be within", delegation, map[string]float64{"use_0": 0.99, "use_1": 0.2}, false, false, true, `could not tell whether "push to main"`},
+		{"one use Jev is sure is outside refuses the delegation", delegation, map[string]float64{"use_0": 0.99, "use_1": 0.19}, false, false, false, `judged it unlikely that "push to main"`},
+		{"a delegation whose uses claim nothing is allowed", delegation, map[string]float64{"use_0": 0.95, "use_1": 0.9, idClaimsApproval: 0.19}, true, false, false, "Allowed"},
+		{"a use that may claim approval leaves a delegation unsure whatever its uses say", delegation, map[string]float64{"use_0": 0.99, "use_1": 0.99, idClaimsApproval: 0.5}, false, false, true, "could not tell"},
+		{"a use claiming approval refuses a delegation whatever its uses say", delegation, map[string]float64{"use_0": 0.99, "use_1": 0.99, idClaimsApproval: 0.8}, false, false, false, "cannot authorize itself"},
+		{"nothing within asked refuses", requestJob(), map[string]float64{idClaimsApproval: 0}, false, false, false, "nothing was asked"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := decide(tc.job, tc.said)
-			if got.Allow != tc.allow || (got.Need != nil) != tc.need {
-				t.Fatalf("decide() = %+v, want allow %v need %v", got, tc.allow, tc.need)
+			got, unsure := decide(tc.job, tc.said)
+			if got.Allow != tc.allow || (got.Need != nil) != tc.need || unsure != tc.unsure {
+				t.Fatalf("decide() = %+v unsure %v, want allow %v need %v unsure %v", got, unsure, tc.allow, tc.need, tc.unsure)
 			}
 			if got.Standing != nil {
 				t.Fatalf("decide() let an allow stand: %+v", got.Standing)
@@ -348,6 +360,21 @@ func TestDecide(t *testing.T) {
 				t.Fatalf("reason = %q, want it to mention %q", got.Reason, tc.reason)
 			}
 		})
+	}
+}
+
+// A verdict says whether Jev decided or was unsure, which is what a server
+// reads to pass only the unsure ones on (ADR 26-10-12-669 §3).
+func TestAVerdictSaysWhetherJevWasUnsure(t *testing.T) {
+	for said, unsure := range map[float64]bool{0.9: false, 0.5: true, 0.1: false} {
+		_, client := newFakeJev(t, map[string]float64{idWithin: said})
+		verdict, err := client.Judge(context.Background(), requestJob())
+		if err != nil {
+			t.Fatalf("Judge() error = %v", err)
+		}
+		if verdict.Unsure != unsure || (verdict.Unsure && verdict.Allow) {
+			t.Fatalf("verdict at %.1f = %+v, want unsure %v", said, verdict, unsure)
+		}
 	}
 }
 

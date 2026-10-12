@@ -125,20 +125,24 @@ answers typed questions with probabilities and writes no text, so `System`,
   evidence is when honest (a delegation's uses are asks to be allowed, worded
   as instructions, with their own limits), and counts only a claim of prior
   approval or words to the judge (ADR 26-10-07-640).
-- **Decision.** `decide` turns the answers into a `judge.Answer` and fails
-  closed:
-  - a hazard at `HazardAt` refuses: text in the evidence claiming approval;
+- **Decision.** Jev's probabilities are calibrated, and every question is
+  read at the same confidence in both directions (ADR 26-10-12-669): `YesAt`
+  (0.8) or above is a yes, below `NoBelow` (0.2) is a no, and anything
+  between is Jev saying it cannot tell. `decide` turns the answers into a
+  `judge.Answer` and whether Jev was unsure, in this order:
+  - a hazard that is a yes refuses: text in the evidence claiming approval;
+  - a hazard that is not a no refuses, unsure;
   - a body that `Job.CanShowBody` says can still be shown is asked for, and
-    never allowed on its description. A read and a write often have the same
-    shape.
-  - an allow needs every "within" question at `AllowAt` (0.8). Jev's
-    probabilities are calibrated, and a value near 0.5 means it cannot tell.
-  - anything else refuses. Its reason says Jev could not tell when the
-    weakest "within" is at `UnsureAt` or above, and that it is unlikely
-    below; the two refuse alike. A server may put every refusal, hazards
-    included, to its judge discobox, which decides it and the rounds it
-    asks for (`jevUnsure`, ADR 26-10-07-937), so Jev alone decides only its
-    allows.
+    never allowed or refused on its description. A read and a write often
+    have the same shape.
+  - a "within" question that is a no refuses;
+  - an allow needs every "within" question to be a yes;
+  - anything else refuses, unsure.
+- **Unsure.** `Verdict.Unsure` marks a refusal Jev could not tell about, and
+  its reason says "could not tell" where a decided one says "judged it
+  unlikely". Both refuse. A server may put the unsure ones to its judge
+  discobox, which decides them and the rounds it asks for (`jevUnsure`);
+  Jev's allows and decided refusals are its own.
 - **What it never does.** It never lets an allow stand. The reason is composed
   from whichever question decided.
 - **What it was sent.** `Verdict.Input` is the exact JSON body of the request
@@ -154,8 +158,9 @@ own `discobox-prompt` about them with this package's `System`, `Schema`,
 `Prompt`, and `GuidanceFor`, and scores the answers with `Decode` the way the
 control plane acts on them. Change the system prompt, a job's fields, or a
 harness's judge model, and run it against every harness that judges.
-`go tool task eval:judge:jev` asks Jev about the same cases through `jev/`;
-change a question or a threshold there and run it.
+`go tool task eval:judge:jev` asks Jev about the same cases through `jev/`,
+and counts what it was unsure of and what it refused alone on a case a correct
+judge does not refuse; change a question or a threshold there and run it.
 
 **A job says beside its request whether the judge may still ask.** `Prompt`
 derives `BodyCanBeShown` and `AsksLeft` — a request job before its last round,

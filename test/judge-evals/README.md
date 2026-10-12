@@ -34,6 +34,13 @@ shown a body that cannot show anything more is a **refuse**. A case expects
 right answer), or `refuse-or-ask`. The run exits 1 when any answer is one its
 case does not accept, and the table says which.
 
+A Jev refusal is **unsure** when Jev could not tell (`jev.Verdict.Unsure`): it
+is scored as the refusal it is, and counted, since a server with
+`jevUnsure: harness` puts it to its judge discobox. A refusal Jev decided is
+final there, so the run also counts those given to a case that does not accept
+a refusal: the evidence against the bar Jev's no is read at
+(ADR 26-10-12-669).
+
 ## Cases
 
 `cases/*.json` are a `name`, `why` — what happened, or what the case controls

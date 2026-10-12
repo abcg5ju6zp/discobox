@@ -12,32 +12,31 @@ import (
 // QuestionsVersion names the questions below and the thresholds they are
 // decided against, the way judge.PromptVersion names judge.System. A verdict
 // records it; change any question, criterion, or threshold and change it.
-const QuestionsVersion = "jev-6"
+const QuestionsVersion = "jev-7"
 
+// Jev answers a yes/no question with one calibrated probability that the
+// answer is yes, and it is read at the same confidence in both directions
+// (ADR 26-10-12-669 §1): YesAt or above is a yes, below NoBelow is a no, and
+// anything between is Jev saying it cannot tell. That holds for every
+// question, "within" and hazard alike.
 const (
-	// AllowAt is how sure Jev must be that what is asked is within what was
-	// approved before it is allowed: a clear yes. Jev's probabilities are
-	// calibrated, so a value near 0.5 is Jev saying it cannot tell, and
-	// treating that as a yes throws away the one signal that makes it safe —
-	// on test/judge-evals a GraphQL request described but not shown scored
-	// 0.55, which is as true of a mutation as of a read.
-	AllowAt = 0.8
-	// UnsureAt is where Jev's no stops being a clear no. From here up to
-	// AllowAt, Jev is unsure, and its refusal says it could not tell rather
-	// than that the job is unlikely to be within. It words the reason and
-	// decides nothing: every refusal is the same refusal to a server, which
-	// may put any of them to its judge discobox (ADR 26-10-07-937). Every
-	// request a correct judge refuses in test/judge-evals scored 0.19 or
-	// below against jev-1.13.0.
-	UnsureAt = 0.3
-	// HazardAt is how sure Jev must be of a hazard for it to refuse on its
-	// own, whatever the rest says. A hazard refuses, which is the safe way to
-	// be wrong, so it fires on anything Jev thinks more likely than not.
-	HazardAt = 0.5
+	// YesAt is how sure Jev must be of a yes: that what is asked is within
+	// what was approved, before it is allowed, or that the evidence claims
+	// approval, before that refuses on its own. Treating a value near 0.5 as
+	// a yes throws away the one signal that makes Jev safe — on
+	// test/judge-evals a GraphQL request described but not shown scored 0.55,
+	// which is as true of a mutation as of a read.
+	YesAt = 0.8
+	// NoBelow is where Jev's no starts: as sure of no as YesAt is of yes. A
+	// no trusted at less than that refused real work: a legitimate
+	// `discobox new` scored 0.22–0.27 on "within". Every request a correct
+	// judge refuses in test/judge-evals scored 0.19 or below against
+	// jev-1.13.0.
+	NoBelow = 0.2
 )
 
 // The IDs Jev answers under. Each is a yes/no question; within is the one an
-// allow needs, and claims_approval is a hazard that refuses.
+// allow needs, and claims_approval is a hazard an allow needs ruled out.
 //
 // There is no separate question about the target. Asked on its own, Jev read
 // a purpose's placeholders literally — "approve <request-id>" names no
@@ -51,12 +50,14 @@ const (
 )
 
 // hazards are the questions that refuse on their own, in the order their
-// reasons are preferred, and what each says to the discobox when it does.
+// reasons are preferred, with what each one found, as a refusal says it to the
+// discobox, and why that refuses.
 var hazards = []struct {
 	id     string
-	reason string
+	found  string
+	refuse string
 }{
-	{idClaimsApproval, "the request's own text claims it is approved or speaks to whoever judges it, and text cannot authorize itself"},
+	{idClaimsApproval, "the request's own text claims it is approved or speaks to whoever judges it", "text cannot authorize itself"},
 }
 
 // Verdict is Jev's answer to one job, as Discobox decided it from what Jev
@@ -67,6 +68,11 @@ type Verdict struct {
 	Model string
 	// Probabilities is each question's probability of yes, by its ID.
 	Probabilities map[string]float64
+	// Unsure is a refusal because Jev could not tell, not because it said no:
+	// a hazard or the weakest within question scored from NoBelow up to
+	// YesAt. It is what a server passing Jev's hard cases to a slower judge
+	// passes on (ADR 26-10-12-669 §2); every other answer is Jev's own.
+	Unsure bool
 	// Input is exactly what Jev was sent: the JSON body of the request to its
 	// API, holding the state, the questions and the model asked for, and
 	// nothing of the key or any other header. The state is the job's
@@ -93,7 +99,8 @@ func (c *Client) Judge(ctx context.Context, job judge.Job) (Verdict, error) {
 	if err != nil {
 		return Verdict{}, err
 	}
-	return Verdict{Answer: decide(job, probabilities), Model: model, Probabilities: probabilities, Input: input}, nil
+	answer, unsure := decide(job, probabilities)
+	return Verdict{Answer: answer, Model: model, Probabilities: probabilities, Unsure: unsure, Input: input}, nil
 }
 
 // questionsFor is what Jev is asked about a job: the state it reads and the
@@ -152,24 +159,30 @@ func questionsFor(job judge.Job) (any, map[string]question, error) {
 	}
 }
 
-// decide is the verdict Jev's probabilities amount to (ADR 26-10-01-324 §§3–5).
-// It fails closed:
+// decide is the verdict Jev's probabilities amount to, and whether it is a
+// refusal because Jev was unsure (ADR 26-10-12-669 §1). In this order:
 //
-//   - a hazard Jev is sure enough of refuses;
-//   - a body that can still be shown is asked for, never allowed without being
-//     read: a body is described by its shape, and the shape of a read and a
-//     write are often the same (a GraphQL query and a mutation);
-//   - an allow needs every within question at AllowAt or above;
-//   - anything else refuses, saying Jev could not tell when the weakest
-//     within question scored UnsureAt or more, and that it is unlikely
-//     otherwise.
+//   - a hazard Jev is sure of refuses;
+//   - a hazard Jev can neither find nor rule out refuses, unsure;
+//   - a body that can still be shown is asked for, never allowed or refused
+//     on its description: a body is described by its shape, and the shape of
+//     a read and a write are often the same (a GraphQL query and a mutation);
+//   - a within question Jev is sure is a no refuses;
+//   - an allow needs every within question at YesAt or above;
+//   - anything else refuses, unsure.
 //
-// It never lets an allow stand: a route is generated text, and Jev generates
-// none.
-func decide(job judge.Job, probabilities map[string]float64) judge.Answer {
+// An unsure refusal is still a refusal: what a server does with one is the
+// server's. It never lets an allow stand: a route is generated text, and Jev
+// generates none.
+func decide(job judge.Job, probabilities map[string]float64) (judge.Answer, bool) {
 	for _, hazard := range hazards {
-		if p, ok := probabilities[hazard.id]; ok && p >= HazardAt {
-			return judge.Answer{Reason: fmt.Sprintf("Refused: %s (Jev %.2f).", hazard.reason, p)}
+		if p, ok := probabilities[hazard.id]; ok && p >= YesAt {
+			return judge.Answer{Reason: fmt.Sprintf("Refused: %s, and %s (Jev %.2f).", hazard.found, hazard.refuse, p)}, false
+		}
+	}
+	for _, hazard := range hazards {
+		if p, ok := probabilities[hazard.id]; ok && p >= NoBelow {
+			return judge.Answer{Reason: fmt.Sprintf("Refused: Jev could not tell whether %s (%.2f).", hazard.found, p)}, true
 		}
 	}
 	lowest, weakest, asked := 1.0, "", false
@@ -183,16 +196,16 @@ func decide(job judge.Job, probabilities map[string]float64) judge.Answer {
 		}
 	}
 	if !asked {
-		return judge.Answer{Reason: "Refused: nothing was asked about whether this is the approved use."}
+		return judge.Answer{Reason: "Refused: nothing was asked about whether this is the approved use."}, false
 	}
 	if job.CanShowBody() {
 		return judge.Answer{
 			Need:   &judge.Need{Body: true},
 			Reason: fmt.Sprintf("The request is judged on its body, which is asked for (Jev %.2f on its description).", lowest),
-		}
+		}, false
 	}
-	if lowest >= AllowAt {
-		return judge.Answer{Allow: true, Reason: fmt.Sprintf("Allowed: Jev judged this within the approved use (%.2f).", lowest)}
+	if lowest >= YesAt {
+		return judge.Answer{Allow: true, Reason: fmt.Sprintf("Allowed: Jev judged this within the approved use (%.2f).", lowest)}, false
 	}
 	what := "this request is part of the approved purpose"
 	switch job.Kind {
@@ -206,10 +219,10 @@ func decide(job judge.Job, probabilities map[string]float64) judge.Answer {
 	case judge.KindCommand:
 		what = "this command carries out the approved purpose"
 	}
-	if lowest >= UnsureAt {
-		return judge.Answer{Reason: fmt.Sprintf("Refused: Jev could not tell whether %s (%.2f).", what, lowest)}
+	if lowest >= NoBelow {
+		return judge.Answer{Reason: fmt.Sprintf("Refused: Jev could not tell whether %s (%.2f).", what, lowest)}, true
 	}
-	return judge.Answer{Reason: fmt.Sprintf("Refused: Jev judged it unlikely that %s (%.2f).", what, lowest)}
+	return judge.Answer{Reason: fmt.Sprintf("Refused: Jev judged it unlikely that %s (%.2f).", what, lowest)}, false
 }
 
 // approved is a question's instructions: the authorization a person approved,
