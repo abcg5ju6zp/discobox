@@ -270,3 +270,4 @@ duplicated number.
 | [26-10-09-395](26-10-09-395-a-sandbox-may-be-created-with-skills.md) | A sandbox may be created with skills | Accepted |
 | [26-10-09-867](26-10-09-867-a-configure-port-may-be-ephemeral-and-is-still-bound-at-its-own-number.md) | A configure port may be ephemeral, and is still bound at its own number | Accepted |
 | [26-10-10-545](26-10-10-545-git-reaches-a-pool-only-from-a-client-and-is-cached-there-per-remote.md) | Git reaches a pool only from a client, and is cached there per remote | Proposed |
+| [26-10-12-330](26-10-12-330-a-credential-request-may-be-answered-by-a-rule-the-judge-reads.md) | A credential request may be answered by a rule the judge reads | Proposed |
