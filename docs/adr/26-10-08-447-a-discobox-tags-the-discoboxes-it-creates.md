@@ -1,6 +1,7 @@
 # 26-10-08-447 — A discobox tags the discoboxes it creates
 
-- **Status**: Accepted
+- **Status**: Accepted (§1's "no name" amended by
+  [26-10-12-026](26-10-12-026-a-sandboxs-name-is-meta-and-renaming-it-is-a-meta-write.md))
 - **Date**: 2026-10-08
 - **Supersedes**: in [0140](0140-a-discobox-reaches-the-discobox-api-through-its-pool-with-a-fixed-role.md),
   for the discoboxes the caller created and only for the route of §1: §4's
