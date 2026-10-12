@@ -28,10 +28,18 @@ func TestNewSkillsReadsTheFileAsItIsNow(t *testing.T) {
 	if err != nil || !user || !slices.Equal(dirs, []string{filepath.Join(dir, "team")}) {
 		t.Fatalf("newSkills() = %v, %v, %v; want the fixed file's team directory and userSkills", dirs, user, err)
 	}
-	// Given flags are what they say, whatever the file does.
+	// Given flags replace what the file says.
 	no := false
 	if dirs, user, err := newSkills([]string{"x"}, &no); err != nil || user || !slices.Equal(dirs, []string{"x"}) {
 		t.Fatalf("newSkills(flags) = %v, %v, %v; want the flags as given", dirs, user, err)
+	}
+	// And a file that does not parse stops a create they would not have
+	// needed it for.
+	if err := os.WriteFile(configFile, []byte("new:\n  skils: [team]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := newSkills([]string{"x"}, &no); err == nil {
+		t.Fatal("newSkills(flags) with a misspelled key = nil error, want one")
 	}
 }
 
