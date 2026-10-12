@@ -156,7 +156,7 @@ func sandboxTags(sandbox apimodel.Sandbox) map[string]string {
 	if !ok {
 		return nil
 	}
-	return meta.Tags
+	return meta.Tags.Or(nil)
 }
 
 // sandboxTagsColumn is the tags as one column spells them, "-" for none.

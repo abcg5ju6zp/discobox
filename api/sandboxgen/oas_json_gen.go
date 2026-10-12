@@ -3245,6 +3245,40 @@ func (s *OptSandboxMeta) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes SandboxMetaTags as json.
+func (o OptSandboxMetaTags) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	o.Value.Encode(e)
+}
+
+// Decode decodes SandboxMetaTags from json.
+func (o *OptSandboxMetaTags) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptSandboxMetaTags to nil")
+	}
+	o.Set = true
+	o.Value = make(SandboxMetaTags)
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptSandboxMetaTags) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptSandboxMetaTags) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes SandboxRuntimeConfigProxy as json.
 func (o OptSandboxRuntimeConfigProxy) Encode(e *jx.Encoder) {
 	if !o.Set {
@@ -8502,14 +8536,23 @@ func (s *SandboxMeta) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
-		e.FieldStart("tags")
-		s.Tags.Encode(e)
+		if s.Name.Set {
+			e.FieldStart("name")
+			s.Name.Encode(e)
+		}
+	}
+	{
+		if s.Tags.Set {
+			e.FieldStart("tags")
+			s.Tags.Encode(e)
+		}
 	}
 }
 
-var jsonFieldsNameOfSandboxMeta = [2]string{
+var jsonFieldsNameOfSandboxMeta = [3]string{
 	0: "description",
-	1: "tags",
+	1: "name",
+	2: "tags",
 }
 
 // Decode decodes SandboxMeta from json.
@@ -8517,7 +8560,6 @@ func (s *SandboxMeta) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode SandboxMeta to nil")
 	}
-	var requiredBitSet [1]uint8
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
@@ -8531,9 +8573,19 @@ func (s *SandboxMeta) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"description\"")
 			}
-		case "tags":
-			requiredBitSet[0] |= 1 << 1
+		case "name":
 			if err := func() error {
+				s.Name.Reset()
+				if err := s.Name.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"name\"")
+			}
+		case "tags":
+			if err := func() error {
+				s.Tags.Reset()
 				if err := s.Tags.Decode(d); err != nil {
 					return err
 				}
@@ -8547,38 +8599,6 @@ func (s *SandboxMeta) Decode(d *jx.Decoder) error {
 		return nil
 	}); err != nil {
 		return errors.Wrap(err, "decode SandboxMeta")
-	}
-	// Validate required fields.
-	var failures []validate.FieldError
-	for i, mask := range [1]uint8{
-		0b00000010,
-	} {
-		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
-			// Mask only required fields and check equality to mask using XOR.
-			//
-			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
-			// Bits of fields which would be set are actually bits of missed fields.
-			missed := bits.OnesCount8(result)
-			for bitN := 0; bitN < missed; bitN++ {
-				bitIdx := bits.TrailingZeros8(result)
-				fieldIdx := i*8 + bitIdx
-				var name string
-				if fieldIdx < len(jsonFieldsNameOfSandboxMeta) {
-					name = jsonFieldsNameOfSandboxMeta[fieldIdx]
-				} else {
-					name = strconv.Itoa(fieldIdx)
-				}
-				failures = append(failures, validate.FieldError{
-					Name:  name,
-					Error: validate.ErrFieldRequired,
-				})
-				// Reset bit.
-				result &^= 1 << bitIdx
-			}
-		}
-	}
-	if len(failures) > 0 {
-		return &validate.Error{Fields: failures}
 	}
 
 	return nil
@@ -10922,6 +10942,12 @@ func (s *UpdateSandboxMetaBody) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.Name.Set {
+			e.FieldStart("name")
+			s.Name.Encode(e)
+		}
+	}
+	{
 		if s.RemoveTags != nil {
 			e.FieldStart("removeTags")
 			e.ArrStart()
@@ -10939,10 +10965,11 @@ func (s *UpdateSandboxMetaBody) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfUpdateSandboxMetaBody = [3]string{
+var jsonFieldsNameOfUpdateSandboxMetaBody = [4]string{
 	0: "description",
-	1: "removeTags",
-	2: "setTags",
+	1: "name",
+	2: "removeTags",
+	3: "setTags",
 }
 
 // Decode decodes UpdateSandboxMetaBody from json.
@@ -10962,6 +10989,16 @@ func (s *UpdateSandboxMetaBody) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"description\"")
+			}
+		case "name":
+			if err := func() error {
+				s.Name.Reset()
+				if err := s.Name.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"name\"")
 			}
 		case "removeTags":
 			if err := func() error {

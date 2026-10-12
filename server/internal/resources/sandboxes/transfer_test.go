@@ -588,7 +588,7 @@ func TestExportAndImportCarryTheMetaCopy(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	reported := sandboxmeta.Meta{Description: "fix the reaper", Tags: map[string]string{"wip": "", "ticket": "ENG-12"}}
+	reported := sandboxmeta.Meta{Name: "the reaper", Description: "fix the reaper", Tags: map[string]string{"wip": "", "ticket": "ENG-12"}}
 	if err := st.UpdateSandboxMeta(ctx, "project-1", "sb-1", reported, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -614,6 +614,10 @@ func TestExportAndImportCarryTheMetaCopy(t *testing.T) {
 	if !reflect.DeepEqual(manifest.Sandbox.Tags, reported.Tags) {
 		t.Fatalf("exported tags = %v, want %v", manifest.Sandbox.Tags, reported.Tags)
 	}
+	// The meta's name travels beside the configured one, not in place of it.
+	if manifest.Sandbox.MetaName == nil || *manifest.Sandbox.MetaName != reported.Name || manifest.Sandbox.Name != "my-box" {
+		t.Fatalf("exported meta name = %v and name = %q, want %q and my-box", manifest.Sandbox.MetaName, manifest.Sandbox.Name, reported.Name)
+	}
 
 	result, err := svc.ImportSandbox(ctx, "project-1", bytes.NewReader(archive), services.SandboxImportOptions{Name: "moved"})
 	if err != nil {
@@ -625,6 +629,9 @@ func TestExportAndImportCarryTheMetaCopy(t *testing.T) {
 	}
 	if got.Description == nil || *got.Description != reported.Description || !reflect.DeepEqual(got.Tags, reported.Tags) {
 		t.Fatalf("imported meta = %v %v, want %v", got.Description, got.Tags, reported)
+	}
+	if got.MetaName == nil || *got.MetaName != reported.Name || got.Name != "moved" {
+		t.Fatalf("imported meta name = %v and name = %q, want %q and moved", got.MetaName, got.Name, reported.Name)
 	}
 	if got.MetaObservedAt != nil {
 		t.Fatalf("imported metaObservedAt = %v, want unobserved", got.MetaObservedAt)

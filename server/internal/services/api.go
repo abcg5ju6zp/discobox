@@ -162,7 +162,7 @@ type SandboxService interface {
 	UpgradeSandbox(ctx context.Context, projectID, sandboxID string, input UpgradeSandboxBody) (*model.Sandbox, error)
 	CompleteSandboxSourcePush(ctx context.Context, projectID, sandboxID string, input CompleteSandboxSourcePushBody) (*model.Sandbox, error)
 	CompleteSandboxApply(ctx context.Context, projectID, sandboxID string, input CompleteSandboxApplyBody) (*model.Sandbox, error)
-	// UpdateSandboxMeta carries a change to the description or tags into the
+	// UpdateSandboxMeta carries a change to the name, description or tags into the
 	// sandbox, which holds them, and records what it holds afterwards
 	// (ADR 0136).
 	UpdateSandboxMeta(ctx context.Context, projectID, sandboxID string, input UpdateSandboxMetaBody) (*model.Sandbox, error)

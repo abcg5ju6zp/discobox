@@ -367,11 +367,15 @@ func SandboxToAPI(sandbox *model.Sandbox, fallback *model.HarnessConfig) (server
 		fields["harnessConfig"] = sandbox.HarnessConfig
 	}
 	// The copy of what the sandbox holds (ADR 0136). Before it has reported,
-	// that is the description it was created with and no tags; metaObservedAt
-	// is absent until then, which is what says so.
-	meta := map[string]any{"tags": sandbox.Tags}
-	if sandbox.Tags == nil {
-		meta["tags"] = map[string]string{}
+	// that is the description it was created with and nothing else;
+	// metaObservedAt is absent until then, which is what says so. Each field
+	// is there only when set (ADR 26-10-12-026 §1).
+	meta := map[string]any{}
+	if len(sandbox.Tags) > 0 {
+		meta["tags"] = sandbox.Tags
+	}
+	if name := sandboxMetaName(sandbox); name != "" {
+		meta["name"] = name
 	}
 	if sandbox.Description != nil && *sandbox.Description != "" {
 		meta["description"] = *sandbox.Description
@@ -535,11 +539,13 @@ func SandboxDisplayState(sandbox *model.Sandbox) string {
 	}
 }
 
-// SandboxDisplayName is the name a listing shows for a sandbox: the window
-// title its primary terminal last set, the sandbox's own configured name until
-// one has, and the sandbox ID when it has no name either. The title is what the
-// harness says the work is about, which tells two sandboxes apart better than
-// two generated names do.
+// SandboxDisplayName is the name a listing shows for a sandbox: the name in
+// its meta when one is set (ADR 26-10-12-026 §3), then the window title its
+// primary terminal last set, the sandbox's own configured name until one has,
+// and the sandbox ID when it has no name either. The title is what the harness
+// says the work is about, which tells two sandboxes apart better than two
+// generated names do; a set name is what a person or the agent chose to call
+// it, which outranks what the harness happened to write.
 //
 // It is computed here, next to the display state it sits beside on the wire, so
 // every client names a sandbox the same way rather than each rediscovering the
@@ -548,6 +554,9 @@ func SandboxDisplayName(sandbox *model.Sandbox) string {
 	if sandbox == nil {
 		return ""
 	}
+	if name := sandboxMetaName(sandbox); name != "" {
+		return name
+	}
 	if title := sandboxPrimaryTerminalTitle(sandbox); title != "" {
 		return title
 	}
@@ -555,6 +564,15 @@ func SandboxDisplayName(sandbox *model.Sandbox) string {
 		return name
 	}
 	return sandbox.ID
+}
+
+// sandboxMetaName is the name the sandbox's meta holds, as the row last
+// recorded it: empty when nobody has named the sandbox.
+func sandboxMetaName(sandbox *model.Sandbox) string {
+	if sandbox.MetaName == nil {
+		return ""
+	}
+	return strings.TrimSpace(*sandbox.MetaName)
 }
 
 // sandboxPrimaryTerminalTitle is the window title the sandbox's primary

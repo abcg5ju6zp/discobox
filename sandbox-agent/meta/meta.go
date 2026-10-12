@@ -1,5 +1,5 @@
 // Package meta reads and writes the sandbox's meta file, ~/.discobox/meta.json
-// under the sandbox user's home: the sandbox's description and tags (ADR 0136).
+// under the sandbox user's home: the sandbox's name, description and tags (ADR 0136).
 // The file is their system of record: the agent working in the sandbox edits
 // it directly, the status endpoint reports what it holds, and a write through
 // the API is applied to it here. The shape of the file and the rules for its

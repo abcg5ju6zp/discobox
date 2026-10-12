@@ -5483,7 +5483,7 @@ func (s *Server) FindPath(method string, u *url.URL) (r Route, _ bool) {
 									switch method {
 									case "PATCH":
 										r.name = UpdateSandboxAgentMetaOperation
-										r.summary = "Change the description or tags in the sandbox's meta file."
+										r.summary = "Change the name, description or tags in the sandbox's meta file."
 										r.operationID = "update-sandbox-agent-meta"
 										r.operationGroup = ""
 										r.pathPattern = "/api/projects/{projectId}/sandboxes/{sandboxId}/meta"
@@ -7282,7 +7282,7 @@ func (s *Server) FindPath(method string, u *url.URL) (r Route, _ bool) {
 														switch method {
 														case "PATCH":
 															r.name = UpdateSandboxMetaOperation
-															r.summary = "Change a sandbox's description or tags"
+															r.summary = "Change a sandbox's name, description or tags"
 															r.operationID = "update-sandbox-meta"
 															r.operationGroup = ""
 															r.pathPattern = "/projects/{projectId}/sandboxes/{sandboxId}/meta"

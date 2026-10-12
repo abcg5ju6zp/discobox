@@ -387,6 +387,7 @@ var observedSandboxColumns = []string{
 // row it loaded, and a meta write that committed in between would be undone,
 // its observation time with it.
 var sandboxMetaColumns = []string{
+	"meta_name",
 	"description",
 	"tags",
 	"meta_observed_at",
@@ -490,7 +491,7 @@ func (s *Store) UpdateSandboxAgentStatus(ctx context.Context, projectID, sandbox
 	return nil
 }
 
-// UpdateSandboxMeta records the description and tags a sandbox reported
+// UpdateSandboxMeta records the name, description and tags a sandbox reported
 // holding at observedAt, on the sandbox's own clock (ADR 0136). It writes only
 // when observedAt is newer than what is recorded, because two paths report
 // them — the periodic status and the answer to a meta write — and a poll that
@@ -515,7 +516,10 @@ func (s *Store) UpdateSandboxMeta(ctx context.Context, projectID, sandboxID stri
 	if err != nil {
 		return err
 	}
-	var description any
+	var name, description any
+	if meta.Name != "" {
+		name = meta.Name
+	}
 	if meta.Description != "" {
 		description = meta.Description
 	}
@@ -524,6 +528,7 @@ func (s *Store) UpdateSandboxMeta(ctx context.Context, projectID, sandboxID stri
 		Where("project_id = ? AND id = ?", projectID, sandboxID).
 		Where("meta_observed_at IS NULL OR meta_observed_at < ?", observedAt).
 		UpdateColumns(map[string]any{
+			"meta_name":        name,
 			"description":      description,
 			"tags":             string(encoded),
 			"meta_observed_at": observedAt,

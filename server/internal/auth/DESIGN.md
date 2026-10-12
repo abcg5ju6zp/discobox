@@ -142,7 +142,8 @@ Current authorizers:
   its power — `start`, `stop`, and `restart`, but not archive, purge,
   repair, or upgrade — only for a discobox the caller created
   ([ADR 26-10-02-478](../../../docs/adr/26-10-02-478-a-discobox-starts-and-stops-the-discoboxes-it-creates.md));
-  its meta — `PATCH .../meta`, its description and tags, but not its name —
+  its meta — `PATCH .../meta`, its name, description and tags, but not its
+  configured name —
   only for a discobox the caller created
   ([ADR 26-10-08-447](../../../docs/adr/26-10-08-447-a-discobox-tags-the-discoboxes-it-creates.md));
   and a secret request's get, approve, and deny only when a discobox the

@@ -90,6 +90,36 @@ func TestSandboxDisplayNameFallsBackToID(t *testing.T) {
 	}
 }
 
+// A name set in the sandbox's meta outranks the title its harness wrote
+// (ADR 26-10-12-026 §3): it is what a person or the agent chose to call the
+// sandbox. It is reported in meta, and the configured name is left alone.
+func TestSandboxDisplayNamePrefersTheMetaName(t *testing.T) {
+	sandbox := titledSandbox(`[{"terminalId":"exc_1","primary":true,"title":"Commit files","attacherCount":0,"execStatus":"running"}]`)
+	name := "  Daily GH Check In "
+	sandbox.MetaName = &name
+	if got := SandboxDisplayName(sandbox); got != "Daily GH Check In" {
+		t.Fatalf("display name = %q, want the name the sandbox was given", got)
+	}
+	out, err := SandboxToAPI(sandbox, nil)
+	if err != nil {
+		t.Fatalf("SandboxToAPI: %v", err)
+	}
+	meta, _ := out.Meta.Get()
+	if out.DisplayName != "Daily GH Check In" || meta.Name.Or("") != "Daily GH Check In" || out.Config.Name != "generated-name" {
+		t.Fatalf("displayName = %q, meta.name = %q, config.name = %q", out.DisplayName, meta.Name.Or(""), out.Config.Name)
+	}
+	if meta.Tags.Set || meta.Description.Set {
+		t.Fatalf("meta = %+v, want only the name: a field that is not set is left out", meta)
+	}
+
+	// Cleared, the title names it again.
+	blank := " "
+	sandbox.MetaName = &blank
+	if got := SandboxDisplayName(sandbox); got != "Commit files" {
+		t.Fatalf("display name with no name set = %q, want the title", got)
+	}
+}
+
 func TestSandboxToAPIIncludesCalculatedDisplayName(t *testing.T) {
 	sandbox := titledSandbox(`[{"terminalId":"exc_1","primary":true,"title":"fix the reaper","state":"running","attacherCount":0,"execStatus":"running"}]`)
 	out, err := SandboxToAPI(sandbox, nil)

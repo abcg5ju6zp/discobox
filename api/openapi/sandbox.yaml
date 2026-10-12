@@ -743,7 +743,7 @@ components:
                     description: The sandbox's idle-stop policy. Absent while the policy is not running, which in a configure-mode sandbox is always.
                 meta:
                     $ref: '#/components/schemas/SandboxMeta'
-                    description: The sandbox's description and tags, read from ~/.discobox/meta.json in the sandbox user's home, which is their system of record. Empty when there is no such file. Absent when the file could not be read or is not valid, in which case metaError says why.
+                    description: The sandbox's name, description and tags, read from ~/.discobox/meta.json in the sandbox user's home, which is their system of record. Empty when there is no such file. Absent when the file could not be read or is not valid, in which case metaError says why.
                 metaError:
                     description: Why the meta file could not be read. Present only when meta is absent.
                     type: string
@@ -1096,18 +1096,19 @@ components:
             type: object
         SandboxMeta:
             additionalProperties: false
-            description: A sandbox's description and tags, as the file inside it that holds them says.
+            description: A sandbox's name, description and tags, as the file inside it that holds them says. Each is optional, and an absent one is unset.
             properties:
                 description:
                     description: What the sandbox is for, in the words of whoever wrote it. May run to several lines; a listing shows the first.
+                    type: string
+                name:
+                    description: What a person or the agent calls the sandbox, on one line. When set it is the sandbox's displayName, in place of the title its harness set. It identifies nothing, and two sandboxes may share one.
                     type: string
                 tags:
                     additionalProperties:
                         type: string
                     description: Tags labeling the sandbox, key to value. A tag with an empty value is a plain label.
                     type: object
-            required:
-                - tags
             type: object
         SandboxRuntimeConfig:
             additionalProperties: false
@@ -1439,6 +1440,9 @@ components:
             properties:
                 description:
                     description: Replaces the description. An empty string clears it; omit it to leave the description alone.
+                    type: string
+                name:
+                    description: Replaces the name, with the space around it trimmed. An empty string clears it, and the sandbox is listed by its harness's title again; omit it to leave the name alone. A name is one line of at most 128 bytes.
                     type: string
                 removeTags:
                     description: Tag keys to delete. Naming a key the sandbox does not have is not an error. A key may not be both set and removed.
@@ -2336,7 +2340,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
                     description: Error response.
-            summary: Change the description or tags in the sandbox's meta file.
+            summary: Change the name, description or tags in the sandbox's meta file.
             tags:
                 - Sandbox Meta
     /api/projects/{projectId}/sandboxes/{sandboxId}/runtime-config:

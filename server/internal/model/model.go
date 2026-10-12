@@ -861,10 +861,16 @@ type Sandbox struct {
 	// stamped on the sandbox's own clock, and only a newer observation replaces
 	// an older one, so a status poll read before a write cannot land after it
 	// and undo it.
-	Tags           map[string]string `gorm:"column:tags;type:text;serializer:json" json:"tags,omitempty" doc:"The sandbox's tags as it last reported them"`
-	MetaObservedAt *time.Time        `gorm:"column:meta_observed_at" json:"metaObservedAt,omitempty" doc:"When the sandbox read or wrote Description and Tags, on its own clock" format:"date-time"`
-	CreatedAt      time.Time         `gorm:"autoCreateTime" json:"createdAt" doc:"Creation timestamp" format:"date-time"`
-	UpdatedAt      time.Time         `gorm:"autoUpdateTime" json:"updatedAt" doc:"Last update timestamp" format:"date-time"`
+	Tags map[string]string `gorm:"column:tags;type:text;serializer:json" json:"tags,omitempty" doc:"The sandbox's tags as it last reported them"`
+	// MetaName is a copy of the name in that same file (ADR 26-10-12-026):
+	// what a person or the agent calls the sandbox, and what a listing shows
+	// for it when set. It is not Name, the generated handle the sandbox was
+	// created with, which a rename leaves alone. Nil on a sandbox nobody has
+	// named, which is every row from before the column.
+	MetaName       *string    `gorm:"column:meta_name;type:text" json:"metaName,omitempty" doc:"The name in the sandbox's meta as it last reported it"`
+	MetaObservedAt *time.Time `gorm:"column:meta_observed_at" json:"metaObservedAt,omitempty" doc:"When the sandbox read or wrote MetaName, Description and Tags, on its own clock" format:"date-time"`
+	CreatedAt      time.Time  `gorm:"autoCreateTime" json:"createdAt" doc:"Creation timestamp" format:"date-time"`
+	UpdatedAt      time.Time  `gorm:"autoUpdateTime" json:"updatedAt" doc:"Last update timestamp" format:"date-time"`
 
 	Project       *Project       `gorm:"foreignKey:ProjectID" json:"-"`
 	CreatedBy     *User          `gorm:"-" json:"createdBy,omitempty" doc:"Creating user"`

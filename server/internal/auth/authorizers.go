@@ -143,7 +143,7 @@ var sandboxRole = []sandboxRoleRoute{
 	{method: http.MethodPost, path: "sandboxes/*/start", owner: createdSandbox},
 	{method: http.MethodPost, path: "sandboxes/*/stop", owner: createdSandbox},
 	{method: http.MethodPost, path: "sandboxes/*/restart", owner: createdSandbox},
-	// Changing the description and tags of a discobox the sandbox created
+	// Changing the name, description and tags of a discobox the sandbox created
 	// (ADR 26-10-08-447 §1): a lead marks a finished worker for its person.
 	{method: http.MethodPatch, path: "sandboxes/*/meta", owner: createdSandbox},
 	// The secrets it was delegated, and no others (ADR 26-09-30-782 §3): the

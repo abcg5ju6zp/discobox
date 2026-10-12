@@ -22,6 +22,13 @@ func TestParse(t *testing.T) {
 			data: `{"description": "Fixing the reaper\nand its test", "tags": {"wip": "", "ticket": "ENG-12"}}`,
 			want: Meta{Description: "Fixing the reaper\nand its test", Tags: map[string]string{"wip": "", "ticket": "ENG-12"}},
 		},
+		{
+			name: "a name alone",
+			data: `{"name": "Daily GH Check In"}`,
+			want: Meta{Name: "Daily GH Check In", Tags: map[string]string{}},
+		},
+		{name: "a line break in the name is refused", data: `{"name": "a\nb"}`, wantErr: "one line"},
+		{name: "a name too long is refused", data: `{"name": "` + strings.Repeat("n", MaxNameLength+1) + `"}`, wantErr: "longer than"},
 		{name: "a list is not meta", data: `["wip"]`, wantErr: "JSON object"},
 		{name: "an unknown field is refused", data: `{"title": "x"}`, wantErr: "unknown field"},
 		{name: "a non-string tag value is refused", data: `{"tags": {"count": 3}}`, wantErr: "JSON object"},
@@ -56,12 +63,12 @@ func TestParseRefusesAnOversizedFile(t *testing.T) {
 }
 
 func TestEncodeRoundTrips(t *testing.T) {
-	meta := Meta{Description: "what it is for", Tags: map[string]string{"zeta": "1", "alpha": ""}}
+	meta := Meta{Name: "the reaper", Description: "what it is for", Tags: map[string]string{"zeta": "1", "alpha": ""}}
 	data, err := Encode(meta)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "{\n  \"description\": \"what it is for\",\n  \"tags\": {\n    \"alpha\": \"\",\n    \"zeta\": \"1\"\n  }\n}\n"
+	want := "{\n  \"name\": \"the reaper\",\n  \"description\": \"what it is for\",\n  \"tags\": {\n    \"alpha\": \"\",\n    \"zeta\": \"1\"\n  }\n}\n"
 	if string(data) != want {
 		t.Fatalf("Encode() = %q, want %q", data, want)
 	}
@@ -136,7 +143,23 @@ func TestApply(t *testing.T) {
 		t.Fatalf("Apply() clearing the description = %q", got.Description)
 	}
 
+	named := "  Daily GH Check In  "
+	got, err = Apply(current, Change{Name: &named})
+	if err != nil || got.Name != "Daily GH Check In" || got.Description != "old" || !reflect.DeepEqual(got.Tags, current.Tags) {
+		t.Fatalf("Apply() of a name = %v, %v; want it trimmed and the rest kept", got, err)
+	}
+	// A change that names nothing else leaves a name alone, and an empty one
+	// clears it.
+	if kept, _ := Apply(got, Change{Description: &description}); kept.Name != "Daily GH Check In" {
+		t.Fatalf("Apply() of a description changed the name to %q", kept.Name)
+	}
+	if unnamed, _ := Apply(got, Change{Name: &cleared}); unnamed.Name != "" {
+		t.Fatalf("Apply() clearing the name = %q", unnamed.Name)
+	}
+	twoLines := "a\nb"
+
 	for _, bad := range []Change{
+		{Name: &twoLines},
 		{SetTags: map[string]string{"wip": "x"}, RemoveTags: []string{"wip"}},
 		{SetTags: map[string]string{"bad key": ""}},
 		{RemoveTags: []string{"a=b"}},

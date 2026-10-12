@@ -1,6 +1,7 @@
 package pools
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -235,23 +236,23 @@ func (s *Service) ReportSandboxAgentStatus(ctx context.Context, poolID string, i
 	return nil
 }
 
-// reportedMeta is the description and tags a status report carries
-// (ADR 0136), and whether it carries them to record. A report without them —
+// reportedMeta is the name, description and tags a status report carries
+// (ADR 0136), and whether it carries them to record. A report with no meta —
 // from an agent that could not read its meta file, or one older than meta —
 // leaves the recorded copy as it was: absent is "not known", and recording it
-// as empty would say the description was cleared and every tag removed. Meta
-// that is not valid is not recorded either; the sandbox agent validates what
-// it reports, so meta that fails here was not written by it.
+// as empty would say the name and description were cleared and every tag
+// removed. A meta that is there is the whole of what the file holds, and each
+// of its fields is optional (ADR 26-10-12-026 §1): one it leaves out is unset.
+// Meta that is not valid, or holds a field this server does not know, is not
+// recorded either; the sandbox agent validates what it reports, so meta that
+// fails here was not written by it.
 func reportedMeta(status map[string]jx.Raw) (sandboxmeta.Meta, bool) {
 	raw, ok := status["meta"]
-	if !ok {
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return sandboxmeta.Meta{}, false
 	}
-	var meta sandboxmeta.Meta
-	if err := json.Unmarshal(raw, &meta); err != nil || meta.Tags == nil {
-		return sandboxmeta.Meta{}, false
-	}
-	if err := meta.Validate(); err != nil {
+	meta, err := sandboxmeta.Parse(raw)
+	if err != nil {
 		return sandboxmeta.Meta{}, false
 	}
 	return meta, true

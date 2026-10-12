@@ -534,7 +534,7 @@ func TestUpdateSandboxMetaKeepsTheNewestObservation(t *testing.T) {
 	}
 
 	written := time.Now().UTC().Truncate(time.Millisecond)
-	reported := sandboxmeta.Meta{Description: "fixing the reaper", Tags: map[string]string{"wip": "", "ticket": "ENG-12"}}
+	reported := sandboxmeta.Meta{Name: "the reaper", Description: "fixing the reaper", Tags: map[string]string{"wip": "", "ticket": "ENG-12"}}
 	if err := s.UpdateSandboxMeta(ctx, "project-1", sandbox.ID, reported, written); err != nil {
 		t.Fatalf("update meta: %v", err)
 	}
@@ -556,6 +556,11 @@ func TestUpdateSandboxMetaKeepsTheNewestObservation(t *testing.T) {
 	if !reflect.DeepEqual(got.Tags, reported.Tags) {
 		t.Fatalf("tags = %v, want %v", got.Tags, reported.Tags)
 	}
+	// The name is the meta's, in a column of its own: the stale save above
+	// moved the configured name and did not touch it.
+	if got.MetaName == nil || *got.MetaName != reported.Name || got.Name != "renamed" {
+		t.Fatalf("meta name = %v, configured name = %q; want %q and the configured one saved", got.MetaName, got.Name, reported.Name)
+	}
 	if got.MetaObservedAt == nil || !got.MetaObservedAt.Equal(written) {
 		t.Fatalf("metaObservedAt = %v, want %v", got.MetaObservedAt, written)
 	}
@@ -567,7 +572,7 @@ func TestUpdateSandboxMetaKeepsTheNewestObservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
-	if got.Description != nil || len(got.Tags) != 0 || got.MetaObservedAt == nil {
+	if got.Description != nil || got.MetaName != nil || len(got.Tags) != 0 || got.MetaObservedAt == nil {
 		t.Fatalf("meta = %v %v at %v, want none recorded as observed", got.Description, got.Tags, got.MetaObservedAt)
 	}
 }

@@ -127,6 +127,7 @@ func (s *Service) exportManifest(ctx context.Context, sb *model.Sandbox) (*sandb
 		Name:        sb.Name,
 		Description: sb.Description,
 		Tags:        sb.Tags,
+		MetaName:    sb.MetaName,
 		Harness:     harness,
 		Origin:      sb.Origin,
 		Platform:    sb.Platform,
@@ -332,6 +333,10 @@ func (s *Service) ImportSandbox(ctx context.Context, projectID string, archive i
 	// and waits for that report.
 	if len(spec.Tags) > 0 && sandboxmeta.ValidateTags(spec.Tags) == nil {
 		sb.Tags = spec.Tags
+	}
+	// And of the name it was given (ADR 26-10-12-026 §2), on the same terms.
+	if spec.MetaName != nil && *spec.MetaName != "" && sandboxmeta.ValidateName(*spec.MetaName) == nil {
+		sb.MetaName = spec.MetaName
 	}
 	// The image is the destination harness config's, exactly as a create takes
 	// it from there (ADR 0123 §1). It cannot come from the archive: the rest of
