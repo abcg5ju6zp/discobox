@@ -1734,6 +1734,58 @@ func TestLocalServerEnvIncludesSupportedServerConfig(t *testing.T) {
 	}
 }
 
+// The server reads its configuration file and resolves its default directories
+// from these, and a systemd user unit does not inherit them from the shell, so
+// an autolaunch that left them out would start a server configured differently
+// from one the same shell runs with `admin server`.
+func TestLocalServerEnvForwardsConfigFileAndXDGDirs(t *testing.T) {
+	want := map[string]string{
+		ServerConfigFileEnv: "/tmp/discobox-config/server.yaml",
+		"XDG_CACHE_HOME":    "/tmp/xdg-cache",
+		"XDG_CONFIG_HOME":   "/tmp/xdg-config",
+		"XDG_DATA_HOME":     "/tmp/xdg-data",
+		"XDG_STATE_HOME":    "/tmp/xdg-state",
+	}
+	for key, value := range want {
+		t.Setenv(key, value)
+	}
+
+	env := localServerEnv("unix:///tmp/discobox/server.sock")
+	for key, value := range want {
+		if !slices.Contains(env, key+"="+value) {
+			t.Errorf("localServerEnv() missing %s=%s in %q", key, value, env)
+		}
+	}
+}
+
+// Set empty, DISCOBOX_CONFIG_FILE means read no file, which is not the same as
+// unset, so an empty value is forwarded as it is.
+func TestLocalServerEnvForwardsEmptyConfigFile(t *testing.T) {
+	t.Setenv(ServerConfigFileEnv, "")
+
+	env := localServerEnv("unix:///tmp/discobox/server.sock")
+	if !slices.Contains(env, ServerConfigFileEnv+"=") {
+		t.Fatalf("localServerEnv() dropped an empty %s in %q", ServerConfigFileEnv, env)
+	}
+}
+
+// A systemd user unit starts in the home directory, so a relative path would
+// name a different file there than it does in the shell that set it.
+func TestLocalServerEnvMakesConfigFileAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv(ServerConfigFileEnv, "mine.yaml")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	env := localServerEnv("unix:///tmp/discobox/server.sock")
+	if want := ServerConfigFileEnv + "=" + filepath.Join(wd, "mine.yaml"); !slices.Contains(env, want) {
+		t.Fatalf("localServerEnv() missing %q in %q", want, env)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
