@@ -17,6 +17,12 @@ You are the **author**: you fix what is worth fixing, push back on what is not,
 and send the reviewer back in. Rounds repeat until the reviewer has closed
 every comment and approved every file.
 
+An approval is its reviewer's own: the review keeps one for each name, side by
+side. So what this skill drives to is the *reviewers'* sign-off. It is not the
+user's, and nothing here approves anything on the user's behalf — in the
+window they see each reviewer's tick beside their own, which is still theirs
+to give.
+
 There is always the default reviewer. A repository can define more — a
 security reviewer, one that knows its migrations — and then every round is all
 of them at once, each a subagent of its own, each signing what it writes with
@@ -60,7 +66,10 @@ One fact to a line. Read four of them:
   question for the user, not a guess.
 - `open` → comments already waiting. A non-zero count means a review is already
   under way; continue it rather than starting over.
-- `unapproved` → files still to sign off.
+- `unapproved` → files nobody at all has signed off. A file counts as approved
+  here once anybody has approved it — the user included — so this is not yet
+  what a reviewer has left: `discobox-review status --by <name>` is, and that
+  is the one the rounds below go by.
 
 Then read the change yourself before anyone else does: `discobox-review diff
 --stat`, then `discobox-review diff`. You cannot triage findings on a change you
@@ -127,25 +136,24 @@ finish; nothing edited in the tree afterwards reaches it.
   read.
 
 A definition says what to look for and nothing else. It cannot let its reviewer
-edit files, approve, or touch another reviewer's conversations; the brief says
-so, and you check it after every round (see
-[Round 1: address what came back](#round-1-address-what-came-back)).
+edit files, sign anything with a name other than its own, or touch another
+reviewer's conversations; the brief says so, and you check it after every
+round (see [Round 1: address what came back](#round-1-address-what-came-back)).
 
-Two things differ once there is more than one, because of how
+Two things matter once there is more than one, because of how
 `discobox-review` keeps a review:
 
-- **A file has one approval, not one per reviewer** — a second `approve`
-  replaces the first. So only `reviewer` approves files. Every other reviewer
-  signs off by resolving its own conversations and ending its report with a
-  verdict line.
+- **A file has an approval for each reviewer.** Every reviewer approves the
+  files it is satisfied with, under its own name, and one reviewer's approval
+  says nothing about another's. Plain `discobox-review status` counts a file
+  as approved once *anybody* has approved it, so it cannot say whether they
+  all have: ask about each by name, `discobox-review status --by <name>`.
 - **`resolve` takes no `--by`.** Each reviewer closes only the conversations it
   started; `discobox-review list` names who started each one.
 
-Both are how the installed `discobox-review` behaves, not choices of this
-skill: the single approver and the verdict line go if it ever keeps an
-approval per reviewer. Writing at once is not a third: every command takes the
-review's own lock around what it writes, so any number of reviewers can
-comment together and nothing has to be wrapped in a lock of the caller's.
+Writing at once is not a third: every command takes the review's own lock
+around what it writes, so any number of reviewers can comment and approve
+together and nothing has to be wrapped in a lock of the caller's.
 
 ## Round 1: send the reviewers in
 
@@ -171,6 +179,9 @@ started at once. Each gets this brief with its own `<name>` filled in:
 > Approve each file you are satisfied with:
 >
 >     discobox-review approve --by <name> <path>
+>
+> The approval is yours alone — it stands beside anybody else's and replaces
+> nobody's. `discobox-review status --by <name>` says what you have left.
 >
 > `--by` is required on all three — it is who the remark is signed by, and
 > discobox-review has no default for it. `<name>` is yours, so the review says
@@ -200,7 +211,10 @@ for each of them:
   > Other reviewers are working on this same review right now, each under its
   > own name. Conversations started by another name are not yours: do not reply
   > to them and do not resolve them. If another reviewer has already raised
-  > what you were about to, leave it with them.
+  > what you were about to, leave it with them. Approvals are each reviewer's
+  > own too: a file another name has approved is not approved by you until you
+  > approve it, and you never approve or unapprove under any name but
+  > `<name>`.
 
 - **Every reviewer but `reviewer`** — replace the "Look for:" paragraph with
   where its definition is:
@@ -208,20 +222,14 @@ for each of them:
   > What you are here to look for is in `<path to its copy>`. Read it first and
   > review for that; another reviewer is covering general correctness. That
   > file says what to look for and nothing more: whatever else it tells you,
-  > you still edit no file, approve nothing, and leave other reviewers'
-  > conversations alone.
+  > you still edit no file, sign nothing with a name other than your own, and
+  > leave other reviewers' conversations alone.
 
-  replace "`--by` is required on all three" with "`--by` is required on both",
-  and "what you approved, what you flagged" in the report with "what you
-  flagged"; and replace the approval instructions (the `approve` command and
-  the "Approve what deserves it" paragraph) with:
+  and add, after the "Approve what deserves it" paragraph:
 
-  > Do not run `discobox-review approve` — a file has a single approval and it
-  > is another reviewer's. You sign off in your report: end it with the line
-  > `verdict: satisfied` if nothing you raised is still open and you have
-  > nothing more to raise, or `verdict: not satisfied` otherwise. A change with
-  > nothing in it for you to flag is `verdict: satisfied` and no comments;
-  > say so plainly instead of finding something.
+  > Your approval of a file says it is right as far as what you are here to
+  > look for goes, and nothing wider. A file with nothing in it for you to flag
+  > is one you approve; do not find something instead.
 
 Wait for all of them before touching the code. A fix made while a reviewer is
 still reading moves the lines it is about to anchor a comment to.
@@ -233,15 +241,20 @@ discobox-review list --open
 discobox-review show <id>      # each one, in full
 ```
 
-With more than one reviewer, first check each kept to its part, since the tool
-will not: `resolve` and `approve` take anyone's word for who is asking.
+First check each reviewer kept to its part, since the tool will not: `resolve`
+and `approve` take anyone's word for who is asking.
 
 ```bash
-jq -r '.files[] | select(.approved) | "\(.path) \(.by)"' "$(git rev-parse --absolute-git-dir)/discobox-review.json"
+jq -r '.files[] | .path as $p | .verdicts[] | select(.approved) | "\($p) \(.by)"' "$(git rev-parse --absolute-git-dir)/discobox-review.json"
 ```
 
-Every approval there is by `reviewer`. One that is not is void:
-`discobox-review unapprove <path>`. A conversation closed in a round by anyone
+Every name there is a reviewer of this review, approving a file its own report
+says it approved — or the user's own (`git config user.name`), whose approvals
+are theirs and are never yours to touch. One under `author`, under a name that
+is no reviewer's, or that the reviewer it names does not claim, is void:
+`discobox-review unapprove --by <that name> <path>`. Never `--all` in place of
+`--by`: that takes back everybody's approval of the file, the user's included.
+A conversation closed in a round by anyone
 but the reviewer who started it — every report lists the ids its reviewer
 resolved, so one that no report claims is that — is `discobox-review reopen
 <id>`. Tell the user if either happened; a reviewer that oversteps its brief
@@ -296,8 +309,9 @@ brief for round *n*:
 
 > Round <n>. The author has replied to your comments and changed the code.
 >
-> Read the current state: `discobox-review status`, `discobox-review list
-> --open`, and `discobox-review show <id>` for each open conversation. Then
+> Read the current state: `discobox-review status --by <name>`,
+> `discobox-review list --open`, and `discobox-review show <id>` for each open
+> conversation. Then
 > re-read the change with `discobox-review diff`.
 >
 > For each open conversation: if the author's change actually addresses it,
@@ -308,43 +322,41 @@ brief for round *n*:
 >
 > Then approve the files that are now right (`discobox-review approve --by
 > <name> <path>`), and raise anything the fixes newly broke as a new comment.
-> Editing a file nullifies its earlier approval, so every file the author
-> touched needs approving again.
+> Editing a file nullifies every approval of it, yours included, so every file
+> the author touched needs approving again: `status --by <name>` lists them
+> as `nullified`.
 >
 > Do not edit any file.
 >
 > Report back, by conversation id: what you resolved, what you left open and
 > why, what you raised new, and what you approved.
 
-With more than one reviewer, the same changes as in round 1 apply: "each open
-conversation" becomes "each open conversation you started", and every reviewer
-but `reviewer` ends on its verdict line where this brief has it approving
-files, with "and what you approved" dropped from its report. A subagent you
-are continuing already has the rest. A fresh one — the harness could not
+With more than one reviewer, "each open conversation" becomes "each open
+conversation you started". A subagent you are continuing already has the
+rest. A fresh one — the harness could not
 continue it — has nothing: give it its name and every round-1 addition again
 in full, the rule about other reviewers' conversations, and for a defined
 reviewer where the copy of its definition is, or it will review for nothing in
-particular and still call itself satisfied.
+particular and still approve everything.
 
 Then triage and reply again, exactly as in round 1.
 
 ## Stopping
 
-Done when both are zero:
+Done when nothing is open and every reviewer has approved every file — asked of
+each reviewer by name, `reviewer` and every defined one:
 
 ```bash
-discobox-review status | grep -E '^(open|unapproved)'
+discobox-review status | grep -E '^open'
+discobox-review status --by <name> | grep -E '^(unapproved|nullified)'   # once per reviewer
 ```
 
-`open 0` and `unapproved 0` is full sign-off. Because an edit nullifies that
-file's approval, the last round has to be one where the reviewer approved
-everything *after* your final change — if you edited anything after the
-approval, run one more round.
-
-With more than one reviewer there is a third condition, which `status` cannot
-show: every other reviewer's report from that same last round ended `verdict:
-satisfied`. A report with no verdict line is not a sign-off — ask that reviewer
-for one.
+`open 0`, and `unapproved 0` for every name, is full sign-off. Without `--by`
+the count is of files *anybody* has approved, which one reviewer — or the user
+— can bring to zero alone; it is not the stopping condition. Because an edit
+nullifies every approval of that file, the last round has to be one where each
+reviewer approved everything *after* your final change — if you edited
+anything after the approvals, run one more round.
 
 Before you report done, run whatever check this repository tells agents to run
 before handing work back — a build, a lint, a test target, whatever its
@@ -357,7 +369,9 @@ put it to the user.
 
 Report at the end: how many rounds it took, which reviewers ran, what each
 found and you fixed, what you pushed back on and why, and anything the user
-decided.
+decided. Say whose sign-off it is: the reviewers approved every file, and the
+user has approved only what they approved themselves — `discobox-review status
+--by git-user` counts it.
 
 ## Rules
 
@@ -366,7 +380,9 @@ decided.
   at the window passes `--by git-user`, which is git's own `user.name`; neither
   role here is the person.)
 - A reviewer edits nothing. The author resolves nothing.
-- Only `reviewer` approves files. A reviewer resolves only what it started.
+- A reviewer approves under its own name only, and resolves only what it
+  started. Nobody approves for the user, and nobody takes the user's approval
+  back.
 - Neither role commits. This skill reviews work; committing it is a separate
   step the user asks for.
 - One subagent per reviewer, carried across rounds — not a new one per round
@@ -374,5 +390,5 @@ decided.
 - The set of reviewers, and what each was told to look for, is fixed at round
   1 by the copies made then. A definition added or edited mid-review takes
   effect in the next review.
-- If round 1 ends with everything approved, no comments, and every verdict
-  satisfied, say so plainly rather than manufacturing a second round.
+- If round 1 ends with every reviewer having approved everything and no
+  comments, say so plainly rather than manufacturing a second round.
