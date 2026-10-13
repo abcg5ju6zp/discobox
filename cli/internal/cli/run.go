@@ -622,10 +622,15 @@ func (a *App) attachRunSandbox(cmd *cobra.Command, projectID string, sandbox *ap
 // window — is gone from the terminal by then, and with it the only place the
 // discobox was named, so somebody who detached would otherwise be left not
 // knowing which one is still running for them.
+//
+// It says what was made and nothing about what to do with it: the discobox
+// may have been archived from the window, the attach may have failed, and a
+// command to return to it would have to repeat the --server and --project
+// this one was given.
 func reportRunSandbox(w io.Writer, id, name string) {
 	if name = strings.TrimSpace(name); name != "" && name != id {
-		fmt.Fprintf(w, "Discobox %s (%s); \"discobox attach %s\" to return to it\n", id, terminalSafe(name), id)
+		fmt.Fprintf(w, "Created discobox %s (%s)\n", id, terminalSafe(name))
 		return
 	}
-	fmt.Fprintf(w, "Discobox %s; \"discobox attach %s\" to return to it\n", id, id)
+	fmt.Fprintf(w, "Created discobox %s\n", id)
 }

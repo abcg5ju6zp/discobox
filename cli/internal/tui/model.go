@@ -524,12 +524,20 @@ func New(ctx context.Context, ds DataSource, options ...Option) *Model {
 // workspace does.
 func (m *Model) oneShot() bool { return m.oneRun || m.attach != nil }
 
-// made is the discobox a window opened on one run made, and nil for any other
-// window or a run that made none. Such a run's window is the attach on what it
-// made, so that is where it is kept (see created).
+// made is the discobox a window opened on one run made, as the listing last
+// had it — its name is the primary terminal's title once there is one, which
+// the create could not know. It is nil for any other window, and for a run
+// whose window was left before the create came back: that discobox may still
+// come up, and nothing here knows what it is called. Such a run's window is
+// the attach on what it made, so that is where it is kept (see created).
 func (m *Model) made() *Sandbox {
-	if !m.oneRun {
+	if !m.oneRun || m.attach == nil {
 		return nil
+	}
+	for _, s := range m.list.all {
+		if s.ID == m.attach.ID {
+			return &s
+		}
 	}
 	return m.attach
 }
