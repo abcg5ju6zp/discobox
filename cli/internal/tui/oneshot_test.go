@@ -291,13 +291,14 @@ func TestEscOnAOneShotWaitLeavesTheDiscoboxStarting(t *testing.T) {
 }
 
 // The launcher's own wait is unchanged: Esc stops watching and puts back the
-// list, which is where the discobox it was waiting for turns up.
+// list, which is where the discobox it was waiting for turns up. What stopping
+// takes down with it is TestStoppingTheWaitStopsTheAttachUnderIt.
 func TestTheLaunchersWaitOnlyStopsWatching(t *testing.T) {
 	t.Parallel()
 	m := &Model{st: newStyles(false)}
 	d := m.waitDialog("Starting nimble_swan", "creating the discobox")
-	if d.onCancel != nil || d.footer != "" {
-		t.Fatalf("the launcher's wait should offer nothing but stopping watching: %+v", d)
+	if len(d.keys) != 0 || d.footer != "" {
+		t.Fatalf("the launcher's wait should offer nothing but stopping watching: keys %v, footer %q", d.keys, d.footer)
 	}
 }
 
