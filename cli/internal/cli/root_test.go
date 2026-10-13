@@ -1779,7 +1779,9 @@ func TestLocalServerEnvIncludesSupportedServerConfig(t *testing.T) {
 // from one the same shell runs with `admin server`.
 func TestLocalServerEnvForwardsConfigFileAndXDGDirs(t *testing.T) {
 	want := map[string]string{
-		ServerConfigFileEnv: "/tmp/discobox-config/server.yaml",
+		// Already absolute on whatever this runs on, so it is forwarded as it
+		// is; a Unix-shaped literal is not absolute on Windows.
+		ServerConfigFileEnv: filepath.Join(t.TempDir(), "server.yaml"),
 		"XDG_CACHE_HOME":    "/tmp/xdg-cache",
 		"XDG_CONFIG_HOME":   "/tmp/xdg-config",
 		"XDG_DATA_HOME":     "/tmp/xdg-data",
