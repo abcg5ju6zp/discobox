@@ -827,6 +827,17 @@ so where a server's output lives does not depend on whether this machine had
 `systemd-run`. `discobox admin server logs` reads it back, with `--follow`,
 `--tail`, `--previous`, and `--path`.
 
+What a server launched as a systemd user unit sees of the CLI's environment is
+the list `localServerEnv` sets and nothing else: the unit starts from the user
+manager's environment, in the home directory. One executed directly inherits
+the rest as well. The list is chosen,
+not every setting the server reads. It carries `DISCOBOX_CONFIG_FILE` (made
+absolute) and the `XDG_*_HOME` directories, so an autolaunched server looks for
+`server.yaml` and resolves its default directories where `admin server` from
+the same shell would. A shell that sets an `XDG_*_HOME` the user manager does
+not have therefore moves an autolaunched server's defaults to it, and nothing
+migrates what the old directories held.
+
 Advanced configuration and low-level resource commands are grouped beneath the
 visible `discobox admin` command (`internal/cli/admin.go`): `project`, `box`,
 `terminal`, `exec`, `services`, `provider`, `pool`, `job`, `harnesses`,

@@ -766,6 +766,18 @@ func (a *App) notify(text string) {
 // server is this user's, and opening a TCP port on their machine is not
 // something running `discobox` should imply. An operator who needs HTTP names it
 // in DISCOBOX_SERVER_LISTEN and runs the server themselves.
+//
+// The launch does not always inherit the rest of this process's environment:
+// on Linux the server runs as a systemd user unit, which starts from the user
+// manager's environment and in the home directory. So what the list below names
+// is all the unit sees of this shell, and it is a chosen list, not every
+// setting the server can read. It includes the configuration file the shell
+// names and the XDG directories the server's default paths are resolved under,
+// so a server autolaunched from a shell that set them reads the server.yaml,
+// and uses the directories, that `admin server` from that shell would. The
+// file is made absolute for the same reason `admin server --config-file` makes
+// its own so: a relative one would name a different file from the unit's
+// working directory.
 func localServerEnv(endpoint string) []string {
 	env := []string{
 		"DISCOBOX_SERVER_LISTEN=" + endpoint,
@@ -778,6 +790,7 @@ func localServerEnv(endpoint string) []string {
 		"DATABASE_DSN",
 		"DATABASE_READ_DSN",
 		"DISCOBOX_CACHE_DIR",
+		ServerConfigFileEnv,
 		"DISCOBOX_CONFIG_DIR",
 		"DISCOBOX_DATA_DIR",
 		"DISCOBOX_DEFAULT_DISCOBOX_IMAGE",
@@ -787,10 +800,22 @@ func localServerEnv(endpoint string) []string {
 		"OTEL_METRICS_EXPORTER",
 		"PATH",
 		"PORT",
+		"XDG_CACHE_HOME",
+		"XDG_CONFIG_HOME",
+		"XDG_DATA_HOME",
+		"XDG_STATE_HOME",
 	} {
-		if value, ok := os.LookupEnv(key); ok {
-			env = append(env, key+"="+value)
+		value, ok := os.LookupEnv(key)
+		if !ok {
+			continue
 		}
+		// Empty stays empty: that is how the server is told to read no file.
+		if key == ServerConfigFileEnv && strings.TrimSpace(value) != "" {
+			if absolute, err := filepath.Abs(strings.TrimSpace(value)); err == nil {
+				value = absolute
+			}
+		}
+		env = append(env, key+"="+value)
 	}
 	return env
 }
