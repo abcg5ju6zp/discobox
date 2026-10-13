@@ -878,10 +878,10 @@ chosen folder or tag stays among the choices after its last box leaves it, so
 the choice never vanishes from under what the list is showing. The tags narrow
 the list only; unlike the other two they say nothing about where a create goes.
 
-**The filters are one filter.** `sandboxList.inView` is the server, the
-folder and the tags together, and everything that counts discoboxes counts through it — the
-rows, the archived offer — so a filter added to one count cannot be forgotten
-in another. The card counts the same way: it holds a copy of the list carrying
+**The filters are one filter.** `sandboxList.rows` applies the server, the
+folder and the tags together, and everything that counts discoboxes counts what it
+draws (`sandboxList.count`) — the band, the archived offer — so a filter added
+to one count cannot be forgotten in another. The card counts the same way: it holds a copy of the list carrying
 the marks so far, and each choice's count is what the list would show with
 that choice marked beside the others. The folders offered are the ones on the
 server marked and the tags the ones inside both, re-read as marks change,
@@ -927,7 +927,8 @@ the window's own first), since the rows carry no folder column. On both, a
 section is a folder and a server at once; a filter narrowed to one value drops
 out of the sections, because the header has said the name, so one server and
 one folder is no sections at all. Rows are ordered by section — folders leading,
-each one's servers under it — and newest-first within one, and each section is
+each one's servers under it — and newest-first within one, a created discobox
+under its creator (see "A discobox a discobox created is drawn under it"), and each section is
 introduced by the band the list's own title is drawn as (`renderTitle`, in the
 dim of the two): `server <name>`, the folder's label, or `<folder> on <server>`,
 with that section's count; or `server <name>` and `not answering` for a
@@ -2503,8 +2504,45 @@ discoboxes with no source, which are filed under the machine alone
 offered as a folder of its own. The choices come from the listing itself, so the
 only folders offered are ones with something in them (plus the window's own,
 always, since that is where a new sandbox would go). Because every row on screen
-has already been filtered to one folder, the row carries no folder column: it
-would repeat one value down the whole list.
+has already been filtered to one folder — or is nested under one that has —
+the row carries no folder column: it would repeat one value down the whole list.
+
+**A discobox a discobox created is drawn under it** (`Sandbox.CreatedBy`,
+`sandboxList.nest`). A lead and the workers it launched are one piece of work,
+so the rows are ordered as trees: a created discobox directly under its
+creator, behind a dim branch (`├ `, `└ `) that sits after the state glyph —
+the glyphs stay one column — and comes out of the name's width. Tops, and the
+rows under one creator, keep the listing's order.
+
+Nesting does not re-file anything. A discobox's folder is still the key the
+server stored (below), and a created discobox's is often not its creator's:
+one cut from a checkout inside the creator records the creator as the machine
+and a path inside it, and nothing makes a creator and what it creates share a
+source. So a discobox is drawn under its creator wherever the creator is
+drawn, whatever folder it is filed in, *and* in its own folder like any other
+row. Where those are the same section it is drawn once, nested. Where they are
+not — `all folders`, with the two filed apart — it is on two rows: nested
+under its creator, and in its own folder's section, nested under nothing and
+carrying the `from …` qualifier below. A row nested under its creator drops
+that qualifier, which would name the creator as a machine. The header's count
+and a command's targets are of discoboxes, so one on two rows counts and is
+acted on once (`targets`, `selectionCount`); a refresh keeps the cursor on the
+row it was on (`Sandbox.under`).
+
+The filters that are about the discobox itself — server, tags, archived —
+apply to a nested row as to any (`shown`); only the folder does not. A row
+nests under the nearest creator that is shown, so one whose creator is
+archived and hidden, or lacks a tag the header names, moves up a level, or is
+drawn in its own folder alone. Creators are looked up per server, since an ID
+is one server's.
+
+Every count is of the discoboxes the list draws (`sandboxList.count`): the
+band, a section, the filter card's choices, the archived offer, a committed
+visual range. So a folder's count on the card includes what is nested under
+its discoboxes, and can be more than `discobox ls` lists there. The tags the
+card offers are the folder's own discoboxes' (`tagChoices`): a tag only a
+nested row carries would narrow the list to nothing, since its creator lacks
+it.
 
 **A discobox created on another machine says so beside its name**
 (`Sandbox.elsewhere`). A folder's name cannot say it: two machines can hold the

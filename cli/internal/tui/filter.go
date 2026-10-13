@@ -10,7 +10,7 @@ import (
 
 // The header's filter is one control: a line saying what the list is narrowed
 // to, and one card that changes all of it. The server, the folder and the tags
-// are one filter (sandboxList.inView), so they are chosen on one card rather
+// are one filter (sandboxList.nest), so they are chosen on one card rather
 // than three dropdowns: each dropdown answered one question with the other two
 // held still, where the card shows every choice at once, counted against
 // the others as they are marked, and applies them together.
@@ -135,13 +135,7 @@ func (p *filterPicker) shows(name string) bool {
 func (p *filterPicker) count(mark func(l *sandboxList)) int {
 	l := p.list
 	mark(&l)
-	n := 0
-	for _, s := range l.all {
-		if l.inView(s) && (l.showArchived || s.State != StateArchived) {
-			n++
-		}
-	}
-	return n
+	return l.count()
 }
 
 // serverDetail is what a server is worth knowing beside its count: which one

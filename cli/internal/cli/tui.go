@@ -834,6 +834,8 @@ func toTUISandbox(sb apimodel.Sandbox, hostID string) tui.Sandbox {
 		Message:    sandboxMessage(sb),
 		Created:    sb.CreatedAt,
 	}
+	// The discobox that created it, which the list nests it under.
+	row.CreatedBy = strings.TrimSpace(sb.CreatedBySandboxId.Or(""))
 	// Where the discobox is filed: what the header filter's folder matches it
 	// against (ADR 0111). Read, not derived, so the window never files a row
 	// somewhere the server did not.
