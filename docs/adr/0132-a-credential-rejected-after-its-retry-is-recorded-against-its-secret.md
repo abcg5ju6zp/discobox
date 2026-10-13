@@ -1,6 +1,6 @@
 # 0132 — A credential rejected after its retry is recorded against its secret
 
-- **Status**: Accepted
+- **Status**: Accepted (§1's reporting of every outcome, and the consequence that a `401` unrelated to the credential marks it rejected, superseded for a harness credential that declares a rejection scope by [26-10-13-595](26-10-13-595-a-harness-names-the-requests-whose-refusal-means-its-login-is-dead.md))
 - **Date**: 2026-09-18
 
 ## Context
