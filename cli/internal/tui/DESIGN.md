@@ -1176,10 +1176,12 @@ streaming a terminal of its own.
   and an attach that never came up exits carrying its own failure, which `Run`
   hands back as the command's error. A run's window also hands back the
   discobox it made (`Model.made`), and `discobox new` names it on stderr once
-  the window is gone, since the screen that named it went with the window. The key still reads `detach`, because that
-  is what it does to the discobox — nothing stops — and the header drops the
-  `leader q quit` half beside it, since quit and detach are the same act in
-  such a window and offering both reads as a choice between them.
+  the window is gone, since the screen that named it went with the window; a
+  window left before the create came back has none to name. The key still
+  reads `detach`, because that is what it does to the discobox — nothing
+  stops — and the header drops the `leader q quit` half beside it, since quit
+  and detach are the same act in such a window and offering both reads as a
+  choice between them.
 - The composer is unreachable in such a window, so the console's draft is
   neither restored into it nor written over (`restoreDraft`, `draftToSave`), and
   the introduction is not shown (`New`): there is no prompt for it to interrupt

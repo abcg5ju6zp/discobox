@@ -13,9 +13,9 @@ import (
 // because Bubble Tea v2 decides it per frame.
 //
 // A window opened on one run (WithRun) also returns the discobox that run made,
-// and nil if it never made one: the alternate screen takes everything the window
-// showed with it, so the command that opened it is what is left to say which
-// discobox it was.
+// and nil if the window was left before the create came back: the alternate
+// screen takes everything the window showed with it, so the command that opened
+// it is what is left to say which discobox it was.
 func Run(ctx context.Context, ds DataSource, options ...Option) (*Sandbox, error) {
 	model := New(ctx, ds, options...)
 	program := tea.NewProgram(model, tea.WithContext(ctx))
