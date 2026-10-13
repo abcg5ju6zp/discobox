@@ -249,6 +249,44 @@ until curl -s 127.0.0.1:18471/projects | grep -q '"id"'; do sleep 1; done
   json` (`.jobs[]`, by `resourceId`) for `attempts`/`error` and the log for
   `reconcile failed`. List outputs are wrapped (`.pools[]`, `.providers[]`).
 
+## The CLI's autolaunch, as a systemd user unit
+
+A box has no user manager, so the autolaunch falls back to executing the
+server directly, which inherits the whole environment and hides anything the
+unit path would drop. Bring one up first (all of it is under `/run`, gone with
+the box):
+
+```bash
+sudo mkdir -p /run/systemd/system/user@$UID.service.d /run/user/$UID
+sudo chown $UID: /run/user/$UID && sudo chmod 700 /run/user/$UID
+printf '[Service]\nEnvironment=XDG_RUNTIME_DIR=/run/user/%s\n' $UID |
+  sudo tee /run/systemd/system/user@$UID.service.d/verify.conf
+sudo systemctl daemon-reload && sudo systemctl start user@$UID.service
+export XDG_RUNTIME_DIR=/run/user/$UID; unset DBUS_SESSION_BUS_ADDRESS
+mkdir -p $XDG_RUNTIME_DIR/systemd/user
+printf '[Socket]\nListenStream=%%t/bus\n' > $XDG_RUNTIME_DIR/systemd/user/dbus.socket
+printf '[Service]\nExecStart=/usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile\n' \
+  > $XDG_RUNTIME_DIR/systemd/user/dbus.service
+systemctl --user daemon-reload && systemctl --user start dbus.socket
+systemd-run --user --quiet --collect --wait --pipe -- /bin/pwd   # prints $HOME when it works
+```
+
+Then, with no server of yours running and a fresh `SOCK` and fresh directories
+(a server already on that socket answers, and nothing is launched), from
+`env -i` with only `HOME`, `PATH`, `XDG_RUNTIME_DIR`, the `DISCOBOX_*_DIR`s
+and `DISCOBOX_ENV_FILE` of the isolated server above, plus
+`DISCOBOX_SERVER_BINARY=<your build>` and whatever the launch is meant to
+carry (`DISCOBOX_CONFIG_FILE=<file>`, an `XDG_*_HOME`):
+`discobox --server unix://$SOCK/s.sock --auto-start-server=true ls`. The
+server's output is `$DISCOBOX_STATE_DIR/*.log`; `systemctl --user list-units
+'discobox*'` shows the unit.
+
+- To see what configuration reached the server without it creating a pool,
+  name a config file in `DISCOBOX_CONFIG_FILE` holding `databaseDsn: postgres://127.0.0.1:1/none`: it
+  logs `configuration: read <path>` and then exits on the database.
+- One that does start created a real pool: clean it up as above, after
+  `admin server shutdown`, then `sudo systemctl stop user@$UID.service`.
+
 ## A lead discobox's calls (the sandbox role)
 
 The dev loop judges every `discobox-access run` with the project's default
