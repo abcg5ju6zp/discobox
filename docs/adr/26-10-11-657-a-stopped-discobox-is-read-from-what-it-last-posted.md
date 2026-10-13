@@ -1,6 +1,9 @@
 # 26-10-11-657 — A stopped discobox is read from what it last posted
 
 - **Status**: Accepted
+- **Amended by**: [26-10-12-711](26-10-12-711-using-a-failed-discobox-with-no-container-repairs-it-once.md) — which reads never start a discobox (§4) is a
+  use the control plane marks on the request, and the pool agent obeys the
+  mark; it registers no route as `requireRunning` itself
 - **Date**: 2026-10-11
 - **Relates to**: [ADR 0030](0030-pool-agent-polls-and-pushes-sandbox-agent-status.md),
   the channel this extends, and whose §3 it supersedes in part;

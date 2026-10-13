@@ -118,7 +118,8 @@ created one. No inventory, or none of that part, is a 409 naming
 `discobox start`; an exec or service the list does not hold is a 404. It is
 authorized exactly as the live read is.
 
-`AcquireRunningSandboxHTTPClient` is the acquire for those reads. It leases
+`AcquireRunningSandboxHTTPClient` is the acquire for those reads, whose use is
+an inspect or, for the screen, an observe. It leases
 as `AcquireSandboxHTTPClient` does — the pool agent, not the row, says
 whether the sandbox is running — and refuses with `sandbox.ErrNotRunning`
 only a sandbox recorded as stopped whose pool is not reachable.
@@ -135,8 +136,9 @@ that mark.
 | Use | Routes | Stopped sandbox | Not usable yet | Failed, no container |
 | --- | --- | --- | --- | --- |
 | action | exec attach, create, input, start, delete; service start, stop, restart; HTTP, tcp and udp; ssh; the worktree's git; the judge; harness configure; meta write | the pool is asked to start it before the lease is handed out | waited for | repaired, once |
-| read | exec list, get, logs, events, resources; service list, get, logs; tools; a source's origin, and what the pool's cache holds of it | started by the pool agent when the request arrives | answered at once | answered at once |
-| observe | terminal screen, exec wait, exec-events, harness-hooks | refused by the pool agent | answered at once | answered at once |
+| read | exec logs, events, resources; service logs; a source's origin, and what the pool's cache holds of it | started by the pool agent when the request arrives | answered at once | answered at once |
+| inspect | exec list and get; service list and get; tools | never started: the pool agent waits out a boot under way and refuses it otherwise, and the refusal is answered from the sandbox's last inventory ([below](#a-sandbox-that-is-not-running-is-read-from-its-inventory)) | answered at once | answered at once |
+| observe | terminal screen, exec wait, exec-events, harness-hooks | refused by the pool agent, a boot under way included; the screen is answered from the inventory | answered at once | answered at once |
 
 `AcquireSandboxHTTPClientForServer` is the same acquire for a call the server
 makes itself, with no caller scopes to check: putting a job to the project's
