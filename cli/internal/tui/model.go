@@ -2759,6 +2759,17 @@ func (m *Model) waitDialog(title, body string) *dialog {
 		// the reassurance, not an offer, so it names no key.
 		d.keys = []hint{pressing("Esc closes this window", "esc"), says("the discobox carries on")}
 		d.onCancel = func() tea.Cmd { return m.exit(nil) }
+		return d
+	}
+	// The wait is over a workspace already opening underneath it, so leaving
+	// the wait leaves that too. Taking down only the dialog would leave the
+	// attach running behind the list, and the pane it opens would take the
+	// screen back the moment the discobox came up — from somebody who had
+	// just said they were not watching.
+	d.onCancel = func() tea.Cmd {
+		m.closeWorkspace()
+		m.layout()
+		return tea.Batch(m.refresh(), status("stopped watching — the discobox is still starting"))
 	}
 	return d
 }

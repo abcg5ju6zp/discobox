@@ -1221,7 +1221,9 @@ streaming a terminal of its own.
   touched: it was created before the wait went up, or is being created by a
   request the server already has, and it carries on coming up with nothing
   attached to it. The console's wait keeps the plain "Esc stops watching",
-  which there means going back to the list the discobox will appear in.
+  which there means going back to the list the discobox will appear in — and
+  staying on it: the workspace that was opening under the wait is closed with
+  it, so the discobox coming up does not take the screen back.
 - The window is the attach on what it opened or made — a run becomes one in
   `created` — so every way out of the workspace is the way out of the window:
   the leader's `d` and the primary session ending both go through `Model.exit`,

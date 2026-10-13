@@ -81,3 +81,30 @@ func TestSandboxLabelPrefersTheName(t *testing.T) {
 		t.Fatalf("sandboxLabel() = %q", got)
 	}
 }
+
+// Esc on the launcher's wait is "I am not watching this one", so the attach
+// that was opening underneath goes with the dialog: its answer, arriving once
+// the discobox is up, must not put a pane over the list somebody went back to.
+func TestStoppingTheWaitStopsTheAttachUnderIt(t *testing.T) {
+	t.Parallel()
+	m := newTestModel(t, newFakeSource())
+	m.created(createdMsg{sandbox: Sandbox{ID: "sbx_1", Name: "nimble_swan"}, accepted: true})
+	if m.dialog == nil || m.dialog.kind != dlgStatus {
+		t.Fatal("creating a discobox did not put the wait up")
+	}
+	opening := m.wsGen
+
+	m.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.dialog != nil {
+		t.Fatal("Esc did not take the wait down")
+	}
+	if m.quit {
+		t.Fatal("stopping the launcher's wait closed the window")
+	}
+
+	// The listing the attach was waiting on, answered after the fact.
+	m.update(workspaceExecsMsg{gen: opening})
+	if m.inPanes() || m.connecting[ExecPrimary] {
+		t.Fatal("the discobox took the screen after the wait for it was stopped")
+	}
+}
