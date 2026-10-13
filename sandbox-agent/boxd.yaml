@@ -339,7 +339,7 @@ layers:
       - name: discobox-review
         run: |
           set -eux
-          REVIEW_VERSION=v0.0.0-20261011022441-c86837f0edb1
+          REVIEW_VERSION=v0.0.0-20261013064909-4f0ca443f7cf
           export GOPATH=/var/tmp/discobox-go GOCACHE=/var/tmp/discobox-go/cache
           CGO_ENABLED=0 GOBIN=/usr/local/bin \
               go install -trimpath -ldflags="-s -w" "github.com/discobox-ai/review/cmd/discobox-review@${REVIEW_VERSION}"
