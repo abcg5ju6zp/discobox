@@ -14,6 +14,9 @@
   only under an `automatic` upgrade policy);
   [0039](0039-attach-waits-for-readiness-at-every-tier.md) (tier 1 waits for
   every action, not only attach, and tier 2 no longer waits for a container).
+  [26-10-11-657](26-10-11-657-a-stopped-discobox-is-read-from-what-it-last-posted.md) §4 (which reads never start a sandbox is marked on the request by
+  the control plane, not registered per route in the pool agent; what those
+  reads are answered with is unchanged).
 - **Issue**: [#154](https://github.com/discobox-ai/discobox/issues/154)
 
 ## Context
@@ -56,17 +59,21 @@ Every route into a sandbox acquires its pool client at one choke point
 | Use | Routes | Starts a stopped sandbox | Repairs a failed one with no container |
 | --- | --- | --- | --- |
 | action | exec attach, create, input, start, delete; service start, stop, restart; HTTP, tcp and udp traffic; ssh; the worktree's git; the judge; harness configure; meta write | yes | yes, once |
-| read | exec list, get, logs, events, resources; service list, get, logs; tools | yes, as before | no |
-| observe | terminal screen, exec wait, exec-events, harness-hooks | no | no |
+| read | exec logs, events, resources; service logs | yes, as before | no |
+| inspect | exec list and get; service list and get; tools | no: it waits out a boot something else began | no |
+| observe | terminal screen, exec wait, exec-events, harness-hooks | no, and a boot under way is refused too | no |
 
 A sandbox's origin repositories are served by the pool, not the sandbox, so
 that route is a read: it repairs nothing and waits for nothing, and the pool
 agent starts a stopped sandbox for it as it did before.
 
-Reads keep starting a stopped sandbox until they are served from its last
-report ([#155](https://github.com/discobox-ai/discobox/issues/155)). They are
-excluded from repair now because there will be no reason to rebuild a sandbox
-to answer one.
+The inspects and the screen are the reads ADR 26-10-11-657 answers from the
+sandbox's last inventory while it is not running. That ADR had the pool agent
+register them, route by route, as never starting. Here they are two more uses
+the control plane marks, so the split it drew is kept and the table that
+draws it is this one. The reads left are the unbounded ones, which have no
+last value to answer with and so still start a sandbox. None of them repairs:
+there is no reason to rebuild a sandbox to answer a read.
 
 `POST …/start` and `…/restart` are not acquires, and count as actions for
 repair: a start refused for want of a container is the first thing the
@@ -85,9 +92,10 @@ incident's user met.
   port proxy acquires per request, and a round trip on each is not worth what
   it finds. A failed sandbox is always asked.
 - The signed pool token carries the use as a claim. The agent's one wrapper
-  starts the sandbox for `action` and `read` and requires it running for
-  `observe`, so the agent holds no table that could drift from §1. It is also
-  the backstop for a stop that lands after the server looked.
+  starts the sandbox for `action` and `read`, and requires it running for
+  `inspect`, after waiting out a boot under way, and for `observe`, at once.
+  So the agent holds no table that could drift from §1. It is also the
+  backstop for a stop that lands after the server looked.
 - A token with no mark starts nothing. The one such token a current server
   leads to is a sandbox's own, fetching its own origin, and that sandbox is
   running. A server from before the mark has none on any token, so against a
@@ -161,7 +169,7 @@ could: that wait is what held an attach to a failed sandbox for ninety seconds.
 A container the agent retires on start is reported as no container and rebuilt
 by the `ready` case above.
 
-Reads and observes answer at once, as before.
+Reads, inspects and observes answer at once, as before.
 
 ### 7. People and the discoboxes that created it trigger it; reports never do
 
@@ -207,8 +215,8 @@ beyond the generation it is tied to, and tells the user exactly when it will
 not try again.
 
 **Reads repair too.** A list or a log read would then rebuild a container
-nobody is about to use, and #155 removes the reason a read reaches the sandbox
-at all.
+nobody is about to use, and a list is answered from the sandbox's last
+inventory without reaching it at all (ADR 26-10-11-657).
 
 **Always re-pin, as a typed repair does.** One code path, and a `manual`
 project's sandbox changes image because somebody listed its ports.
@@ -226,8 +234,3 @@ HTTP request, to find a state the agent's wrapper catches anyway.
   would: settled, with the command to run.
 - The pool agent no longer decides what starts a sandbox. A new route is
   classified once, in the server.
-
-## Deferred
-
-- Serving reads of a stopped sandbox from its last report, after which reads
-  stop starting one (#155).

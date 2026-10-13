@@ -536,11 +536,12 @@ sandbox-agent proxy, the Git proxy, and the SSH ingress's TCP tunnel route
 | `use` | Before proxying |
 | --- | --- |
 | `action`, `read` | start the sandbox unless it is running, and wait out a boot under way |
-| `observe` | refuse with 409 unless it is running; never start it |
+| `inspect` | never start it; wait out a boot something else began, then refuse with 409 unless it is running |
+| `observe` | never start it; refuse with 409 unless it is running, a boot under way included |
 | none | start nothing: a route that reaches into the sandbox is served as an observe, and an origin is served from the pool |
 
-There is no table of routes here. Which route is an action, a read or an
-observe is the control plane's to say, so a route cannot be classified one way
+There is no table of routes here. Which route is an action, a read, an inspect
+or an observe is the control plane's to say, so a route cannot be classified one way
 there and another here. The one token with no mark a current control plane
 leads to is a sandbox's own, fetching its own origin, and that sandbox is
 running. A control plane from before the mark marks nothing, so a server rolled
@@ -599,12 +600,13 @@ and reading one exec or service ([ADR 26-10-11-657](../docs/adr/26-10-11-657-a-s
 `X-Discobox-Sandbox-Not-Running` (`model.SandboxNotRunningHeader`): that
 header is how the control plane knows to answer the screen and the lists from
 the sandbox's last inventory. One still booting is refused the same way by
-the audit reads, the screen and the wait, which an orchestrator polls; the
-lists wait the boot out (`waitOutBoot`), which starts nothing, because a
-client that has just created or started a sandbox lists it next. One the
-runtime does not know passes through to the proxy. The reads left on
-`autoStart` are the unbounded ones, which have no last value to answer with:
-exec and service logs, exec events, and exec resource samples.
+an observe — the audit reads, the screen and the wait, which an orchestrator
+polls; an inspect — the lists — waits the boot out (`waitOutBoot`), which
+starts nothing, because a client that has just created or started a sandbox
+lists it next. One the runtime does not know passes through to the proxy. The
+reads the control plane still marks as starting a sandbox are the unbounded
+ones, which have no last value to answer with: exec and service logs, exec
+events, and exec resource samples.
 
 Archived sandboxes are exempt from that latch and fail those routes with 409.
 `archive` and `delete` take the same per-sandbox mutex, and both answer only once
