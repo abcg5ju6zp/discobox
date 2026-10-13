@@ -71,6 +71,9 @@ func tagKey(tag string) string {
 func (l *sandboxList) tagChoices() []string {
 	seen := map[string]bool{}
 	var out []string
+	// The folder's own discoboxes, not the ones nested there under a creator:
+	// a tag only those carry would narrow the list to nothing, since the
+	// creator they are drawn under does not carry it.
 	for _, s := range l.all {
 		if !l.onServer(s) || !l.folder.holds(s, l.session) {
 			continue

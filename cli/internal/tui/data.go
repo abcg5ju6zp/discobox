@@ -274,10 +274,23 @@ type Sandbox struct {
 	// configured. See uncredentialed.go.
 	HarnessUncredentialed bool
 
+	// CreatedBy is the ID of the discobox that created this one, on the same
+	// server, and empty for one a person created. The list draws it under
+	// that discobox (sandboxList.nest).
+	CreatedBy string
+
+	// tree and under are the list's, set on each row as the rows are ordered
+	// (sandboxList.nest): the branch drawn in front of the name of a row
+	// nested under the discobox that created it, empty on a row nested under
+	// nothing, and the row its tree hangs from, which is itself for that one.
+	tree  string
+	under boxRef
+
 	// OriginKey is where the discobox is filed on the client that created it
 	// (ADR 0111): that host and where its source came from, or the host alone
 	// when it has none. It is not a column on the row — it is what the header
-	// filter's folder matches, so every row on screen already shares it.
+	// filter's folder matches, so every row on screen already shares it, bar
+	// the ones nested under a creator filed there (sandboxList.nest).
 	OriginKey string
 
 	// OriginHostID identifies the machine the sandbox was created on, and

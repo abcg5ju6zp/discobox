@@ -79,6 +79,19 @@ func TestToTUISandboxMarksSnapshotSources(t *testing.T) {
 	}
 }
 
+// The row carries the discobox that created it, which is what the list nests
+// it under; one a person created carries none.
+func TestToTUISandboxCarriesTheDiscoboxThatCreatedIt(t *testing.T) {
+	sandbox := apimodel.Sandbox{Runtime: apimodel.SandboxRuntime{State: "running", DesiredState: "present"}}
+	if got := toTUISandbox(sandbox, "host_1").CreatedBy; got != "" {
+		t.Fatalf("CreatedBy = %q for a discobox a person created", got)
+	}
+	sandbox.CreatedBySandboxId = apiclientgen.NewOptString("sbx_lead")
+	if got := toTUISandbox(sandbox, "host_1").CreatedBy; got != "sbx_lead" {
+		t.Fatalf("CreatedBy = %q, want sbx_lead", got)
+	}
+}
+
 // The repository an `issue=` or `pr=` tag is numbered in is the GitHub one the
 // discobox's source came from: the URL a remote source clones, or the upstream
 // a local one's branch tracked. A local source's own directory is not one.

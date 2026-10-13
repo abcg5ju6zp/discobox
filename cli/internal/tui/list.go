@@ -25,9 +25,12 @@ type sandboxList struct {
 	// is filtered to a folder and the machine is not.
 	resources Resources
 	all       []Sandbox
-	cursor    int
-	offset    int
-	selected  map[string]bool
+	// index is where each discobox is in all, which is how a row finds the
+	// discobox that created it.
+	index    map[boxRef]int
+	cursor   int
+	offset   int
+	selected map[string]bool
 
 	// folder is the folder the list is filtered to, chosen in the header. With
 	// no key it is every folder, which is the one choice that is not a place.
@@ -113,15 +116,29 @@ func newSandboxList(session Session) *sandboxList {
 func (l *sandboxList) setAll(all []Sandbox) {
 	l.loaded = true
 	var onID string
+	var onUnder boxRef
 	if s := l.current(); s != nil {
-		onID = s.ID
+		onID, onUnder = s.ID, s.under
 	}
 	l.all = all
+	l.index = make(map[boxRef]int, len(all))
+	for i, s := range all {
+		l.index[boxRef{s.Server, s.ID}] = i
+	}
 
+	// A discobox can be on two rows — under its creator, and in its own
+	// folder — so the row is the one in the same tree, and failing that the
+	// first one of that discobox.
 	if onID != "" {
+		found := false
 		for i, s := range l.rows() {
-			if s.ID == onID {
-				l.cursor = i
+			if s.ID != onID {
+				continue
+			}
+			if !found || s.under == onUnder {
+				l.cursor, found = i, true
+			}
+			if s.under == onUnder {
 				break
 			}
 		}
@@ -140,20 +157,13 @@ func (l *sandboxList) setPending(byBox map[string][]CredentialRequest) {
 }
 
 func (l *sandboxList) rows() []Sandbox {
-	out := make([]Sandbox, 0, len(l.all))
-	for _, s := range l.all {
-		if !l.inView(s) {
-			continue
-		}
-		if !l.showArchived && s.State == StateArchived {
-			continue
-		}
-		out = append(out, s)
-	}
+	out := l.nest()
 	// Grouped by section, and newest-first inside one as everywhere else: the
 	// sort is stable, so the order the listing arrived in is what orders a
 	// section (ADR 0116 §4). Folders lead and servers follow inside each, so
-	// one folder's servers sit together under it.
+	// one folder's servers sit together under it. A nested row is in the
+	// section of the row its tree hangs from (top), so the sort moves a tree
+	// whole.
 	if l.grouped() {
 		folders := l.folderRanks()
 		rank := func(s Sandbox) (server, folder int, key string) {
@@ -161,7 +171,8 @@ func (l *sandboxList) rows() []Sandbox {
 				server = l.section(s.Server)
 			}
 			if l.byFolder() {
-				folder, key = folderRank(folders, s.OriginKey), s.OriginKey
+				key = l.top(s).OriginKey
+				folder = folderRank(folders, key)
 			}
 			return server, folder, key
 		}
@@ -183,14 +194,173 @@ func (l *sandboxList) rows() []Sandbox {
 	return out
 }
 
-// inView reports whether a discobox is inside the header's filters: on the
-// server they name, in the folder they name, carrying the tag they name. It is
-// one predicate rather than tests repeated wherever a count is taken, so
-// everything that says how many discoboxes there are — the rows, the archived
-// offer — counts the same ones.
-func (l *sandboxList) inView(s Sandbox) bool {
-	return l.onServer(s) && l.folder.holds(s, l.session) && l.tagged(s)
+// count is how many discoboxes the list draws, which is what everything that
+// says how many there are says — the band, a section, the filter card, the
+// archived offer — so they all count the same ones. It is of discoboxes rather
+// than rows: one drawn twice (nest) is one.
+func (l *sandboxList) count() int {
+	return countBoxes(l.rows())
 }
+
+func countBoxes(rows []Sandbox) int {
+	seen := make(map[boxRef]bool, len(rows))
+	for _, s := range rows {
+		seen[boxRef{s.Server, s.ID}] = true
+	}
+	return len(seen)
+}
+
+// boxRef names a discobox across every server the window lists: an ID is one
+// server's.
+type boxRef struct {
+	server, id string
+}
+
+// creator is the discobox that created s, when a discobox did and the listing
+// still holds it.
+func (l *sandboxList) creator(s Sandbox) (Sandbox, bool) {
+	if s.CreatedBy == "" {
+		return Sandbox{}, false
+	}
+	i, ok := l.index[boxRef{s.Server, s.CreatedBy}]
+	if !ok || i >= len(l.all) {
+		return Sandbox{}, false
+	}
+	return l.all[i], true
+}
+
+// top is the row a row's tree hangs from, which is the row whose section it
+// is drawn in: itself, for a row nested under nothing.
+func (l *sandboxList) top(s Sandbox) Sandbox {
+	if i, ok := l.index[s.under]; ok && i < len(l.all) {
+		return l.all[i]
+	}
+	return s
+}
+
+// shown reports whether a discobox passes the filters that are about the
+// discobox itself: the server, the tags, and whether the archived are listed.
+// The folder is not one of them — a discobox is drawn under its creator in
+// whichever folder that is (nest).
+func (l *sandboxList) shown(s Sandbox) bool {
+	return l.onServer(s) && l.tagged(s) && (l.showArchived || s.State != StateArchived)
+}
+
+// nest is the rows in the order they are drawn, as trees: the discoboxes in
+// the folder the header names, in the order they arrived, and under each the
+// discoboxes it created, their own creations under those in turn. Each row is
+// given the branch it draws (Sandbox.tree) and the row its tree hangs from
+// (Sandbox.under).
+//
+// A discobox is filed where the server filed it (ADR 0111 §3), and that is
+// often not where its creator is: one cut from a checkout inside the creator
+// records the creator as the machine. So it is drawn under its creator
+// wherever the creator is drawn, whatever folder it is filed in itself, and
+// in its own folder as well — once, when that is the section it is already
+// nested in, and otherwise a second time there, on a row of its own that says
+// where it is from (Sandbox.elsewhere).
+//
+// A row nests under the nearest creator that is shown, so one whose creator
+// is archived and hidden, or lacks a tag the header names, moves up to the
+// creator's own creator, or is drawn in its own folder alone.
+func (l *sandboxList) nest() []Sandbox {
+	type node struct {
+		parent int // in l.all, -1 for none
+		kids   []int
+	}
+	nodes := make([]node, len(l.all))
+	var tops []int
+	for i, s := range l.all {
+		nodes[i].parent = -1
+		if !l.shown(s) {
+			continue
+		}
+		// No chain is longer than the listing, which is what ends the walk
+		// on a listing that somehow holds a loop.
+		by := s
+		for range l.all {
+			var ok bool
+			if by, ok = l.creator(by); !ok {
+				break
+			}
+			if j := l.index[boxRef{by.Server, by.ID}]; j != i && l.shown(by) {
+				nodes[i].parent = j
+				nodes[j].kids = append(nodes[j].kids, i)
+				break
+			}
+		}
+		if l.folder.holds(s, l.session) {
+			tops = append(tops, i)
+		}
+	}
+
+	// sameSection is whether a row above i in its chain is a row of i's own
+	// section, in which case i is already drawn there, nested.
+	sameSection := func(i int) bool {
+		at := i
+		for range l.all {
+			if at = nodes[at].parent; at < 0 || at == i {
+				return false
+			}
+			if a := l.all[at]; l.folder.holds(a, l.session) && (!l.byFolder() || a.OriginKey == l.all[i].OriginKey) {
+				return true
+			}
+		}
+		return false
+	}
+
+	out := make([]Sandbox, 0, len(tops))
+	// placed is what has a row; placing is what is above the row being
+	// placed, which a row is not drawn under a second time.
+	placed := make([]bool, len(l.all))
+	placing := make([]bool, len(l.all))
+	var place func(i int, under boxRef, lead, branch string)
+	place = func(i int, under boxRef, lead, branch string) {
+		if placing[i] {
+			return
+		}
+		placing[i], placed[i] = true, true
+		defer func() { placing[i] = false }()
+		s := l.all[i]
+		s.under, s.tree = under, lead+branch
+		out = append(out, s)
+		switch branch {
+		case treeBranch:
+			lead += treeRule
+		case treeLast:
+			lead += treeGap
+		}
+		for n, kid := range nodes[i].kids {
+			if n == len(nodes[i].kids)-1 {
+				place(kid, under, lead, treeLast)
+			} else {
+				place(kid, under, lead, treeBranch)
+			}
+		}
+	}
+	for _, i := range tops {
+		if !sameSection(i) {
+			place(i, boxRef{l.all[i].Server, l.all[i].ID}, "", "")
+		}
+	}
+	// Rows that created each other are each above the other, and are still
+	// rows.
+	for _, i := range tops {
+		if !placed[i] {
+			place(i, boxRef{l.all[i].Server, l.all[i].ID}, "", "")
+		}
+	}
+	return out
+}
+
+// The branch in front of a nested row's name: one cell of line and one of
+// air, so a level of nesting costs the name two cells.
+const (
+	treeBranch = "├ "
+	treeLast   = "└ "
+	treeRule   = "│ "
+	treeGap    = "  "
+)
 
 // onServer reports whether a discobox is on the server the header names. Every
 // discobox is on every server at once.
@@ -237,14 +407,15 @@ type sectionKey struct {
 	server, folder string
 }
 
-// sectionOf is the section a row is drawn under.
+// sectionOf is the section a row is drawn under: its own, or for a nested row
+// the one of the row its tree hangs from.
 func (l *sandboxList) sectionOf(s Sandbox) sectionKey {
 	var k sectionKey
 	if l.byServer() {
 		k.server = s.Server
 	}
 	if l.byFolder() {
-		k.folder = s.OriginKey
+		k.folder = l.top(s).OriginKey
 	}
 	return k
 }
@@ -380,13 +551,11 @@ func (l *sandboxList) sources() []Source {
 // archivedCount is what the title bar offers when they are hidden: a number
 // worth pressing a key for, or nothing to say.
 func (l *sandboxList) archivedCount() int {
-	n := 0
-	for _, s := range l.all {
-		if s.State == StateArchived && l.inView(s) {
-			n++
-		}
-	}
-	return n
+	// The ones showing them would draw, a creator's among them: the list
+	// with them shown, less the list without.
+	with, without := *l, *l
+	with.showArchived, without.showArchived = true, false
+	return with.count() - without.count()
 }
 
 func (l *sandboxList) current() *Sandbox {
@@ -402,14 +571,26 @@ func (l *sandboxList) current() *Sandbox {
 // under the cursor.
 func (l *sandboxList) targets() []Sandbox {
 	rows := l.rows()
+	// A discobox drawn twice — under its creator, and in its own folder — is
+	// still one discobox to act on.
+	seen := map[boxRef]bool{}
+	var out []Sandbox
+	take := func(s Sandbox) {
+		if ref := (boxRef{s.Server, s.ID}); !seen[ref] {
+			seen[ref] = true
+			out = append(out, s)
+		}
+	}
 	if l.visual && len(rows) > 0 {
 		lo, hi := l.visualRange()
-		return rows[lo : hi+1]
+		for _, s := range rows[lo : hi+1] {
+			take(s)
+		}
+		return out
 	}
-	var out []Sandbox
 	for _, s := range rows {
 		if l.selected[s.ID] {
-			out = append(out, s)
+			take(s)
 		}
 	}
 	if len(out) > 0 {
@@ -444,17 +625,17 @@ func (l *sandboxList) commitVisual() int {
 		l.selected[s.ID] = true
 	}
 	l.visual = false
-	return hi - lo + 1
+	return countBoxes(rows[lo : hi+1])
 }
 
 func (l *sandboxList) selectionCount() int {
-	n := 0
+	seen := map[boxRef]bool{}
 	for _, s := range l.rows() {
 		if l.selected[s.ID] {
-			n++
+			seen[boxRef{s.Server, s.ID}] = true
 		}
 	}
-	return n
+	return len(seen)
 }
 
 func (l *sandboxList) toggleSelect() {
@@ -576,7 +757,7 @@ func (l *sandboxList) view(st *styles, z *zones, focused bool) string {
 		titleStyle = st.titleDim
 	}
 	rows := l.rows()
-	right := plural(len(rows), "box", "boxes")
+	right := plural(countBoxes(rows), "box", "boxes")
 	// A refresh out longer than the window waits before saying so takes the
 	// count's place: the count is exactly what is being refreshed, and this is
 	// the one place a window with one server has to say it. Nothing is drawn
@@ -780,6 +961,7 @@ func (l *sandboxList) sectionTitle(s Sandbox) string {
 // folderOf is the folder a row is filed in, named the way the header's
 // filter names it: the window's own folder by its source and branch.
 func (l *sandboxList) folderOf(s Sandbox) folder {
+	s = l.top(s)
 	if s.OriginKey != "" && s.OriginKey == l.session.OriginKey {
 		return l.session.folder()
 	}
@@ -905,6 +1087,12 @@ func (l *sandboxList) row(st *styles, z *zones, s Sandbox, i, y int, focused boo
 	if glyph {
 		head += l.stateStyle(st, s).Render(stateDot(s)) + " "
 	}
+	// The branch a discobox created by another hangs from, after the state so
+	// the glyphs stay one column the eye runs down. It is part of the head: it
+	// comes out of the name's width, and the name keeps its floor.
+	if s.tree != "" {
+		head += st.dimText.Render(s.tree)
+	}
 	nameW := max(l.width-lipgloss.Width(head)-lipgloss.Width(tail), 4)
 	name := s.Name
 	// Under the cursor the name gives way to what the state is about: the
@@ -921,8 +1109,11 @@ func (l *sandboxList) row(st *styles, z *zones, s Sandbox, i, y int, focused boo
 	//
 	// It comes out of the name's own width, and goes rather than squeezing the
 	// name below what a name is readable in. The name never goes.
+	//
+	// A row nested under its creator does not say it: the machine it would
+	// name is that creator, which the branch already says.
 	from := ""
-	if text := s.elsewhere(l.session); text != "" {
+	if text := s.elsewhere(l.session); text != "" && s.tree == "" {
 		// The floor is the one the tail columns hold to, less the head, which
 		// is the part of that reserve the name does not get either way.
 		if room := nameW - lipgloss.Width(text) - 1; room >= nameReserve-lipgloss.Width(head) {
