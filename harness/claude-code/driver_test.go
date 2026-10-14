@@ -465,3 +465,33 @@ func TestEveryPublishedEventIsItsOwnCanonicalName(t *testing.T) {
 		}
 	}
 }
+
+// Anthropic's API takes one login at many endpoints, and only inference answers
+// for whether it is alive: the self-hosted runner poll refuses a subscription
+// login that works, and event logging accepts whatever it is sent. Both
+// credentials name /v1/messages, so neither of those draws or clears the
+// sign-in band (ADR 26-10-13-595).
+func TestImageScopesRejectionsToInference(t *testing.T) {
+	raw, err := os.ReadFile("image.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var image harness.ImageMetadata
+	if err := json.Unmarshal(raw, &image); err != nil {
+		t.Fatal(err)
+	}
+	if image.Harness == nil || len(image.Harness.Secrets) != 2 {
+		t.Fatalf("manifest secrets = %#v, want the API key and the subscription login", image.Harness)
+	}
+	for _, secret := range image.Harness.Secrets {
+		scope := secret.RejectionScope
+		if len(scope) != 1 || scope[0].Host != "api.anthropic.com" || !slices.Equal(scope[0].Paths, []string{"/v1/messages"}) {
+			t.Errorf("%s rejectionScope = %#v, want api.anthropic.com /v1/messages", secret.Name, scope)
+		}
+		for _, rule := range scope {
+			if err := rule.Validate(); err != nil {
+				t.Errorf("%s: %v", secret.Name, err)
+			}
+		}
+	}
+}

@@ -640,6 +640,16 @@ one. The harness that owns a credential is derived at read time from
 `ConfiguredSecretIDs` and the config's bindings rather than stored, because
 every path that would have to clear a stored copy belongs to the secret.
 
+**Which requests are evidence is the harness's to say**
+([ADR 26-10-13-595](../../../../docs/adr/26-10-13-595-a-harness-names-the-requests-whose-refusal-means-its-login-is-dead.md)).
+A resolve answers with the rejection scope the sandbox's harness config
+declares for the variable the sentinel is bound to (`reportScope`,
+`SandboxSecretResolution.ReportScope`), and the pool's proxy reports nothing
+about a request outside it. It is read from the config on every resolve, never
+kept on the assignment or the secret, so a stored login gains a scope when its
+harness image does. Nothing here filters a report: one that arrives is judged
+as above.
+
 ## Sentinel shape
 
 Sentinels are minted from the secret's `Format` through the root

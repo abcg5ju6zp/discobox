@@ -453,6 +453,17 @@ type HarnessConfigSecret struct {
 	// because the harness reads the credential from an installed file instead.
 	// See harness.SecretDeliveryFile for why withholding it matters.
 	Delivery string `json:"delivery,omitempty" doc:"How the credential reaches the harness: env exports the variable named by name, file withholds it because the harness reads the credential from a file the harness config installs" enum:"env,file"`
+	// RejectionScope names the requests that answer for the credential
+	// (ADR 26-10-13-595): only what an upstream makes of one of them is taken
+	// as a fact about it. Empty is every request.
+	RejectionScope []HarnessSecretRejectionRule `json:"rejectionScope,omitempty" doc:"Requests whose refusal or acceptance says whether the credential is alive; empty is every request"`
+}
+
+// HarnessSecretRejectionRule is one host of a harness secret's rejection scope,
+// and the paths on it. See harness.RejectionRule.
+type HarnessSecretRejectionRule struct {
+	Host  string   `json:"host" doc:"Host that answers for the credential, with the hosts beneath it"`
+	Paths []string `json:"paths,omitempty" doc:"Path prefixes on a segment boundary; empty is every path on the host"`
 }
 
 // GitSource describes a Git source to materialize into a sandbox.
@@ -1559,6 +1570,10 @@ type SandboxSecretResolution struct {
 	// SecretID is the secret an approved value is, which the pool's proxy
 	// records on the request it swapped it into (ADR 26-10-01-240 §1).
 	SecretID string
+	// ReportScope is the rejection scope the sandbox's harness declares for
+	// the variable the sentinel is bound to, which the pool's proxy holds its
+	// reports to (ADR 26-10-13-595). Empty is every request.
+	ReportScope []HarnessSecretRejectionRule
 }
 
 // SandboxInventory is what a sandbox's list reads last answered — its execs,

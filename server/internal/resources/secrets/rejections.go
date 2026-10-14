@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/discobox-ai/discobox/harness"
 	"github.com/discobox-ai/discobox/server/internal/apperrors"
 	"github.com/discobox-ai/discobox/server/internal/model"
 	"github.com/discobox-ai/discobox/server/internal/store"
@@ -331,4 +332,39 @@ func (s *Service) ListSecretRejections(ctx context.Context, projectID string) ([
 		}
 	}
 	return rejections, nil
+}
+
+// reportScope is the rejection scope the sandbox's harness declares for the
+// variable a sentinel is bound to (ADR 26-10-13-595 §2), which goes out with
+// the value so the pool's proxy reports on the requests that answer for the
+// credential and no others.
+//
+// It is read from the config on every resolve rather than kept on the
+// assignment: a declaration is the harness image's, and a login already stored
+// has to gain a scope when its image does, not when somebody next signs in.
+// A variable the harness does not declare, and a sandbox with no harness
+// config, have none — which is every request, as before.
+//
+// A configure sandbox is handed the stored login under the variable's name
+// behind harness.ConfigurePreviousEnvPrefix, and runs the same CLI against the
+// same endpoints with it, so that name answers to the declaration too:
+// reconfiguring a live login must not report it dead.
+func (s *Service) reportScope(ctx context.Context, sandbox *model.Sandbox, envName string) ([]model.HarnessSecretRejectionRule, error) {
+	if sandbox.HarnessConfigID == nil || strings.TrimSpace(*sandbox.HarnessConfigID) == "" {
+		return nil, nil
+	}
+	config, err := s.store.GetHarnessConfig(ctx, sandbox.ProjectID, *sandbox.HarnessConfigID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	envName = strings.TrimPrefix(envName, harness.ConfigurePreviousEnvPrefix)
+	for _, declared := range config.Secrets {
+		if declared.Name == envName {
+			return declared.RejectionScope, nil
+		}
+	}
+	return nil, nil
 }

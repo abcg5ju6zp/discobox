@@ -530,6 +530,11 @@ func validateImageMetadata(metadata harness.ImageMetadata, goos, source string) 
 			return fmt.Errorf("%s has duplicate secret %q", source, name)
 		}
 		seen[name] = struct{}{}
+		for _, rule := range secret.RejectionScope {
+			if err := rule.Validate(); err != nil {
+				return fmt.Errorf("%s secret %q: %w", source, name, err)
+			}
+		}
 	}
 	for idx, volume := range metadata.Volumes {
 		if strings.TrimSpace(volume.Path) == "" {
