@@ -102,6 +102,23 @@ and that the process started after the build (no `ps` in the image: walk
   (`--body` alone errors). `--host 172.17.0.1` matched nothing.
 - A swapped credential needs `discobox-access run`, which the dev server
   refuses without a judge (no default harness) unless `judgeCommands: false`.
+- A harness credential's 401 (the refused-credential band, a harness secret's
+  `rejectionScope`) needs a box of a harness that declares secrets, which is
+  refused until the harness is configured, and configuring needs a real
+  sign-in. Bind a fake `d secret create` token with `d admin harnesses secrets
+  bind <slug> <ENV> <secret>` and a project grant, set `configured=1` on the
+  harness's row in `.tmp/discobox/discobox.db` (`sqlite3`; set it back after),
+  then `d new -d -H <slug> --no-source -p x`. A `-s ENV=value` secret is not
+  swapped until its request is approved (`d secret request approve <sreq>
+  --secret-id <id>`, IDs from `d secret request ls`); an unswapped sentinel
+  also gets a 401, so check the audit row's secret column. Sentinels are in
+  the box's `/run/discobox/secrets/secrets.json` (root). What was recorded:
+  `curl 127.0.0.1:8080/projects/<project>/secret-rejections`.
+- A harness image's manifest reaches the server only when the image watcher
+  has rebuilt it (`.tmp/discobox-dev-images.json` names a new tag). If it never
+  does, a build in the chain is failing and retried every 15s: read the
+  `docker build` command from `/proc/<pid>/cmdline` and run it under a
+  throwaway tag to see the error.
 - Clean up: `d rm <id>`, `d secret delete <name>`, stop origins by pid.
 - No dev pool up (the sandbox-agent image will not build), or the
   harness/sandbox-agent `:local` images missing (an isolated server then fails
