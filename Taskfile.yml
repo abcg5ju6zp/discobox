@@ -833,6 +833,9 @@ tasks:
     # the host notices because the host has the whole repository. The first
     # thing to find out is the image build, minutes into a Docker layer.
     #
+    # Each module is checked against the one stage that builds it, named here
+    # beside it (Dockerfile:stage:module).
+    #
     # Deps are taken for the whole module rather than the binaries each
     # Dockerfile builds, which is a superset: copying a directory the image did
     # not strictly need is harmless, and parsing build targets out of a RUN line
@@ -841,10 +844,22 @@ tasks:
       - |
         set -eu
         missing=""
-        for entry in pool-agent/Dockerfile:pool-agent sandbox-agent/Dockerfile:sandbox-agent sandbox-agent/Dockerfile:access sandbox-agent/Dockerfile:cli; do
-          dockerfile="${entry%:*}"
+        for entry in pool-agent/Dockerfile:build:pool-agent sandbox-agent/Dockerfile:sandbox-agent-builder:sandbox-agent sandbox-agent/Dockerfile:sandbox-agent-builder:access sandbox-agent/Dockerfile:discobox-cli-builder:cli; do
+          dockerfile="${entry%%:*}"
           module="${entry##*:}"
-          copied="$(awk '/^COPY [a-z]/ { split($2, parts, "/"); print parts[1] }' "$dockerfile" | sort -u)"
+          stage="${entry#*:}"
+          stage="${stage%:*}"
+          # Only what the stage that builds the module copies: a package copied
+          # into another stage of the same Dockerfile is not in this one's
+          # build context, and counting it hid a missing COPY.
+          copied="$(awk -v stage="$stage" '
+            /^FROM / { current = ""; for (i = 2; i < NF; i++) if (toupper($i) == "AS") current = $(i + 1) }
+            /^COPY [a-z]/ && current == stage { split($2, parts, "/"); print parts[1] }' "$dockerfile" | sort -u)"
+          if [ -z "$copied" ]; then
+            missing="$missing$dockerfile: no stage named $stage copies anything; the stage that builds $module was renamed
+        "
+            continue
+          fi
           for dep in $(cd "$module" && go list -deps ./... |
                          sed -n 's|^github.com/discobox-ai/discobox/||p' |
                          cut -d/ -f1 | sort -u); do
