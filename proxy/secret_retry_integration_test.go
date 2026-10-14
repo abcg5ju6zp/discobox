@@ -345,6 +345,8 @@ type settableResolver struct {
 	reportLog
 	mu    sync.Mutex
 	value string
+	// scope is the report scope handed out with the value; nil is none.
+	scope secrets.ReportScope
 }
 
 func (r *settableResolver) set(value string) {
@@ -365,7 +367,7 @@ func (r *settableResolver) Authorize(context.Context, secrets.AuthorizeRequest) 
 func (r *settableResolver) Resolve(context.Context, secrets.ResolveRequest) (secrets.ResolveResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return secrets.ResolveResult{Value: r.value, ExpiresAt: time.Now().Add(time.Second)}, nil
+	return secrets.ResolveResult{Value: r.value, ReportScope: r.scope, ExpiresAt: time.Now().Add(time.Second)}, nil
 }
 
 // The other half of a rotation: the credential the proxy picked up is the

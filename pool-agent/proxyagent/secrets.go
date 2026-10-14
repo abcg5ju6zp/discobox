@@ -173,6 +173,15 @@ type resolveResponseBody struct {
 	// request it swaps the value into (ADR 26-10-01-240). Empty from a control
 	// plane that predates it.
 	SecretID string `json:"secretId"`
+	// ReportScope names the requests that answer for the credential, which the
+	// proxy reports a refusal or an acceptance of and no others
+	// (ADR 26-10-13-595). Absent is every request.
+	ReportScope []reportRuleBody `json:"reportScope,omitempty"`
+}
+
+type reportRuleBody struct {
+	Host  string   `json:"host"`
+	Paths []string `json:"paths,omitempty"`
 }
 
 // rejectionRequestBody reports what an upstream made of a credential this pool
@@ -252,6 +261,9 @@ func (r *secretResolver) Resolve(ctx context.Context, req proxy.SecretResolveReq
 		return proxy.SecretResolveResult{}, proxy.ErrSecretResolveDenied
 	}
 	result := proxy.SecretResolveResult{Value: out.Value, UseID: useID, SecretID: out.SecretID}
+	for _, rule := range out.ReportScope {
+		result.ReportScope = append(result.ReportScope, proxy.SecretReportRule{Host: rule.Host, Paths: rule.Paths})
+	}
 	if out.ExpiresAt != nil {
 		result.ExpiresAt = *out.ExpiresAt
 	}

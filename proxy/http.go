@@ -97,7 +97,12 @@ type requestMeta struct {
 	// header names they were found in because a rejection has to name the
 	// credential and a header name cannot (ADR 0132 §1).
 	swappedSentinels []string
-	auditURL         string
+	// reportSentinels is the subset of swappedSentinels this request answers
+	// for, and the only ones a refusal or an acceptance of it is reported
+	// against (ADR 26-10-13-595). The retry does not rewrite it: it goes to the
+	// same URL with the same sentinels.
+	reportSentinels []string
+	auditURL        string
 	// preSwapHeader is the request's headers as the sandbox sent them, with the
 	// sentinels still in place. It is what a retry re-swaps from; re-swapping
 	// the outbound headers would look for a sentinel that is no longer there.
@@ -505,8 +510,8 @@ func (h *httpProxy) setupHandlers() {
 		// reconfigured, replaced by hand, or rotated upstream. Nothing is sent
 		// unless something was reported, so an ordinary working request is
 		// silent.
-		if len(meta.swappedSentinels) > 0 && succeeded(resp.StatusCode) {
-			h.reports.accepted(meta.client.ID, ctx.Req.Host, meta.swappedSentinels)
+		if len(meta.reportSentinels) > 0 && succeeded(resp.StatusCode) {
+			h.reports.accepted(meta.client.ID, ctx.Req.Host, meta.reportSentinels)
 		}
 
 		if upgradedProtocol, isUpgrade := getUpgradeProtocol(ctx.Req, resp); isUpgrade {
@@ -680,6 +685,7 @@ func (h *httpProxy) swapSecrets(req *http.Request, meta *requestMeta, client cli
 	meta.swappedUseIDs = result.UseIDs
 	meta.swappedSecretIDs = result.SecretIDs
 	meta.swappedSentinels = result.Sentinels
+	meta.reportSentinels = result.Reportable
 	// A query swap rewrote the URL, so the retry path — which rebuilds a
 	// request from the pre-swap headers — cannot reproduce this request.
 	meta.retryable = len(result.QueryParams) == 0
@@ -1000,7 +1006,7 @@ func (h *httpProxy) retryRejectedSwap(resp *http.Response, ctx *goproxy.ProxyCtx
 	// all sent, a swap into the URL — is still a refused credential, and the
 	// one thing that can be said about it is that it was refused.
 	if !meta.retryable || meta.preSwapHeader == nil {
-		h.reports.rejected(meta.client.ID, ctx.Req.Host, meta.swappedSentinels, secrets.OutcomeRejected)
+		h.reports.rejected(meta.client.ID, ctx.Req.Host, meta.reportSentinels, secrets.OutcomeRejected)
 		return nil
 	}
 	req := ctx.Req
@@ -1055,7 +1061,7 @@ func (h *httpProxy) retryRejectedSwap(resp *http.Response, ctx *goproxy.ProxyCtx
 			// going down the wire unchanged.
 			status: resp.StatusCode,
 		})
-		h.reports.rejected(meta.client.ID, req.Host, meta.swappedSentinels, secrets.OutcomeRejected)
+		h.reports.rejected(meta.client.ID, req.Host, meta.reportSentinels, secrets.OutcomeRejected)
 		return nil
 	}
 
@@ -1078,7 +1084,7 @@ func (h *httpProxy) retryRejectedSwap(resp *http.Response, ctx *goproxy.ProxyCtx
 		// Nothing to send that is not the value just refused, which means the
 		// credential the resolver would hand out now is the rejected one.
 		span.SetAttributes(attribute.Bool("proxy.secret_swap.retry.attempted", false))
-		h.reports.rejected(meta.client.ID, req.Host, meta.swappedSentinels, secrets.OutcomeRejected)
+		h.reports.rejected(meta.client.ID, req.Host, meta.reportSentinels, secrets.OutcomeRejected)
 		return nil
 	}
 
@@ -1104,9 +1110,9 @@ func (h *httpProxy) retryRejectedSwap(resp *http.Response, ctx *goproxy.ProxyCtx
 	// worked says the opposite, and clears anything reported before it.
 	switch {
 	case retryResp.StatusCode == http.StatusUnauthorized:
-		h.reports.rejected(meta.client.ID, req.Host, meta.swappedSentinels, secrets.OutcomeRejectedAfterRetry)
+		h.reports.rejected(meta.client.ID, req.Host, meta.reportSentinels, secrets.OutcomeRejectedAfterRetry)
 	case succeeded(retryResp.StatusCode):
-		h.reports.accepted(meta.client.ID, req.Host, meta.swappedSentinels)
+		h.reports.accepted(meta.client.ID, req.Host, meta.reportSentinels)
 	}
 	ctx.Req = retryReq
 	meta.start = time.Now()

@@ -694,3 +694,62 @@ func TestRedactIgnoresAnEmptySentinel(t *testing.T) {
 		t.Fatalf("Redact() = %q, want the real sentinel still redacted", got)
 	}
 }
+
+func TestReportScopeCovers(t *testing.T) {
+	scope := ReportScope{
+		{Host: "api.anthropic.com", Paths: []string{"/v1/messages", "/v1/complete/"}},
+		{Host: "example.com"},
+	}
+	for _, tc := range []struct {
+		host, path string
+		want       bool
+	}{
+		{"api.anthropic.com", "/v1/messages", true},
+		{"api.anthropic.com", "/v1/messages/count_tokens", true},
+		{"api.anthropic.com", "/v1/complete", true},
+		{"api.anthropic.com", "/v1/messagesX", false},
+		{"api.anthropic.com", "/v1/code/runners/self-hosted/spawn-hints/poll", false},
+		{"api.anthropic.com", "/api/event_logging/v2/batch", false},
+		{"console.anthropic.com", "/v1/messages", false},
+		{"example.com", "/anything", true},
+		{"api.example.com", "", true},
+	} {
+		if got := scope.Covers(tc.host, tc.path); got != tc.want {
+			t.Errorf("Covers(%q, %q) = %v, want %v", tc.host, tc.path, got, tc.want)
+		}
+	}
+	if !(ReportScope(nil)).Covers("anywhere.test", "/any") {
+		t.Error("an empty scope must cover every request")
+	}
+}
+
+// Whether a request answers for a credential is asked of every request that
+// carries it, so the scope has to come back from the cache as well as from
+// the resolve.
+func TestSwapNamesTheSentinelsARequestAnswersFor(t *testing.T) {
+	resolver := &fakeResolver{fn: func(req ResolveRequest) (ResolveResult, error) {
+		res := ResolveResult{Value: "real", ExpiresAt: time.Now().Add(time.Hour)}
+		if req.Sentinel == "SENTINELSCOPED" {
+			res.ReportScope = ReportScope{{Host: "api.example.com", Paths: []string{"/v1/messages"}}}
+		}
+		return res, nil
+	}}
+	sw := New(resolver, Config{Sentinels: map[string][]string{"sandbox-1": {"SENTINELSCOPED", "SENTINELPLAIN"}}})
+
+	apply := func(url string) Result {
+		req := newRequest(t, http.MethodPost, url)
+		req.Header.Set("Authorization", "Bearer SENTINELSCOPED")
+		req.Header.Set("X-Other", "SENTINELPLAIN")
+		return sw.Apply(context.Background(), req, "sandbox-1")
+	}
+	for i := range 2 {
+		res := apply("https://api.example.com/v1/other")
+		if !slices.Equal(res.Sentinels, []string{"SENTINELPLAIN", "SENTINELSCOPED"}) || !slices.Equal(res.Reportable, []string{"SENTINELPLAIN"}) {
+			t.Fatalf("request %d outside the scope: Sentinels = %v Reportable = %v", i, res.Sentinels, res.Reportable)
+		}
+		res = apply("https://api.example.com/v1/messages?beta=true")
+		if !slices.Equal(res.Reportable, []string{"SENTINELPLAIN", "SENTINELSCOPED"}) {
+			t.Fatalf("request %d inside the scope: Reportable = %v, want both", i, res.Reportable)
+		}
+	}
+}

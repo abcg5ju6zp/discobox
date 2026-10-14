@@ -58,7 +58,7 @@ func TestResolverApproved(t *testing.T) {
 		// Spelled as the server's resolve-sandbox-secret answer spells it, not
 		// with this package's own struct, so a wrong field name shows here.
 		exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
-		_, _ = w.Write([]byte(`{"status":"approved","value":"real-secret","expiresAt":"` + exp + `","secretId":"sec_1"}`))
+		_, _ = w.Write([]byte(`{"status":"approved","value":"real-secret","expiresAt":"` + exp + `","secretId":"sec_1","reportScope":[{"host":"api.example.com","paths":["/v1/messages"]}]}`))
 	}))
 	defer srv.Close()
 
@@ -72,6 +72,11 @@ func TestResolverApproved(t *testing.T) {
 	}
 	if res.Value != "real-secret" {
 		t.Fatalf("value = %q", res.Value)
+	}
+	// The requests that answer for the credential, which the proxy holds its
+	// reports to (ADR 26-10-13-595).
+	if !res.ReportScope.Covers("api.example.com", "/v1/messages/count_tokens") || res.ReportScope.Covers("api.example.com", "/v1/code/runners") {
+		t.Fatalf("report scope = %#v, want /v1/messages on api.example.com and nothing else", res.ReportScope)
 	}
 	// The secret the value is, which the proxy records on the request
 	// (ADR 26-10-01-240) — for an ordinary sentinel, which has no use.

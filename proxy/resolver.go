@@ -58,6 +58,13 @@ type SecretVerdict = secrets.Verdict
 // SecretVerdict may supply.
 type SecretRefusal = secrets.Refusal
 
+// SecretReportScope names the requests that answer for a resolved credential;
+// SecretReportRule is one host of it, and the paths on that host.
+type (
+	SecretReportScope = secrets.ReportScope
+	SecretReportRule  = secrets.ReportRule
+)
+
 // SecretReportRequest tells a SecretResolver what an upstream made of a value
 // it resolved: the sentinel, the destination, and the verdict. It never carries
 // the credential (ADR 0132 §1).

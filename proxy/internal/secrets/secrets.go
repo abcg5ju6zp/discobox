@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/discobox-ai/discobox/hostscope"
 )
 
 // ErrDenied indicates a sentinel is unknown, unapproved, or not permitted for
@@ -48,6 +50,62 @@ type ResolveResult struct {
 	// (ADR 26-10-01-240). An identifier like UseID, and empty from a control
 	// plane that predates it.
 	SecretID string
+	// ReportScope names the requests that answer for this credential: only an
+	// upstream's verdict on one of them is reported (ADR 26-10-13-595). Empty
+	// is every request, which is also what a control plane that predates it
+	// says.
+	ReportScope ReportScope
+}
+
+// ReportRule is one host, and the paths on it, whose answer says whether a
+// credential is alive.
+type ReportRule struct {
+	// Host covers itself and the hosts beneath it, the way a secret's host
+	// binding does.
+	Host string
+	// Paths are prefixes on a segment boundary: "/v1/messages" covers
+	// "/v1/messages" and "/v1/messages/batches", never "/v1/messagesX". Empty
+	// is every path on the host.
+	Paths []string
+}
+
+// ReportScope is the set of requests whose refusal or acceptance says something
+// about a credential (ADR 26-10-13-595). One credential is sent to many
+// endpoints, and they do not all answer for the same thing: an endpoint that
+// refuses a login for what it may do says nothing about whether it exists.
+type ReportScope []ReportRule
+
+// Covers reports whether a request to host and path is one this scope names.
+// An empty scope names every request.
+func (s ReportScope) Covers(host, path string) bool {
+	if len(s) == 0 {
+		return true
+	}
+	for _, rule := range s {
+		if !hostscope.Covers(rule.Host, host) {
+			continue
+		}
+		if len(rule.Paths) == 0 {
+			return true
+		}
+		for _, prefix := range rule.Paths {
+			if pathUnder(prefix, path) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// pathUnder reports whether path is prefix or lies beneath it, where beneath
+// means past a segment boundary.
+func pathUnder(prefix, path string) bool {
+	prefix = strings.TrimRight(prefix, "/")
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	rest := path[len(prefix):]
+	return rest == "" || rest[0] == '/'
 }
 
 // Outcome is what an upstream made of a credential the proxy swapped in, as
@@ -270,7 +328,10 @@ type cacheEntry struct {
 	// reason, and a sentinel stands for one secret.
 	useID    string
 	secretID string
-	denied   bool
+	// reportScope rides it too: whether a request answers for the credential
+	// is asked of every request that carries it.
+	reportScope ReportScope
+	denied      bool
 	// expiresAt is the hard bound: past it the entry is unusable and a request
 	// resolves synchronously.
 	expiresAt time.Time
@@ -329,6 +390,12 @@ type Result struct {
 	// construction — the pool publishes them in a plaintext file — so carrying
 	// them out of the swap is not carrying the credential.
 	Sentinels []string
+	// Reportable is the subset of Sentinels this request answers for: the ones
+	// whose resolver named no report scope, or named one that covers this
+	// request (ADR 26-10-13-595). What the upstream makes of the request is
+	// reported for these and for no others. Apply fills it; ApplyPrevious does
+	// not, since a retry goes to the URL the first attempt was judged at.
+	Reportable []string
 	// Errors holds non-fatal resolution error strings (transient failures).
 	Errors []string
 	// Encoded reports that at least one substitution happened inside a
@@ -360,11 +427,11 @@ func (s *Swapper) Apply(ctx context.Context, req *http.Request, clientID string)
 		return Result{}
 	}
 	sentinels := s.sentinels[clientID]
-	host := extractHost(req.Host)
+	at := destination{host: extractHost(req.Host), path: requestPath(req)}
 	var res Result
 
 	res.Headers, res.QueryParams = s.eachValue(req, func(value string) (string, bool) {
-		return s.swapValue(ctx, clientID, host, value, sentinels, &res)
+		return s.swapValue(ctx, clientID, at, value, sentinels, &res)
 	})
 
 	dedupe(&res.Headers)
@@ -372,6 +439,7 @@ func (s *Swapper) Apply(ctx context.Context, req *http.Request, clientID string)
 	dedupe(&res.UseIDs)
 	dedupe(&res.SecretIDs)
 	dedupe(&res.Sentinels)
+	dedupe(&res.Reportable)
 	return res
 }
 
@@ -471,9 +539,9 @@ func (s *Swapper) eachValue(req *http.Request, visit func(value string) (string,
 	return headers, params
 }
 
-func (s *Swapper) swapValue(ctx context.Context, clientID, host, value string, sentinels []string, res *Result) (string, bool) {
+func (s *Swapper) swapValue(ctx context.Context, clientID string, at destination, value string, sentinels []string, res *Result) (string, bool) {
 	out := swapSentinels(value, sentinels, func(sentinel string) (string, bool) {
-		return s.resolve(ctx, clientID, sentinel, host, res)
+		return s.resolve(ctx, clientID, sentinel, at, res)
 	})
 	if out.encoded {
 		res.Encoded = true
@@ -524,7 +592,8 @@ func replaceSentinels(value string, sentinels []string, lookup lookupFunc) (stri
 	return out, swapped
 }
 
-func (s *Swapper) resolve(ctx context.Context, clientID, sentinel, host string, res *Result) (string, bool) {
+func (s *Swapper) resolve(ctx context.Context, clientID, sentinel string, at destination, res *Result) (string, bool) {
+	host := at.host
 	key := clientID + "\x00" + sentinel + "\x00" + host
 	now := s.now()
 
@@ -541,7 +610,7 @@ func (s *Swapper) resolve(ctx context.Context, clientID, sentinel, host string, 
 			s.triggerRefresh(clientID, sentinel, host, key)
 		}
 		noteSwap(res, entry.useID, entry.secretID)
-		res.Sentinels = append(res.Sentinels, sentinel)
+		noteSentinel(res, sentinel, entry.reportScope, at)
 		return entry.value, true
 	}
 	s.mu.Unlock()
@@ -561,8 +630,30 @@ func (s *Swapper) resolve(ctx context.Context, clientID, sentinel, host string, 
 		s.store(key, entry)
 	}
 	noteSwap(res, result.UseID, result.SecretID)
-	res.Sentinels = append(res.Sentinels, sentinel)
+	noteSentinel(res, sentinel, result.ReportScope, at)
 	return result.Value, true
+}
+
+// destination is where a request is going, as far as a report scope reads it.
+type destination struct {
+	host string
+	path string
+}
+
+func requestPath(req *http.Request) string {
+	if req.URL == nil {
+		return ""
+	}
+	return req.URL.Path
+}
+
+// noteSentinel records a substituted sentinel on a swap result, and whether
+// the request it was substituted into is one that answers for it.
+func noteSentinel(res *Result, sentinel string, scope ReportScope, at destination) {
+	res.Sentinels = append(res.Sentinels, sentinel)
+	if scope.Covers(at.host, at.path) {
+		res.Reportable = append(res.Reportable, sentinel)
+	}
 }
 
 // noteSwap records what one substituted value was on a swap result: the
@@ -597,7 +688,7 @@ func (s *Swapper) entryFor(result ResolveResult, now time.Time) (cacheEntry, boo
 		// refresh, it will resolve synchronously once expired.
 		refreshAt = time.Time{}
 	}
-	return cacheEntry{value: result.Value, useID: result.UseID, secretID: result.SecretID, expiresAt: expiresAt, refreshAt: refreshAt}, true
+	return cacheEntry{value: result.Value, useID: result.UseID, secretID: result.SecretID, reportScope: result.ReportScope, expiresAt: expiresAt, refreshAt: refreshAt}, true
 }
 
 // triggerRefresh refreshes a soft-expired entry in the background, deduplicated
