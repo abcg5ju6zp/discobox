@@ -563,6 +563,16 @@ Key properties:
   rather than on the `Swapper`, which `ApplyConfig` replaces on every
   ephemeral-sentinel mint.
   See [ADR 0132](../docs/adr/0132-a-credential-rejected-after-its-retry-is-recorded-against-its-secret.md).
+- **Only a request that answers for a credential reports on it.** A resolver
+  may hand back a `ReportScope` with a value — hosts, and path prefixes on a
+  segment boundary — and a request outside it reports nothing for that
+  sentinel, a refusal or an acceptance (`Result.Reportable`,
+  `requestMeta.reportSentinels`). One login goes to many endpoints, and one
+  that refuses it for what it may do, polled beside one that accepts it, would
+  otherwise report it dead and alive in turn. No scope is every request. The
+  scope rides the cache entry, since it is asked of every request, and is
+  judged once, at the first swap: a retry goes to the same URL. The retry
+  itself is not scoped: a rotation shows at any endpoint. See [ADR 26-10-13-595](../docs/adr/26-10-13-595-a-harness-names-the-requests-whose-refusal-means-its-login-is-dead.md).
 - **Ephemeral sentinels are just sentinels here.** Pool-agent mints short-lived
   sentinels per agent-credential use and registers them in the same per-client
   set, so this package needs no concept of them: it matches a string and asks

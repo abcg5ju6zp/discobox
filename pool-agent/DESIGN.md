@@ -1285,7 +1285,10 @@ flowchart LR
   `secret:resolve` scope. A *lapsed* activation is still translated here, where
   a resolve would refuse it: the use window is an authorization, and a rejection
   is a fact about the credential behind it that the window's ending does not
-  change.
+  change. A resolve answer's `reportScope` is handed to the proxy unread: which
+  requests answer for a credential is the control plane's to say and the
+  proxy's to apply
+  ([ADR 26-10-13-595](../docs/adr/26-10-13-595-a-harness-names-the-requests-whose-refusal-means-its-login-is-dead.md)).
 - The same resolver is the proxy's gate (`Gate`, `gate.go`) for the discobox
   API's host, `api.discobox.internal`, which it names to the proxy as
   `Secrets.GateHost`

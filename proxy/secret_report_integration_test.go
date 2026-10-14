@@ -374,3 +374,91 @@ func TestHTTPProxyDoesNotTreatARedirectAsAcceptance(t *testing.T) {
 		}
 	}
 }
+
+// One credential goes to many endpoints on a host, and they do not all answer
+// for it: an endpoint that refuses a login for what it may do, polled beside one
+// that accepts it, would otherwise report the login dead and alive in turn. A
+// resolver that names the requests that answer for a credential hears about
+// those and no others, in both directions (ADR 26-10-13-595).
+func TestHTTPProxyReportsOnlyWithinACredentialsReportScope(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const sentinel = "sk-ant-oat01-SENTINELVALUE00000000000000000000"
+	const dead = "sk-ant-oat01-DEADVALUE00000000000000000000000"
+	const good = "sk-ant-oat01-GOODVALUE00000000000000000000000"
+
+	origin := newOrigin(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v1/code/runners"):
+			// Refuses every credential, whatever it is.
+			w.WriteHeader(http.StatusUnauthorized)
+		case strings.HasPrefix(r.URL.Path, "/api/event_logging"):
+			// Accepts every credential, whatever it is.
+			_, _ = io.WriteString(w, "ok")
+		case r.Header.Get("Authorization") != "Bearer "+good:
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			_, _ = io.WriteString(w, "ok")
+		}
+	})
+	defer origin.Close()
+
+	resolver := &settableResolver{value: dead, scope: secrets.ReportScope{{Host: "127.0.0.1", Paths: []string{"/v1/messages"}}}}
+	client := startSecretProxy(ctx, t, sentinel, resolver, func(cfg *Config) {
+		cfg.Secrets.PositiveTTLSeconds = 0
+	})
+
+	send := func(path string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, origin.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+sentinel)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("client.Do() error = %v", err)
+		}
+		defer resp.Body.Close()
+		drainAndClose(resp.Body)
+		return resp.StatusCode
+	}
+
+	// Refused outside the scope, and accepted outside it: neither says
+	// anything about the credential.
+	if got := send("/v1/code/runners/self-hosted/spawn-hints/poll"); got != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want the runner endpoint's 401", got)
+	}
+	if got := send("/api/event_logging/v2/batch"); got != http.StatusOK {
+		t.Fatalf("status = %d, want 200 from the endpoint that takes anything", got)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if reports := resolver.reports(); len(reports) != 0 {
+		t.Fatalf("reports = %v, want none: nothing inside the scope has answered", resolver.outcomes())
+	}
+
+	// Refused inside it is reported, and an acceptance outside it does not
+	// take that back.
+	if got := send("/v1/messages/count_tokens?beta=true"); got != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 on the dead credential", got)
+	}
+	waitForReports(t, &resolver.reportLog, 1)
+	if got := send("/api/event_logging/v2/batch"); got != http.StatusOK {
+		t.Fatalf("status = %d, want 200 from the endpoint that takes anything", got)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := resolver.outcomes(); len(got) != 1 || got[0] != secrets.OutcomeRejected {
+		t.Fatalf("outcomes = %v, want only the rejection", got)
+	}
+
+	// Only the endpoint that said it was dead says it is alive again.
+	resolver.set(good)
+	if got := send("/v1/messages"); got != http.StatusOK {
+		t.Fatalf("status = %d, want 200 on the replaced credential", got)
+	}
+	reports := waitForReports(t, &resolver.reportLog, 2)
+	if len(reports) != 2 || reports[1].Outcome != secrets.OutcomeAccepted {
+		t.Fatalf("outcomes = %v, want rejected then accepted", resolver.outcomes())
+	}
+}
