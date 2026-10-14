@@ -228,6 +228,11 @@ components:
                         - env
                         - file
                     type: string
+                rejectionScope:
+                    description: Requests that answer for the credential. Only what an upstream makes of one of them is taken as a fact about it, a refusal and an acceptance alike; empty is every request (ADR 26-10-13-595).
+                    items:
+                        $ref: '#/components/schemas/SecretReportRule'
+                    type: array
             required:
                 - name
             type: object
@@ -4054,8 +4059,28 @@ components:
                 secretId:
                     description: The secret the value is; present only when status is approved. The pool's proxy records it on the request the value is swapped into (ADR 26-10-01-240).
                     type: string
+                reportScope:
+                    description: Requests that answer for the credential, as the sandbox's harness declares them. The pool's proxy reports a refusal or an acceptance of one of them and no others; absent is every request (ADR 26-10-13-595).
+                    items:
+                        $ref: '#/components/schemas/SecretReportRule'
+                    type: array
             required:
                 - status
+            type: object
+        SecretReportRule:
+            additionalProperties: false
+            description: One host, and the paths on it, whose answer says whether a credential is alive (ADR 26-10-13-595).
+            properties:
+                host:
+                    description: Host that answers for the credential, with the hosts beneath it.
+                    type: string
+                paths:
+                    description: Path prefixes on a segment boundary; /v1/messages covers /v1/messages and /v1/messages/batches. Empty is every path on the host.
+                    items:
+                        type: string
+                    type: array
+            required:
+                - host
             type: object
         SandboxAutomaticRepair:
             additionalProperties: false

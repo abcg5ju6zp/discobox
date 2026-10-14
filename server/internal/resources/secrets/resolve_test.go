@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"gorm.io/gorm"
@@ -242,4 +243,63 @@ func TestResolveSandboxSecretUnknownSentinel(t *testing.T) {
 func isNotFoundStatus(err error) bool {
 	var statusErr interface{ StatusCode() int }
 	return errors.As(err, &statusErr) && statusErr.StatusCode() == 404
+}
+
+// The scope a harness declares for a variable goes out with the value bound to
+// it, read from the config as it stands: a login stored before the harness
+// named one gains it without anybody signing in again (ADR 26-10-13-595 §2).
+func TestResolveSandboxSecretCarriesTheHarnessRejectionScope(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newResolveFixture(t)
+
+	scope := []model.HarnessSecretRejectionRule{{Host: "api.example.com", Paths: []string{"/v1/messages"}}}
+	config := &model.HarnessConfig{
+		ID: "ac-1", ProjectID: "project-1", Slug: "claude-code", Name: "Claude Code", RunCommand: []string{"claude"},
+		Secrets: []model.HarnessConfigSecret{{Name: "OTHER", RejectionScope: []model.HarnessSecretRejectionRule{{Host: "other.example.com"}}}},
+	}
+	if err := st.CreateHarnessConfig(ctx, config); err != nil {
+		t.Fatalf("create harness config: %v", err)
+	}
+	sec := mustSecret(t, st, "login", "real-token")
+	mustGrant(t, st, sec.ID, model.SecretGrantScopeProject, "project-1")
+	createSandboxWithHarness(t, st, "sb-1", "pool-1", "ac-1")
+	mustAssign(t, st, "sb-1", sec.ID, "SENTINEL-S")
+	createSandbox(t, st, "sb-bare", "pool-1")
+	mustAssign(t, st, "sb-bare", sec.ID, "SENTINEL-B")
+
+	resolve := func(sandboxID, sentinel string) *model.SandboxSecretResolution {
+		t.Helper()
+		res, err := svc.ResolveSandboxSecret(ctx, "pool-1", sandboxID, sentinel, "api.example.com")
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if res.Status != model.SecretRequestStatusApproved {
+			t.Fatalf("status = %q, want approved", res.Status)
+		}
+		return res
+	}
+	// The harness declares a scope, but not for the variable this is bound to.
+	if res := resolve("sb-1", "SENTINEL-S"); res.ReportScope != nil {
+		t.Fatalf("report scope = %#v, want none for a variable the harness names none for", res.ReportScope)
+	}
+	config.Secrets = append(config.Secrets, model.HarnessConfigSecret{Name: "FOO", RejectionScope: scope})
+	if err := st.UpdateHarnessConfig(ctx, config); err != nil {
+		t.Fatalf("update harness config: %v", err)
+	}
+	if res := resolve("sb-1", "SENTINEL-S"); !reflect.DeepEqual(res.ReportScope, scope) {
+		t.Fatalf("report scope = %#v, want the one the harness now declares for FOO", res.ReportScope)
+	}
+	// A configure sandbox holds the stored login under the prefixed name, and
+	// runs the same CLI with it.
+	if err := st.CreateSandboxSecret(ctx, &model.SandboxSecret{
+		ProjectID: "project-1", SandboxID: "sb-1", SecretID: sec.ID, EnvName: "PREV_FOO", Sentinel: "SENTINEL-P",
+	}); err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
+	if res := resolve("sb-1", "SENTINEL-P"); !reflect.DeepEqual(res.ReportScope, scope) {
+		t.Fatalf("report scope = %#v, want FOO's for the previous credential a configure run is handed", res.ReportScope)
+	}
+	if res := resolve("sb-bare", "SENTINEL-B"); res.ReportScope != nil {
+		t.Fatalf("report scope = %#v, want none for a sandbox with no harness config", res.ReportScope)
+	}
 }

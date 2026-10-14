@@ -746,7 +746,11 @@ func (s *Service) ResolveSandboxSecret(ctx context.Context, poolID, sandboxID, s
 		if secret.Renewable() {
 			expiresAt = s.renewableResolution(ctx, secret, sandbox.ID, grant.ExpiresAt)
 		}
-		return &model.SandboxSecretResolution{Status: model.SecretRequestStatusApproved, Value: val, ExpiresAt: expiresAt, SecretID: secret.ID}, nil
+		reportScope, err := s.reportScope(ctx, sandbox, assignment.EnvName)
+		if err != nil {
+			return nil, err
+		}
+		return &model.SandboxSecretResolution{Status: model.SecretRequestStatusApproved, Value: val, ExpiresAt: expiresAt, SecretID: secret.ID, ReportScope: reportScope}, nil
 	}
 
 	// No grant: ensure exactly one pending request exists for this sandbox+secret+host.

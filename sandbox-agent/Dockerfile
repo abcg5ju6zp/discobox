@@ -21,6 +21,7 @@ COPY declared ./declared
 COPY execstream ./execstream
 COPY gitbackend ./gitbackend
 COPY harness ./harness
+COPY hostscope ./hostscope
 COPY judge ./judge
 COPY platform ./platform
 COPY proxy ./proxy

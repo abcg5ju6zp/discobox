@@ -684,6 +684,15 @@ there once the user leaves the session (`/exit` or Ctrl-D).
   `resources/harnessconfigs/DESIGN.md` for how a returned file actually
   reaches a later sandbox.
 
+  Both credentials declare `rejectionScope`: `api.anthropic.com`, `/v1/messages`. A
+  secret's `rejectionScope` (`harness.RejectionRule`: a host, and path prefixes
+  on a segment boundary) names the requests that answer for the credential;
+  only what an upstream makes of one of them draws or clears the refused
+  credential's band. Anthropic's runner poll refuses a subscription login that
+  works and its event logging accepts anything, so neither is evidence. A
+  harness whose API answers the same everywhere declares none
+  ([ADR 26-10-13-595](../docs/adr/26-10-13-595-a-harness-names-the-requests-whose-refusal-means-its-login-is-dead.md)).
+
 ### Codex CLI
 
 `codex-cli/configure.sh` follows the claude-code shape: it launches a bare,

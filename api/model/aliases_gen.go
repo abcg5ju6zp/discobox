@@ -202,6 +202,7 @@ type SecretOAuth = apigen.SecretOAuth
 type SecretRefreshAnswer = apigen.SecretRefreshAnswer
 type SecretRefreshEvent = apigen.SecretRefreshEvent
 type SecretRejection = apigen.SecretRejection
+type SecretReportRule = apigen.SecretReportRule
 type SecretRequest = apigen.SecretRequest
 type SecretUse = apigen.SecretUse
 type SecretValue = apigen.SecretValue

@@ -84,6 +84,10 @@ Write these down before writing scripts; most become ADR sections.
 2. **Credential secrets.** Name, `required`, `oneOfGroup` for alternatives,
    `type` (`token`, or `oauth` only when the control plane can run a standard
    refresh), and `host` (one host or none; a configure output may set it).
+   `rejectionScope` (`[{host, paths}]`) only when the provider refuses or
+   accepts the login at endpoints that do not answer for it — a `401` for what
+   the login may do, beside inference that works; name the endpoints that do
+   (ADR 26-10-13-595). Otherwise leave it out.
 3. **Delivery.** `delivery: file` when the CLI reads metadata beside the token
    or prefers an env var that would defeat the file (claude-code, codex); the
    default env delivery when the CLI documents an env var for headless use

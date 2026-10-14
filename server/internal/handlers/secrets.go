@@ -207,6 +207,9 @@ func (h *Handler) ResolveSandboxSecret(ctx context.Context, req *apimodel.Resolv
 			resp.SetExpiresAt(serverapi.NewOptDateTime(*resolution.ExpiresAt))
 		}
 		resp.SetSecretId(serverapi.NewOptString(resolution.SecretID))
+		for _, rule := range resolution.ReportScope {
+			resp.ReportScope = append(resp.ReportScope, apimodel.SecretReportRule{Host: rule.Host, Paths: rule.Paths})
+		}
 	}
 	return &resp, nil
 }

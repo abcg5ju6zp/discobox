@@ -2,12 +2,16 @@ package harnessconfigs
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/discobox-ai/discobox/harness"
+	"github.com/discobox-ai/discobox/platform"
 	"github.com/discobox-ai/discobox/server/internal/model"
 )
 
@@ -338,4 +342,84 @@ func compactFile(t *testing.T, path string) string {
 		t.Fatalf("%s is not valid JSON: %v", path, err)
 	}
 	return compact.String()
+}
+
+// A rejection scope is refused where the label is read when a request could
+// never be matched against it: an entry naming no host would name every
+// request, which is what declaring no scope already says (ADR 26-10-13-595).
+func TestParseImageMetadataRejectsABadRejectionScope(t *testing.T) {
+	for name, rule := range map[string]harness.RejectionRule{
+		"no host":         {Paths: []string{"/v1/messages"}},
+		"a URL":           {Host: "https://api.example.com"},
+		"a host and path": {Host: "api.example.com/v1"},
+		"a port":          {Host: "api.example.com:443"},
+		"a relative path": {Host: "api.example.com", Paths: []string{"v1/messages"}},
+		"a query":         {Host: "api.example.com", Paths: []string{"/v1/messages?beta=true"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			label, err := json.Marshal(harness.ImageMetadata{Harness: &harness.Image{
+				ID: "bad", Name: "Bad",
+				Secrets: []harness.Secret{{Name: "API_KEY", RejectionScope: []harness.RejectionRule{rule}}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parseImageMetadata("sha256:abc", withBaseLayer(string(label))); err == nil || !strings.Contains(err.Error(), "rejectionScope") {
+				t.Fatalf("err = %v, want the rejection scope refused", err)
+			}
+		})
+	}
+}
+
+// The scope is read from the label as the manifest spells it, and snapshotted
+// onto the config with its host in the spelling the proxy reports.
+func TestSnapshotImageMetadataCarriesRejectionScope(t *testing.T) {
+	label := `{"harness":{"id":"claude-code","name":"Claude Code","secrets":[{"name":"API_KEY","rejectionScope":[{"host":"API.Example.com","paths":["/v1/messages"]}]},{"name":"OTHER"}]}}`
+	metadata, err := parseImageMetadata("sha256:abc", withBaseLayer(label))
+	if err != nil {
+		t.Fatalf("parse image metadata: %v", err)
+	}
+	config := &model.HarnessConfig{Slug: "claude-code"}
+	snapshotImageMetadata(config, metadata)
+	want := []model.HarnessSecretRejectionRule{{Host: "api.example.com", Paths: []string{"/v1/messages"}}}
+	if len(config.Secrets) != 2 || !reflect.DeepEqual(config.Secrets[0].RejectionScope, want) || config.Secrets[1].RejectionScope != nil {
+		t.Fatalf("secrets = %#v, want API_KEY scoped to %v and OTHER unscoped", config.Secrets, want)
+	}
+}
+
+// A built-in snapshotted by a server that did not read rejection scopes yet
+// carries its image's digest and no scope. It is rewritten at the next seed
+// rather than skipped as unchanged, which is how a stored login gains the
+// scope its harness declares (ADR 26-10-13-595 §1).
+func TestSeedBuiltInsRewritesABuiltInWhoseSecretDeclarationsMoved(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	const image = "discobox-harness-claude-code:v1"
+	if err := st.CreateHarnessConfig(ctx, &model.HarnessConfig{
+		ProjectID: "project-1", Slug: "claude-code", Name: "Claude Code", BuiltIn: true,
+		Image: image, ImageDigest: "sha256:same", ImageKind: platform.OCI,
+		Secrets: []model.HarnessConfigSecret{{Name: "API_KEY", Required: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	declared := imageMetadata{Digest: "sha256:same", ImageMetadata: harness.ImageMetadata{
+		ImageKind: platform.OCI,
+		Harness: &harness.Image{ID: "claude-code", Name: "Claude Code", Secrets: []harness.Secret{{
+			Name: "API_KEY", Required: true,
+			RejectionScope: []harness.RejectionRule{{Host: "api.example.com", Paths: []string{"/v1/messages"}}},
+		}}},
+	}}
+	inspector := &stubInspector{byImage: map[string]imageMetadata{image: declared}}
+	svc := &Service{store: st, inspector: inspector, harnessImages: map[string]string{"claude-code": image}}
+	if err := svc.SeedBuiltIns(ctx, "project-1"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	got, err := st.GetHarnessConfigBySlug(ctx, "project-1", "claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []model.HarnessSecretRejectionRule{{Host: "api.example.com", Paths: []string{"/v1/messages"}}}
+	if len(got.Secrets) != 1 || !reflect.DeepEqual(got.Secrets[0].RejectionScope, want) {
+		t.Fatalf("secrets = %#v, want API_KEY scoped to %v", got.Secrets, want)
+	}
 }

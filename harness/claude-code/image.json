@@ -29,13 +29,15 @@
         "name": "ANTHROPIC_API_KEY",
         "required": true,
         "oneOfGroup": "auth",
-        "delivery": "file"
+        "delivery": "file",
+        "rejectionScope": [{ "host": "api.anthropic.com", "paths": ["/v1/messages"] }]
       },
       {
         "name": "CLAUDE_CODE_OAUTH_TOKEN",
         "required": true,
         "oneOfGroup": "auth",
-        "delivery": "file"
+        "delivery": "file",
+        "rejectionScope": [{ "host": "api.anthropic.com", "paths": ["/v1/messages"] }]
       }
     ],
     "config": {

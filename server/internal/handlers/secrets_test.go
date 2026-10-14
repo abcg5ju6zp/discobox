@@ -403,9 +403,10 @@ type resolvingSecretService struct{ fakeSecretService }
 
 func (resolvingSecretService) ResolveSandboxSecret(context.Context, string, string, string, string) (*model.SandboxSecretResolution, error) {
 	return &model.SandboxSecretResolution{
-		Status:   model.SecretRequestStatusApproved,
-		Value:    &model.SecretValue{Token: "real-token"},
-		SecretID: "sec_1",
+		Status:      model.SecretRequestStatusApproved,
+		Value:       &model.SecretValue{Token: "real-token"},
+		SecretID:    "sec_1",
+		ReportScope: []model.HarnessSecretRejectionRule{{Host: "api.example.com", Paths: []string{"/v1/messages"}}},
 	}, nil
 }
 
@@ -426,6 +427,11 @@ func TestResolveSandboxSecretNamesTheSecret(t *testing.T) {
 	}
 	if body.Status != serverapi.ResolveSandboxSecretResponseStatusApproved || body.SecretId.Or("") != "sec_1" {
 		t.Fatalf("resolution = %+v, want approved and naming sec_1", body)
+	}
+	// And the requests that answer for it, which the proxy holds its reports
+	// to (ADR 26-10-13-595).
+	if len(body.ReportScope) != 1 || body.ReportScope[0].Host != "api.example.com" || !slices.Equal(body.ReportScope[0].Paths, []string{"/v1/messages"}) {
+		t.Fatalf("report scope = %+v, want api.example.com /v1/messages", body.ReportScope)
 	}
 }
 

@@ -1,7 +1,13 @@
 // Package harness defines coding-harness contracts and built-in drivers.
 package harness
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/discobox-ai/discobox/hostscope"
+)
 
 const (
 	TerminalIDEnv = "DISCOBOX_TERMINAL_ID"
@@ -225,11 +231,53 @@ type File struct {
 // Delivery says how the sandbox hands this credential to the harness. Empty
 // (SecretDeliveryEnv) exports Name into the harness's environment. See
 // SecretDeliveryFile for the other case.
+//
+// RejectionScope names the requests that answer for this credential
+// (ADR 26-10-13-595). A CLI sends one login to many endpoints, and they do not
+// all refuse it for the same reason: an endpoint that turns a live login away
+// for what it may do says nothing about whether it has to be signed in again.
+// Only what an upstream makes of a request the scope names is taken as a fact
+// about the credential, a refusal and an acceptance alike. Empty is every
+// request.
 type Secret struct {
-	Name       string
-	Required   bool
-	OneOfGroup string
-	Delivery   string
+	Name           string
+	Required       bool
+	OneOfGroup     string
+	Delivery       string
+	RejectionScope []RejectionRule
+}
+
+// RejectionRule is one host of a Secret's RejectionScope, and the paths on it.
+type RejectionRule struct {
+	// Host covers itself and the hosts beneath it, the way a secret's host
+	// binding does (hostscope).
+	Host string `json:"host"`
+	// Paths are prefixes on a segment boundary: "/v1/messages" covers
+	// "/v1/messages" and "/v1/messages/batches", never "/v1/messagesX". The
+	// query is not part of the match. Empty is every path on the host.
+	Paths []string `json:"paths,omitempty"`
+}
+
+// Validate reports whether the rule names a host and paths a request can be
+// matched against.
+func (r RejectionRule) Validate() error {
+	host := strings.ToLower(strings.TrimSpace(r.Host))
+	if host == "" {
+		// Not a wildcard: an entry that names no host is a scope that names
+		// every request, which is what declaring no scope already says.
+		return errors.New("a rejectionScope entry requires a host")
+	}
+	// A host and nothing else. A URL, a port or a path normalizes to a name no
+	// destination has, and the scope would then silence every report.
+	if strings.ContainsAny(host, "/:@?# \t") || hostscope.Normalize(host) != host {
+		return fmt.Errorf("rejectionScope host %q must be a bare host name: no scheme, port or path", r.Host)
+	}
+	for _, path := range r.Paths {
+		if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "?#") {
+			return fmt.Errorf("rejectionScope path %q must be an absolute path with no query", path)
+		}
+	}
+	return nil
 }
 
 const (

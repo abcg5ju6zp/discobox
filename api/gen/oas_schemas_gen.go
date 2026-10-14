@@ -5050,6 +5050,9 @@ type HarnessConfigSecret struct {
 	// withholds that export because the harness reads the credential from a file the harness config
 	// installs.
 	Delivery OptHarnessConfigSecretDelivery `json:"delivery"`
+	// Requests that answer for the credential. Only what an upstream makes of one of them is taken as a
+	// fact about it, a refusal and an acceptance alike; empty is every request (ADR 26-10-13-595).
+	RejectionScope []SecretReportRule `json:"rejectionScope"`
 }
 
 // GetName returns the value of Name.
@@ -5072,6 +5075,11 @@ func (s *HarnessConfigSecret) GetDelivery() OptHarnessConfigSecretDelivery {
 	return s.Delivery
 }
 
+// GetRejectionScope returns the value of RejectionScope.
+func (s *HarnessConfigSecret) GetRejectionScope() []SecretReportRule {
+	return s.RejectionScope
+}
+
 // SetName sets the value of Name.
 func (s *HarnessConfigSecret) SetName(val string) {
 	s.Name = val
@@ -5090,6 +5098,11 @@ func (s *HarnessConfigSecret) SetOneOfGroup(val OptString) {
 // SetDelivery sets the value of Delivery.
 func (s *HarnessConfigSecret) SetDelivery(val OptHarnessConfigSecretDelivery) {
 	s.Delivery = val
+}
+
+// SetRejectionScope sets the value of RejectionScope.
+func (s *HarnessConfigSecret) SetRejectionScope(val []SecretReportRule) {
+	s.RejectionScope = val
 }
 
 // Binds one of a harness config's environment variables to a project secret.
@@ -17943,6 +17956,10 @@ type ResolveSandboxSecretResponse struct {
 	// The secret the value is; present only when status is approved. The pool's proxy records it on the
 	// request the value is swapped into (ADR 26-10-01-240).
 	SecretId OptString `json:"secretId"`
+	// Requests that answer for the credential, as the sandbox's harness declares them. The pool's proxy
+	// reports a refusal or an acceptance of one of them and no others; absent is every request (ADR
+	// 26-10-13-595).
+	ReportScope []SecretReportRule `json:"reportScope"`
 }
 
 // GetSchema returns the value of Schema.
@@ -17970,6 +17987,11 @@ func (s *ResolveSandboxSecretResponse) GetSecretId() OptString {
 	return s.SecretId
 }
 
+// GetReportScope returns the value of ReportScope.
+func (s *ResolveSandboxSecretResponse) GetReportScope() []SecretReportRule {
+	return s.ReportScope
+}
+
 // SetSchema sets the value of Schema.
 func (s *ResolveSandboxSecretResponse) SetSchema(val OptURI) {
 	s.Schema = val
@@ -17993,6 +18015,11 @@ func (s *ResolveSandboxSecretResponse) SetExpiresAt(val OptDateTime) {
 // SetSecretId sets the value of SecretId.
 func (s *ResolveSandboxSecretResponse) SetSecretId(val OptString) {
 	s.SecretId = val
+}
+
+// SetReportScope sets the value of ReportScope.
+func (s *ResolveSandboxSecretResponse) SetReportScope(val []SecretReportRule) {
+	s.ReportScope = val
 }
 
 func (*ResolveSandboxSecretResponse) resolveSandboxSecretRes() {}
@@ -26504,6 +26531,36 @@ func (s *SecretRejectionSecretType) UnmarshalText(data []byte) error {
 	default:
 		return errors.Errorf("invalid value: %q", data)
 	}
+}
+
+// One host, and the paths on it, whose answer says whether a credential is alive (ADR 26-10-13-595).
+// Ref: #/components/schemas/SecretReportRule
+type SecretReportRule struct {
+	// Host that answers for the credential, with the hosts beneath it.
+	Host string `json:"host"`
+	// Path prefixes on a segment boundary; /v1/messages covers /v1/messages and /v1/messages/batches.
+	// Empty is every path on the host.
+	Paths []string `json:"paths"`
+}
+
+// GetHost returns the value of Host.
+func (s *SecretReportRule) GetHost() string {
+	return s.Host
+}
+
+// GetPaths returns the value of Paths.
+func (s *SecretReportRule) GetPaths() []string {
+	return s.Paths
+}
+
+// SetHost sets the value of Host.
+func (s *SecretReportRule) SetHost(val string) {
+	s.Host = val
+}
+
+// SetPaths sets the value of Paths.
+func (s *SecretReportRule) SetPaths(val []string) {
+	s.Paths = val
 }
 
 // Ref: #/components/schemas/SecretRequest

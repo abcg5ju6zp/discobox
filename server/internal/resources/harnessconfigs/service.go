@@ -11,6 +11,7 @@ import (
 
 	"github.com/discobox-ai/discobox/devimage"
 	"github.com/discobox-ai/discobox/harness"
+	"github.com/discobox-ai/discobox/hostscope"
 	"github.com/discobox-ai/discobox/server/internal/apperrors"
 	"github.com/discobox-ai/discobox/server/internal/harnessdefs"
 
@@ -407,9 +408,14 @@ func (s *Service) SeedBuiltIns(ctx context.Context, projectID string) error {
 		}
 		// The platforms and the image kind are compared too, so a built-in
 		// recorded before they were — or with a single-platform development
-		// image's platform — is rewritten with what its image now is.
+		// image's platform — is rewritten with what its image now is. The
+		// secret declarations are compared for the same reason: one snapshotted
+		// by a server that did not read a field of them yet (a rejection scope,
+		// ADR 26-10-13-595) carries the digest and not the field, and would
+		// otherwise be skipped for good.
 		if existing != nil && existing.Image == image && existing.ImageDigest == metadata.Digest &&
-			slices.Equal(existing.Platforms, metadata.Platforms) && existing.ImageKind == metadata.ImageKind {
+			slices.Equal(existing.Platforms, metadata.Platforms) && existing.ImageKind == metadata.ImageKind &&
+			sameSecretDeclarations(existing.Secrets, declaredSecrets(metadata.Harness)) {
 			continue
 		}
 		if existing == nil {
@@ -596,17 +602,7 @@ func snapshotImageMetadata(config *model.HarnessConfig, inspected imageMetadata)
 		files = append(files, model.HarnessConfigFile{Path: file.Path, Content: file.Content, CreateOnly: file.CreateOnly, Template: file.Template})
 	}
 	config.Files = files
-	secrets := make([]model.HarnessConfigSecret, 0, len(image.Secrets))
-	for _, secret := range image.Secrets {
-		secrets = append(secrets, model.HarnessConfigSecret{
-			Name: secret.Name, Required: secret.Required, OneOfGroup: secret.OneOfGroup,
-			// Delivery decides whether the sentinel is exported into the
-			// harness's environment at all, so dropping it here would leave
-			// every later layer with nothing to act on.
-			Delivery: secret.Delivery,
-		})
-	}
-	config.Secrets = secrets
+	config.Secrets = declaredSecrets(image)
 	config.Env = nil
 	if len(metadata.Env) > 0 {
 		env := make(map[string]string, len(metadata.Env))
@@ -617,4 +613,48 @@ func snapshotImageMetadata(config *model.HarnessConfig, inspected imageMetadata)
 	}
 	config.Volumes = append([]harness.Volume{}, metadata.Volumes...)
 	config.AdditionalGroups = append([]string{}, metadata.AdditionalGroups...)
+}
+
+// declaredSecrets is an image's secret declarations as a config snapshots
+// them. An image that declares no harness declares none.
+func declaredSecrets(image *harness.Image) []model.HarnessConfigSecret {
+	if image == nil {
+		return []model.HarnessConfigSecret{}
+	}
+	secrets := make([]model.HarnessConfigSecret, 0, len(image.Secrets))
+	for _, secret := range image.Secrets {
+		secrets = append(secrets, model.HarnessConfigSecret{
+			Name: secret.Name, Required: secret.Required, OneOfGroup: secret.OneOfGroup,
+			// Delivery decides whether the sentinel is exported into the
+			// harness's environment at all, so dropping it here would leave
+			// every later layer with nothing to act on.
+			Delivery:       secret.Delivery,
+			RejectionScope: rejectionScope(secret.RejectionScope),
+		})
+	}
+	return secrets
+}
+
+// sameSecretDeclarations reports whether a config already snapshots exactly
+// these declarations, every field of each.
+func sameSecretDeclarations(a, b []model.HarnessConfigSecret) bool {
+	return slices.EqualFunc(a, b, func(x, y model.HarnessConfigSecret) bool {
+		return x.Name == y.Name && x.Required == y.Required && x.OneOfGroup == y.OneOfGroup && x.Delivery == y.Delivery &&
+			slices.EqualFunc(x.RejectionScope, y.RejectionScope, func(p, q model.HarnessSecretRejectionRule) bool {
+				return p.Host == q.Host && slices.Equal(p.Paths, q.Paths)
+			})
+	})
+}
+
+// rejectionScope carries a harness secret's rejection scope onto the config,
+// with each host in the one spelling the proxy reports a destination in.
+func rejectionScope(rules []harness.RejectionRule) []model.HarnessSecretRejectionRule {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]model.HarnessSecretRejectionRule, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, model.HarnessSecretRejectionRule{Host: hostscope.Normalize(rule.Host), Paths: slices.Clone(rule.Paths)})
+	}
+	return out
 }
