@@ -111,7 +111,7 @@ func workerRequest(t *testing.T, svc *resourcesecrets.Service, change func(*serv
 	if change != nil {
 		change(&body)
 	}
-	req, err := svc.CreateSandboxCredentialRequest(testPrincipalContext(), testPoolID, body)
+	req, _, err := svc.CreateSandboxCredentialRequest(testPrincipalContext(), testPoolID, body)
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}

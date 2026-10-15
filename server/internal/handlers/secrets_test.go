@@ -59,6 +59,14 @@ func TestSecretRequestHandlersDoNotReturnSecretValues(t *testing.T) {
 
 type fakeSecretService struct{}
 
+func (fakeSecretService) ListCredentialRetirements(context.Context, string) ([]model.CredentialRetirement, error) {
+	return nil, nil
+}
+
+func (fakeSecretService) AcknowledgeCredentialRetirements(context.Context, string, []string) error {
+	return nil
+}
+
 func (fakeSecretService) ListSecrets(context.Context, string) ([]model.Secret, error) {
 	return []model.Secret{fakeSecret()}, nil
 }
@@ -144,8 +152,8 @@ func (fakeSecretService) ListSandboxCredentials(context.Context, string, string)
 	return nil, nil
 }
 
-func (fakeSecretService) CreateSandboxCredentialRequest(context.Context, string, svcapi.CreateSandboxCredentialRequestBody) (*model.SecretRequest, error) {
-	return &model.SecretRequest{ID: "sreq-1", Status: model.SecretRequestStatusPending}, nil
+func (fakeSecretService) CreateSandboxCredentialRequest(context.Context, string, svcapi.CreateSandboxCredentialRequestBody) (*model.SecretRequest, int64, error) {
+	return &model.SecretRequest{ID: "sreq-1", Status: model.SecretRequestStatusPending}, 0, nil
 }
 
 func (fakeSecretService) GetSandboxCredentialRequest(context.Context, string, string, string) (*model.SecretRequest, *model.SecretGrant, error) {

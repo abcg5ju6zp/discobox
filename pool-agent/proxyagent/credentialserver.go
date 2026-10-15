@@ -43,13 +43,13 @@ const (
 // is done. Every request is served for the sandbox named by the verified client
 // certificate, so a sandbox cannot ask about another sandbox's credentials by
 // saying so in a body (ADR 0031 §2).
-func serveCredentials(ctx context.Context, logger *slog.Logger, bundle *proxy.CertificateBundle, controlPlane *controlPlaneCredentials, live *activations, trusts *hostTrusts) error {
+func serveCredentials(ctx context.Context, logger *slog.Logger, bundle *proxy.CertificateBundle, controlPlane *controlPlaneCredentials, live *activations, trusts *hostTrusts, generationsPath string) error {
 	var listenConfig net.ListenConfig
 	tcp, err := listenConfig.Listen(ctx, "tcp", CredentialsListenAddress)
 	if err != nil {
 		return err
 	}
-	return serveCredentialsOn(ctx, logger, tcp, bundle, controlPlane, live, trusts)
+	return serveCredentialsOn(ctx, logger, tcp, bundle, controlPlane, live, trusts, generationsPath)
 }
 
 // newControlPlaneCredentials is the broker's client of the control plane for
@@ -65,14 +65,15 @@ func newControlPlaneCredentials(root layout.Root, projectID, poolID string) *con
 // test can drive the real mTLS stack on an ephemeral port — the certificate
 // handling and identity derivation are the parts worth testing, and they are
 // exactly what a fake listener would skip.
-func serveCredentialsOn(ctx context.Context, logger *slog.Logger, tcp net.Listener, bundle *proxy.CertificateBundle, controlPlane *controlPlaneCredentials, live *activations, trusts *hostTrusts) error {
+func serveCredentialsOn(ctx context.Context, logger *slog.Logger, tcp net.Listener, bundle *proxy.CertificateBundle, controlPlane *controlPlaneCredentials, live *activations, trusts *hostTrusts, generationsPath string) error {
 	handler := &credentialsHandler{
 		controlPlane: controlPlane,
 		// Its own client: a verdict takes as long as a model takes, which is
-		// nothing like the time the broker's other calls take.
-		judge:       &controlPlaneCredentials{contextPath: controlPlane.contextPath, client: judgeHTTPClient()},
-		activations: live,
-		trusts:      trusts,
+		// nothing like the time the other calls take.
+		judge:           &controlPlaneCredentials{contextPath: controlPlane.contextPath, client: judgeHTTPClient()},
+		activations:     live,
+		trusts:          trusts,
+		generationsPath: generationsPath,
 	}
 
 	listener := tls.NewListener(tcp, sandboxTLSConfig(bundle))
@@ -125,6 +126,9 @@ type credentialsHandler struct {
 	judge        *controlPlaneCredentials
 	activations  *activations
 	trusts       *hostTrusts
+	// generationsPath is the per-pool current-run file; activations minted
+	// through this handler are stamped with the run (ADR 26-10-15-871).
+	generationsPath string
 }
 
 func (h *credentialsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -140,11 +144,12 @@ func (h *credentialsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	agentcreds.NewHandler(&credentialBroker{
-		sandboxID:   sandboxID,
-		controlPlan: h.controlPlane,
-		judge:       h.judge,
-		activations: h.activations,
-		trusts:      h.trusts,
+		sandboxID:       sandboxID,
+		controlPlan:     h.controlPlane,
+		judge:           h.judge,
+		activations:     h.activations,
+		trusts:          h.trusts,
+		generationsPath: h.generationsPath,
 	}).ServeHTTP(w, r.WithContext(ctx))
 }
 

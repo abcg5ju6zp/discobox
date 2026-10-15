@@ -104,7 +104,7 @@ func TestMintedSentinelIsSwappedOnRealTraffic(t *testing.T) {
 
 	// Minting is what registers the sentinel. It happens before any request,
 	// exactly as `get` does, and must take effect without waiting for a poll.
-	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{originHost}, "ghp_{base62:36}", []string{"gh", "pr", "create"})
+	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{originHost}, "ghp_{base62:36}", []string{"gh", "pr", "create"}, 0)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestMintedSentinelIsNotSwappedForAnotherHost(t *testing.T) {
 	go func() { _ = server.ListenAndServe() }()
 
 	// Approved for somewhere the request is not going.
-	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{"api.github.com"}, "ghp_{base62:36}", nil)
+	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{"api.github.com"}, "ghp_{base62:36}", nil, 0)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestCredentialsEndpointIdentifiesTheSandboxByItsCertificate(t *testing.T) {
 	live := newActivations()
 	listener := listenLocal(t)
 	go func() {
-		_ = serveCredentialsOn(ctx, testLogger(), listener, bundle, newControlPlaneCredentials(root, testProjectID, testPoolID), live, nil)
+		_ = serveCredentialsOn(ctx, testLogger(), listener, bundle, newControlPlaneCredentials(root, testProjectID, testPoolID), live, nil, "")
 	}()
 
 	client := agentcreds.NewClient("https://"+listener.Addr().String(), agentcreds.WithHTTPClient(mtlsClient(t, bundle, material)))
@@ -309,7 +309,7 @@ func TestCredentialsEndpointRefusesAnUnknownCertificate(t *testing.T) {
 	}
 	listener := listenLocal(t)
 	go func() {
-		_ = serveCredentialsOn(ctx, testLogger(), listener, bundle, newControlPlaneCredentials(root, testProjectID, testPoolID), newActivations(), nil)
+		_ = serveCredentialsOn(ctx, testLogger(), listener, bundle, newControlPlaneCredentials(root, testProjectID, testPoolID), newActivations(), nil, "")
 	}()
 
 	// A client that trusts the server but presents nothing of its own.

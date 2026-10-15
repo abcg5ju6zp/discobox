@@ -6,6 +6,7 @@ package apigen
 type OperationName = string
 
 const (
+	AcknowledgeCredentialRetirementsOperation OperationName = "AcknowledgeCredentialRetirements"
 	ApproveSecretRequestOperation             OperationName = "ApproveSecretRequest"
 	ApproveTrustRequestOperation              OperationName = "ApproveTrustRequest"
 	AssignSandboxHarnessSecretsOperation      OperationName = "AssignSandboxHarnessSecrets"
@@ -73,6 +74,7 @@ const (
 	JudgeForPoolOperation                     OperationName = "JudgeForPool"
 	JudgeSandboxOperation                     OperationName = "JudgeSandbox"
 	ListApprovalRequestsOperation             OperationName = "ListApprovalRequests"
+	ListCredentialRetirementsOperation        OperationName = "ListCredentialRetirements"
 	ListCredentialVerdictsOperation           OperationName = "ListCredentialVerdicts"
 	ListDNSAuditOperation                     OperationName = "ListDNSAudit"
 	ListExecEventsOperation                   OperationName = "ListExecEvents"

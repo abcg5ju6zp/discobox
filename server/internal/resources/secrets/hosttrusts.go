@@ -27,54 +27,57 @@ import (
 // CreateSandboxTrustRequest records a pool's relay of an agent's ask. The
 // chain is the pool's observation, never the sandbox's word: the pool
 // connected to the host itself. A pending ask for the same host is reused.
-func (s *Service) CreateSandboxTrustRequest(ctx context.Context, poolID string, input services.CreateSandboxTrustRequestBody) (*model.HostTrustRequest, error) {
+func (s *Service) CreateSandboxTrustRequest(ctx context.Context, poolID string, input services.CreateSandboxTrustRequestBody) (*model.HostTrustRequest, int64, error) {
 	sandbox, err := s.sandboxOwnedByPool(ctx, poolID, input.SandboxId)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	host := agentcreds.TrustHost(input.Host)
 	if host == "" {
-		return nil, apperrors.NewStatusError(http.StatusBadRequest, "a trust request names one host, as host or host:port")
+		return nil, 0, apperrors.NewStatusError(http.StatusBadRequest, "a trust request names one host, as host or host:port")
 	}
 	uses, err := requestedUses(input.Uses)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	grantTTL := input.GrantTTLSeconds.Or(0)
 	if grantTTL < 0 || grantTTL > model.MaxHostTrustTTLSeconds {
-		return nil, apperrors.NewStatusError(http.StatusBadRequest,
+		return nil, 0, apperrors.NewStatusError(http.StatusBadRequest,
 			fmt.Sprintf("a requested trust lifetime runs from 1 second to %d (thirty days); leave it out to ask for nothing in particular", model.MaxHostTrustTTLSeconds))
 	}
 	if len(input.ObservedChain) == 0 {
-		return nil, apperrors.NewStatusError(http.StatusBadRequest, "a trust request carries the chain the pool observed")
+		return nil, 0, apperrors.NewStatusError(http.StatusBadRequest, "a trust request carries the chain the pool observed")
 	}
 
 	existing, err := s.store.FindPendingHostTrustRequest(ctx, sandbox.ProjectID, sandbox.ID, host)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return nil, err
+		return nil, 0, err
 	}
 	if existing != nil {
-		return existing, nil
+		return existing, existing.SandboxGeneration, nil
 	}
 	req := &model.HostTrustRequest{
-		ProjectID:     sandbox.ProjectID,
-		SandboxID:     sandbox.ID,
-		RequestedBy:   agentRequesterID(sandbox.ID),
-		Host:          host,
-		Justification: strings.TrimSpace(input.Justification.Or("")),
-		Uses:          uses,
-		GrantTTL:      grantTTL,
-		ObservedChain: observedChain(input.ObservedChain),
-		Status:        model.HostTrustRequestStatusPending,
+		ProjectID:   sandbox.ProjectID,
+		SandboxID:   sandbox.ID,
+		RequestedBy: agentRequesterID(sandbox.ID),
+		// The pin answers the run that asked; an approval after a rebuild is
+		// refused (ADR 26-10-15-871).
+		SandboxGeneration: sandbox.Generation,
+		Host:              host,
+		Justification:     strings.TrimSpace(input.Justification.Or("")),
+		Uses:              uses,
+		GrantTTL:          grantTTL,
+		ObservedChain:     observedChain(input.ObservedChain),
+		Status:            model.HostTrustRequestStatusPending,
 	}
 	if supplied, ok := input.SuppliedCA.Get(); ok {
 		ca := observedCertificate(supplied)
 		req.SuppliedCA = &ca
 	}
 	if err := s.store.CreateHostTrustRequest(ctx, req); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return req, nil
+	return req, req.SandboxGeneration, nil
 }
 
 // GetSandboxTrustRequest returns one of the sandbox's own trust requests and,
@@ -102,7 +105,13 @@ func (s *Service) GetSandboxTrustRequest(ctx context.Context, poolID, sandboxID,
 		}
 		return nil, nil, err
 	}
-	if !trust.Live(time.Now()) {
+	// Time and run: a trust pinned to a generation that has since moved is as
+	// gone as a revoked one, so the poll answers denied (ADR 26-10-15-871).
+	live, err := s.store.TrustPinLive(ctx, trust)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !trust.Live(time.Now()) || !live {
 		return req, nil, nil
 	}
 	return req, trust, nil
@@ -149,7 +158,18 @@ func (s *Service) ApproveTrustRequest(ctx context.Context, projectID, requestID 
 		return nil, apperrors.NotFound(err, "trust request not found")
 	}
 	if req.Status != model.HostTrustRequestStatusPending {
-		return nil, apperrors.NewStatusError(http.StatusConflict, fmt.Sprintf("trust request is already %s", req.Status))
+		// Repeated approval replays the recorded pin and its original use IDs
+		// rather than minting a second trust (ADR 26-10-15-871).
+		return s.replayTrustRequest(ctx, req, input)
+	}
+	// The pin answers the run that asked; a rebuild or archive before the
+	// person answers leaves the ask unanswerable for the current run.
+	sandbox, err := s.store.GetSandbox(ctx, req.ProjectID, req.SandboxID)
+	if err != nil {
+		return nil, apperrors.NotFound(err, "sandbox not found")
+	}
+	if err := checkSandboxRun(sandbox, req.SandboxGeneration); err != nil {
+		return nil, err
 	}
 	pin := DefaultTrustPin(req)
 	if chosen, ok := input.Pin.Get(); ok {
@@ -183,17 +203,26 @@ func (s *Service) ApproveTrustRequest(ctx context.Context, projectID, requestID 
 	trust := &model.HostTrust{
 		ProjectID: req.ProjectID,
 		SandboxID: req.SandboxID,
-		Host:      req.Host,
-		Pin:       pin,
-		PinPEM:    pinPEM,
-		Uses:      uses,
-		ExpiresAt: time.Now().UTC().Add(time.Duration(ttl) * time.Second),
-		GrantedBy: grantedByOf(principal),
-		RequestID: req.ID,
+		// Zero is an ask from before pinning; a new trust pins the run whose
+		// ask is being answered (ADR 26-10-15-871).
+		SandboxGeneration: req.SandboxGeneration,
+		Host:              req.Host,
+		Pin:               pin,
+		PinPEM:            pinPEM,
+		Uses:              uses,
+		ExpiresAt:         time.Now().UTC().Add(time.Duration(ttl) * time.Second),
+		GrantedBy:         grantedByOf(principal),
+		RequestID:         req.ID,
 	}
 	if err := s.store.ApproveHostTrustRequest(ctx, req, trust); err != nil {
 		if errors.Is(err, store.ErrGenerationConflict) {
-			return nil, apperrors.NewStatusError(http.StatusConflict, "trust request was answered by someone else")
+			// A concurrent approval won; replay its answer when this call
+			// asked the same thing.
+			winner, getErr := s.store.GetHostTrustRequest(ctx, projectID, requestID)
+			if getErr != nil {
+				return nil, apperrors.NewStatusError(http.StatusConflict, "trust request was answered by someone else")
+			}
+			return s.replayTrustRequest(ctx, winner, input)
 		}
 		return nil, err
 	}

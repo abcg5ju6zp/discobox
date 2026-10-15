@@ -289,8 +289,14 @@ func (s *Service) UpdateSecret(ctx context.Context, projectID, secretID string, 
 	// A replaced value retracts what was recorded about the credential it
 	// replaced (ADR 0132 §4). The store does it, for every writer at once —
 	// this one and the harness configure flow's update-in-place — rather than
-	// each of them remembering to.
-	if err := s.store.UpdateSecret(ctx, sec); err != nil {
+	// each of them remembering to. A value a person sends is a new
+	// credential generation and retires approvals pinned to the old one (ADR
+	// 26-10-15-871); a rename or a binding/limit change does not.
+	var updateOptions []store.UpdateSecretOption
+	if input.Value.IsSet() {
+		updateOptions = append(updateOptions, store.UpdateSecretBumpsValueVersion())
+	}
+	if err := s.store.UpdateSecret(ctx, sec, updateOptions...); err != nil {
 		return nil, secretCollision(err, sec)
 	}
 	// Through the service's own read, so a create and an update answer with the
@@ -400,13 +406,22 @@ func (s *Service) ApproveSecretRequest(ctx context.Context, projectID, requestID
 		return nil, apperrors.NotFound(err, "secret request not found")
 	}
 	if req.Status != model.SecretRequestStatusPending {
-		return nil, apperrors.NewStatusError(http.StatusConflict, fmt.Sprintf("secret request is already %s", req.Status))
+		// A second approve is a replay of the first, not a new decision: same
+		// grant, same use IDs (ADR 26-10-15-871).
+		return s.replaySecretRequest(ctx, req, input)
 	}
 	// A refresh request has no grant to mint: it asks for a new value, and is
 	// answered by writing one (ADR 26-09-25-122 §4).
 	if req.IsRefresh() {
 		return nil, apperrors.NewStatusError(http.StatusBadRequest,
 			fmt.Sprintf("a refresh request is answered with a new value, not an approval: `discobox secret refresh %s --run` runs its command, or --value gives one", req.SecretID))
+	}
+	// An agent's ask names the run that made it. Approving after a rebuild or
+	// an archive cannot mint for the run that is there now (ADR 26-10-15-871).
+	if req.FromProtocol() {
+		if err := s.checkApprovalRun(ctx, req); err != nil {
+			return nil, err
+		}
 	}
 
 	// A discobox answering the inbox may hand on only what it was delegated
@@ -601,6 +616,18 @@ func (s *Service) ApproveSecretRequest(ctx context.Context, projectID, requestID
 		if !named {
 			ttl = defaultApprovalTTL(req, secret)
 		}
+		// Re-check the run inside the transaction: a rebuild or archive that
+		// landed between the pre-check and here must not be outrun by the mint
+		// (ADR 26-10-15-871).
+		if req.FromProtocol() {
+			currentSandbox, err := txStore.GetSandbox(ctx, req.ProjectID, req.SandboxID)
+			if err != nil {
+				return apperrors.NotFound(err, "sandbox not found")
+			}
+			if err := checkSandboxRun(currentSandbox, req.SandboxGeneration); err != nil {
+				return err
+			}
+		}
 		// A discobox's grant is always made under a delegation: it is refused
 		// rather than minted unbounded if none was chosen.
 		if approverIsSandbox {
@@ -612,7 +639,11 @@ func (s *Service) ApproveSecretRequest(ctx context.Context, projectID, requestID
 				return err
 			}
 		}
-		grant, err := tx.mintGrantAs(ctx, projectID, secret, scope, scopeKey, hosts, req.EnvName, ttl, approvedUses, purpose)
+		pinGeneration, pinVersion := int64(0), int64(0)
+		if req.FromProtocol() {
+			pinGeneration, pinVersion = req.SandboxGeneration, secret.ValueVersion
+		}
+		grant, err := tx.mintGrantAs(ctx, projectID, secret, scope, scopeKey, hosts, req.EnvName, ttl, approvedUses, purpose, pinGeneration, pinVersion)
 		if err != nil {
 			return err
 		}
@@ -634,7 +665,15 @@ func (s *Service) ApproveSecretRequest(ctx context.Context, projectID, requestID
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrGenerationConflict) {
-			return nil, apperrors.NewStatusError(http.StatusConflict, "secret request status changed concurrently; refresh and try again")
+			// Another approve won the request while this one was in flight.
+			// Read that answer and replay it when this call asked the same
+			// thing, rather than minting nothing and handing back a 409 (ADR
+			// 26-10-15-871).
+			winner, getErr := s.store.GetSecretRequest(ctx, projectID, requestID)
+			if getErr != nil {
+				return nil, apperrors.NewStatusError(http.StatusConflict, "secret request status changed concurrently; refresh and try again")
+			}
+			return s.replaySecretRequest(ctx, winner, input)
 		}
 		return nil, err
 	}
@@ -854,7 +893,7 @@ func (s *Service) CreateSecretGrant(ctx context.Context, projectID string, input
 	if err != nil {
 		return nil, err
 	}
-	grant, err := s.mintGrantAs(ctx, projectID, secret, scope, scopeKey, hosts, envVar, ttl, uses, purpose)
+	grant, err := s.mintGrantAs(ctx, projectID, secret, scope, scopeKey, hosts, envVar, ttl, uses, purpose, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -1019,7 +1058,7 @@ func formatTTL(seconds int64) string {
 //
 // purpose is what the grant authorizes — using the credential, or delegating
 // it — and is checked here with the rest.
-func (s *Service) mintGrantAs(ctx context.Context, projectID string, secret *model.Secret, scope, scopeKey string, hosts []string, envName string, ttlSeconds int64, uses []model.SecretUse, purpose string) (*model.SecretGrant, error) {
+func (s *Service) mintGrantAs(ctx context.Context, projectID string, secret *model.Secret, scope, scopeKey string, hosts []string, envName string, ttlSeconds int64, uses []model.SecretUse, purpose string, sandboxGeneration, secretVersion int64) (*model.SecretGrant, error) {
 	hosts = hostscope.List(hosts...)
 	if err := guardGrantHosts(secret, hosts); err != nil {
 		return nil, err
@@ -1037,11 +1076,15 @@ func (s *Service) mintGrantAs(ctx context.Context, projectID string, secret *mod
 		SecretID:  secret.ID,
 		Scope:     scope,
 		ScopeKey:  scopeKey,
-		Hosts:     hosts,
-		GrantedBy: grantedBy,
-		Uses:      uses,
-		EnvName:   strings.TrimSpace(envName),
-		Purpose:   purpose,
+		// Zero/zero is an unpinned static grant; an approval of an agent's ask
+		// pins the run and the credential version (ADR 26-10-15-871).
+		SandboxGeneration: sandboxGeneration,
+		SecretVersion:     secretVersion,
+		Hosts:             hosts,
+		GrantedBy:         grantedBy,
+		Uses:              uses,
+		EnvName:           strings.TrimSpace(envName),
+		Purpose:           purpose,
 	}
 	if ttlSeconds > 0 {
 		exp := time.Now().UTC().Add(time.Duration(ttlSeconds) * time.Second)

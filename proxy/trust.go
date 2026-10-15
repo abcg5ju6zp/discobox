@@ -49,6 +49,11 @@ const UpstreamProxyHeader = "X-Discobox-Upstream-Proxy"
 
 // HostTrust is one client's pin for one endpoint.
 type HostTrust struct {
+	// ID is the control-plane trust row's ID. The proxy does not match on it —
+	// identity is (ClientID, Host, Pin) — but the pool's retirement feed names
+	// a revoked trust by ID, so it is carried along for local removal
+	// (ADR 26-10-15-871). Empty from a control plane that predates it.
+	ID       string
 	ClientID string
 	// Host is host:port, exactly the endpoint the trust covers.
 	Host string

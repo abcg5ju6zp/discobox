@@ -51,10 +51,10 @@ func (s *Service) ListSandboxCredentials(ctx context.Context, poolID, sandboxID 
 // same thing (asksTheSame): an ask for other uses of the same credential is a
 // new request, never folded into the open one, where its uses would be
 // dropped while the agent was told it had asked for them.
-func (s *Service) CreateSandboxCredentialRequest(ctx context.Context, poolID string, input services.CreateSandboxCredentialRequestBody) (*model.SecretRequest, error) {
+func (s *Service) CreateSandboxCredentialRequest(ctx context.Context, poolID string, input services.CreateSandboxCredentialRequestBody) (*model.SecretRequest, int64, error) {
 	sandbox, err := s.sandboxOwnedByPool(ctx, poolID, strings.TrimSpace(input.SandboxId))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	name := strings.TrimSpace(input.Name)
 	envName := strings.TrimSpace(input.EnvVar)
@@ -64,30 +64,30 @@ func (s *Service) CreateSandboxCredentialRequest(ctx context.Context, poolID str
 	wellKnownID := strings.TrimSpace(input.ID.Or(""))
 	if wellKnownID != "" {
 		if name, envName, hosts, err = wellKnownAsk(wellKnownID, name, envName, hosts); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	if name == "" {
-		return nil, apperrors.NewStatusError(http.StatusBadRequest, "credential name is required")
+		return nil, 0, apperrors.NewStatusError(http.StatusBadRequest, "credential name is required")
 	}
 	if envName == "" || strings.ContainsAny(envName, "=\x00") {
-		return nil, apperrors.NewStatusError(http.StatusBadRequest, "credential request requires a valid environment variable name")
+		return nil, 0, apperrors.NewStatusError(http.StatusBadRequest, "credential request requires a valid environment variable name")
 	}
 	// A host is mandatory here and nowhere else: approving this request mints
 	// a grant, and a grant minted by this flow may not be host-unscoped
 	// (ADR 0031 §5). Refusing at the ask is better than discovering it at the
 	// approval, where a human has already decided to say yes.
 	if len(hosts) == 0 {
-		return nil, apperrors.NewStatusError(http.StatusBadRequest, "credential request requires a destination host")
+		return nil, 0, apperrors.NewStatusError(http.StatusBadRequest, "credential request requires a destination host")
 	}
 	for _, host := range hosts {
 		if err := reservedHostAsk(wellKnownID, host); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	uses, err := requestedUses(input.Uses)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// The lifetime asked for is recorded, not checked against any secret: which
 	// secret answers the request is the approval's choice, and so is whether
@@ -102,24 +102,24 @@ func (s *Service) CreateSandboxCredentialRequest(ctx context.Context, poolID str
 	// asks this does rather than each end guessing.
 	grantTTL := input.GrantTTLSeconds.Or(0)
 	if grantTTL < 0 || grantTTL > agentcreds.MaxGrantTTLSeconds {
-		return nil, apperrors.NewStatusError(http.StatusBadRequest,
+		return nil, 0, apperrors.NewStatusError(http.StatusBadRequest,
 			fmt.Sprintf("a requested grant lifetime runs from 1 second to %d (thirty days); leave it out to ask for nothing in particular", int64(agentcreds.MaxGrantTTLSeconds)))
 	}
 	// What the credential is asked for is the grant's purpose once approved,
 	// so it is read the way a grant's is.
 	purpose, err := grantPurpose(string(input.Purpose.Or("")))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	requestedBy := agentRequesterID(sandbox.ID)
 	pending, err := s.store.FindPendingAgentCredentialRequests(ctx, sandbox.ProjectID, sandbox.ID, envName, hosts, wellKnownID, purpose)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for i := range pending {
 		if asksTheSame(pending[i], uses, grantTTL) {
-			return &pending[i], nil
+			return &pending[i], pending[i].SandboxGeneration, nil
 		}
 	}
 
@@ -127,6 +127,9 @@ func (s *Service) CreateSandboxCredentialRequest(ctx context.Context, poolID str
 		ProjectID:   sandbox.ProjectID,
 		RequestedBy: requestedBy,
 		SandboxID:   sandbox.ID,
+		// The ask is answered for the run that makes it: approving it after
+		// the sandbox has moved generations is refused (ADR 26-10-15-871).
+		SandboxGeneration: sandbox.Generation,
 		// Every secret is a token, and a token is what the swap carries:
 		// ResolveSandboxSecret emits Value.Token, so nothing a request can name
 		// is a credential the proxy could not substitute.
@@ -142,9 +145,9 @@ func (s *Service) CreateSandboxCredentialRequest(ctx context.Context, poolID str
 		Status:        model.SecretRequestStatusPending,
 	}
 	if err := s.store.CreateSecretRequest(ctx, req); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return req, nil
+	return req, req.SandboxGeneration, nil
 }
 
 // asksTheSame reports whether an open request asks for what a new ask does:
@@ -191,6 +194,17 @@ func (s *Service) GetSandboxCredentialRequest(ctx context.Context, poolID, sandb
 			return req, nil, nil
 		}
 		return nil, nil, err
+	}
+	// The poll hands the use IDs the agent presents, so a pinned grant's run
+	// or credential version moving has to read as revoked here too: the
+	// listing gates get() and the resolve, but the agent also learns a grant
+	// through this poll (ADR 26-10-15-871).
+	live, err := s.store.GrantPinLive(ctx, grant)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !live {
+		return req, nil, nil
 	}
 	return req, grant, nil
 }
@@ -261,6 +275,38 @@ func mintUseIDs(uses []model.SecretUse) ([]model.SecretUse, error) {
 // It is distinct from the reactive path's "sandbox:<id>" so the two species stay
 // legible in the approval inbox and in FindPendingSecretRequest's dedup domain.
 func agentRequesterID(sandboxID string) string { return "agent:" + sandboxID }
+
+// checkApprovalRun refuses an approval of an agent's ask whose sandbox has
+// moved since the ask (ADR 26-10-15-871): archived or deleted, or on another
+// generation. A request recorded before pinning (generation zero) is held to
+// presence only.
+func (s *Service) checkApprovalRun(ctx context.Context, req *model.SecretRequest) error {
+	sandbox, err := s.store.GetSandbox(ctx, req.ProjectID, req.SandboxID)
+	if err != nil {
+		return apperrors.NotFound(err, "sandbox not found")
+	}
+	return checkSandboxRun(sandbox, req.SandboxGeneration)
+}
+
+// checkSandboxRun is the run gate shared by the two approve paths. A pinned
+// generation of zero is a pre-pinning ask and only requires a live sandbox.
+func checkSandboxRun(sandbox *model.Sandbox, pinnedGeneration int64) error {
+	switch sandbox.State {
+	case model.SandboxStateArchived, model.SandboxStateDeleted:
+		return apperrors.NewStatusError(http.StatusConflict,
+			fmt.Sprintf("sandbox %s is %s; an approval made to its old run is not answered for it", sandbox.ID, sandbox.State))
+	}
+	if sandbox.DesiredState == model.DesiredStateArchived || sandbox.DesiredState == model.DesiredStateDeleted {
+		return apperrors.NewStatusError(http.StatusConflict,
+			fmt.Sprintf("sandbox %s is being archived or deleted; approve again from its new run if it returns", sandbox.ID))
+	}
+	if pinnedGeneration > 0 && sandbox.Generation != pinnedGeneration {
+		return apperrors.NewStatusError(http.StatusConflict,
+			fmt.Sprintf("sandbox %s has been rebuilt since this request was made (generation %d, now %d); the agent asks again in the current run",
+				sandbox.ID, pinnedGeneration, sandbox.Generation))
+	}
+	return nil
+}
 
 // sandboxOwnedByPool resolves a sandbox and verifies the calling pool hosts it,
 // the same ownership check ResolveSandboxSecret makes. A pool may only ever

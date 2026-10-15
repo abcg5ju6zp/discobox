@@ -6885,6 +6885,52 @@ components:
                 - grantedBy
                 - createdAt
             type: object
+        CredentialRetirement:
+            type: object
+            additionalProperties: false
+            description: 'One pool-local invalidation owed after an authorization retired (ADR 26-10-15-871): the pool drops activations, positive cache entries, or a trust pin for it, then acknowledges its ID.'
+            required:
+                - id
+                - kind
+                - reason
+                - sandboxId
+                - targetId
+            properties:
+                id:
+                    type: string
+                    description: The retirement item ID, used when acknowledging.
+                kind:
+                    type: string
+                    enum:
+                        - use
+                        - trust
+                    description: What targetId names.
+                reason:
+                    type: string
+                    enum:
+                        - credential_replaced
+                        - sandbox_archived
+                        - sandbox_deleted
+                        - sandbox_generation
+                        - trust_revoked
+                    description: Why the authorization retired.
+                sandboxId:
+                    type: string
+                    description: The sandbox whose local pool state the item retires.
+                targetId:
+                    type: string
+                    description: The approved use ID (kind use) or host trust ID (kind trust) the pool drops locally.
+        AcknowledgeCredentialRetirementsBody:
+            type: object
+            additionalProperties: false
+            required:
+                - retirementIds
+            properties:
+                retirementIds:
+                    type: array
+                    description: The retirement items the pool has dropped local state for. Acknowledging is idempotent.
+                    items:
+                        type: string
         ListHostTrustsBody:
             additionalProperties: false
             properties:
@@ -12438,3 +12484,80 @@ paths:
             summary: List the live host trusts of every sandbox on the pool
             tags:
                 - Pools
+    /api/pools/{poolId}/credential-retirements:
+        get:
+            operationId: list-credential-retirements
+            summary: List pending pool-local credential retirements
+            description: 'Lists the pending local invalidations the pool owes: use retirements after a credential replacement or a sandbox generation change, and host trust retirements on a revoke. The live grant and trust reads are authoritative; these only make the pool drop its cached activations, positive cache entries, and pins promptly (ADR 26-10-15-871).'
+            tags:
+                - Pools
+            parameters:
+                - description: Pool ID
+                  in: path
+                  name: poolId
+                  required: true
+                  schema:
+                    description: Pool ID
+                    type: string
+                - description: Bearer pool assertion with the credential:broker scope
+                  in: header
+                  name: Authorization
+                  schema:
+                    description: Bearer pool assertion with the credential:broker scope
+                    type: string
+            responses:
+                200:
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                additionalProperties: false
+                                required:
+                                    - retirements
+                                properties:
+                                    retirements:
+                                        type: array
+                                        items:
+                                            $ref: '#/components/schemas/CredentialRetirement'
+                default:
+                    content:
+                        application/problem+json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorModel'
+                    description: Error
+        post:
+            operationId: acknowledge-credential-retirements
+            summary: Acknowledge credential retirements the pool applied
+            description: 'Acknowledges that the pool dropped the local state for the named retirements. Idempotent; unknown or already-acked IDs are acknowledged again. Items that fail one pool are retried with backoff and never block the other targets.'
+            tags:
+                - Pools
+            parameters:
+                - description: Pool ID
+                  in: path
+                  name: poolId
+                  required: true
+                  schema:
+                    description: Pool ID
+                    type: string
+                - description: Bearer pool assertion with the credential:broker scope
+                  in: header
+                  name: Authorization
+                  schema:
+                    description: Bearer pool assertion with the credential:broker scope
+                    type: string
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/AcknowledgeCredentialRetirementsBody'
+            responses:
+                204:
+                    description: The retirements were acknowledged.
+                default:
+                    content:
+                        application/problem+json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorModel'
+                    description: Error

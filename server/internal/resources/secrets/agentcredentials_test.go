@@ -74,7 +74,7 @@ func TestAgentCredentialRequestForOtherUsesIsItsOwn(t *testing.T) {
 		if ttl > 0 {
 			body.GrantTTLSeconds = serverapi.NewOptInt64(ttl)
 		}
-		created, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, body)
+		created, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, body)
 		if err != nil {
 			t.Fatalf("create credential request: %v", err)
 		}
@@ -104,7 +104,7 @@ func TestAgentCredentialRequestRecordsTheLifetimeAskedFor(t *testing.T) {
 	ctx := testPrincipalContext()
 	svc, _ := newAgentCredentialService(t)
 
-	created, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	created, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId:       testSandboxID,
 		Name:            "github",
 		EnvVar:          "GITHUB_TOKEN",
@@ -129,7 +129,7 @@ func TestAgentCredentialRequestRecordsTheLifetimeAskedFor(t *testing.T) {
 	// converts it to, landing back at the zero that means forever — would be a
 	// keystroke from a credential that outlives the project.
 	for _, ask := range []int64{-1, int64(agentcreds.MaxGrantTTLSeconds) + 1, 18446744074} {
-		_, err = svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+		_, _, err = svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 			SandboxId:       testSandboxID,
 			Name:            "npm",
 			EnvVar:          "NPM_TOKEN",
@@ -147,7 +147,7 @@ func TestAgentCredentialRequestRequiresAHost(t *testing.T) {
 	ctx := testPrincipalContext()
 	svc, _ := newAgentCredentialService(t)
 
-	_, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	_, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId: testSandboxID,
 		Name:      "github",
 		EnvVar:    "GITHUB_TOKEN",
@@ -211,7 +211,7 @@ func TestApprovingAnAskToDelegateMintsADelegationGrant(t *testing.T) {
 	svc, st := newAgentCredentialService(t)
 	secret := createBearerSecret(ctx, t, svc)
 
-	req, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	req, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId: testSandboxID,
 		Name:      "github",
 		EnvVar:    "GITHUB_TOKEN",
@@ -262,7 +262,7 @@ func TestAnAskToDelegateIsNotAnAskToUse(t *testing.T) {
 	svc, _ := newAgentCredentialService(t)
 
 	use := createAgentRequest(ctx, t, svc)
-	delegate, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	delegate, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId: testSandboxID,
 		Name:      "github",
 		EnvVar:    "GITHUB_TOKEN",
@@ -392,7 +392,7 @@ func TestAgentCredentialCallsRefuseAnotherPoolsSandbox(t *testing.T) {
 	if _, err := svc.ListSandboxCredentials(ctx, "pool-other", testSandboxID); err == nil {
 		t.Fatal("listed another pool's sandbox credentials")
 	}
-	_, err := svc.CreateSandboxCredentialRequest(ctx, "pool-other", services.CreateSandboxCredentialRequestBody{
+	_, _, err := svc.CreateSandboxCredentialRequest(ctx, "pool-other", services.CreateSandboxCredentialRequestBody{
 		SandboxId: testSandboxID,
 		Name:      "github",
 		EnvVar:    "GITHUB_TOKEN",
@@ -466,7 +466,7 @@ func TestPollingReportsDeniedAfterTheGrantIsRevoked(t *testing.T) {
 
 func createAgentRequest(ctx context.Context, t *testing.T, svc *resourcesecrets.Service) *model.SecretRequest {
 	t.Helper()
-	req, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	req, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId:     testSandboxID,
 		Name:          "github",
 		EnvVar:        "GITHUB_TOKEN",
@@ -760,7 +760,7 @@ func TestApprovedUseCoversTheDiscoboxAPIHost(t *testing.T) {
 	if !ok {
 		t.Fatal("the discobox API credential is not in the registry")
 	}
-	req, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	req, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId:     testSandboxID,
 		ID:            serverapi.NewOptString(wellknown.DiscoboxSandbox),
 		Justification: serverapi.NewOptString("the task asks me to start a worker"),
@@ -949,7 +949,7 @@ func TestAnApprovalNamingNoLifetimeGrantsWhatWasAsked(t *testing.T) {
 			ctx := testPrincipalContext()
 			svc, st := newAgentCredentialService(t)
 			secret := createBoundSecret(ctx, t, svc, "github", "", tc.limit)
-			req, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+			req, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 				SandboxId: testSandboxID, Name: "github", EnvVar: "GITHUB_TOKEN", Hosts: []string{"api.github.com"},
 				Uses:            []apimodel.SecretUse{{Description: "open a pull request"}},
 				GrantTTLSeconds: serverapi.NewOptInt64(tc.asked),

@@ -81,7 +81,11 @@ func (s *Store) deleteSecretGrantsBySecret(tx *gorm.DB, secretID string) error {
 }
 
 // DeleteSecretGrant revokes a grant. The lookup and the delete share a
-// transaction because grantID may be an ID prefix (firstByID).
+// transaction because grantID may be an ID prefix (firstByID). A revoked grant
+// reads as dead on every live grant check, so no retirement item rides it: the
+// pool's get re-lists uses and its value cache re-resolves (ADR
+// 26-10-15-871); retirement items cover the events a re-read cannot catch
+// promptly — replacement and run changes.
 func (s *Store) DeleteSecretGrant(ctx context.Context, projectID, grantID string) error {
 	return s.Transaction(ctx, func(_ *Store, tx *gorm.DB) error {
 		grant, err := firstByID[model.SecretGrant](tx.Where("project_id = ?", projectID), "id", grantID)
@@ -146,6 +150,17 @@ func (s *Store) FindLiveGrant(ctx context.Context, projectID, secretID, host str
 		if !c.MayUse() {
 			continue
 		}
+		// An approval-minted grant is live only for the run and credential
+		// version it was approved for (ADR 26-10-15-871). A dead pin drops it
+		// out here, the same as an expired one, so an unpinned static grant
+		// covering the same destination still wins.
+		live, err := s.GrantPinLive(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+		if !live {
+			continue
+		}
 		if best == nil || isMoreSpecificGrant(c, best, scopeRank, host) {
 			best = c
 		}
@@ -166,14 +181,29 @@ func (s *Store) ListLiveDelegationGrants(ctx context.Context, projectID, sandbox
 	if err != nil {
 		return nil, err
 	}
-	var out []model.SecretGrant
+	var candidates []model.SecretGrant
 	err = read.
 		Where("project_id = ? AND purpose = ? AND scope = ? AND scope_key = ?",
 			projectID, model.SecretGrantPurposeDelegate, model.SecretGrantScopeSandbox, sandboxID).
 		Where("expires_at IS NULL OR expires_at > ?", time.Now().UTC()).
 		Order("granted_at DESC").
-		Find(&out).Error
-	return out, err
+		Find(&candidates).Error
+	if err != nil {
+		return nil, err
+	}
+	// Delegation grants are approval-minted too, so a rebuilt or replaced
+	// run loses what an approval gave its predecessor (ADR 26-10-15-871).
+	out := make([]model.SecretGrant, 0, len(candidates))
+	for i := range candidates {
+		live, err := s.GrantPinLive(ctx, &candidates[i])
+		if err != nil {
+			return nil, err
+		}
+		if live {
+			out = append(out, candidates[i])
+		}
+	}
+	return out, nil
 }
 
 // ListLiveAgentGrants returns the live grants that carry uses and cover one of
@@ -210,6 +240,13 @@ func (s *Store) ListLiveAgentGrants(ctx context.Context, projectID string, scope
 			continue
 		}
 		if _, ok := allowed[GrantScope{Scope: candidates[i].Scope, ScopeKey: candidates[i].ScopeKey}]; !ok {
+			continue
+		}
+		live, err := s.GrantPinLive(ctx, &candidates[i])
+		if err != nil {
+			return nil, err
+		}
+		if !live {
 			continue
 		}
 		out = append(out, candidates[i])

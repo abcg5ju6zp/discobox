@@ -16,6 +16,72 @@ import (
 	"github.com/ogen-go/ogen/validate"
 )
 
+// AcknowledgeCredentialRetirementsParams is parameters of acknowledge-credential-retirements operation.
+type AcknowledgeCredentialRetirementsParams struct {
+	// Pool ID.
+	PoolId string
+}
+
+func unpackAcknowledgeCredentialRetirementsParams(packed middleware.Parameters) (params AcknowledgeCredentialRetirementsParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "poolId",
+			In:   "path",
+		}
+		params.PoolId = packed[key].(string)
+	}
+	return params
+}
+
+func decodeAcknowledgeCredentialRetirementsParams(args [1]string, argsEscaped bool, r *http.Request) (params AcknowledgeCredentialRetirementsParams, _ error) {
+	// Decode path: poolId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "poolId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToString(val)
+				if err != nil {
+					return err
+				}
+
+				params.PoolId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "poolId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // ApproveSecretRequestParams is parameters of approve-secret-request operation.
 type ApproveSecretRequestParams struct {
 	// Project ID.
@@ -7804,6 +7870,72 @@ func decodeListApprovalRequestsParams(args [1]string, argsEscaped bool, r *http.
 		return params, &ogenerrors.DecodeParamError{
 			Name: "status",
 			In:   "query",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// ListCredentialRetirementsParams is parameters of list-credential-retirements operation.
+type ListCredentialRetirementsParams struct {
+	// Pool ID.
+	PoolId string
+}
+
+func unpackListCredentialRetirementsParams(packed middleware.Parameters) (params ListCredentialRetirementsParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "poolId",
+			In:   "path",
+		}
+		params.PoolId = packed[key].(string)
+	}
+	return params
+}
+
+func decodeListCredentialRetirementsParams(args [1]string, argsEscaped bool, r *http.Request) (params ListCredentialRetirementsParams, _ error) {
+	// Decode path: poolId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "poolId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToString(val)
+				if err != nil {
+					return err
+				}
+
+				params.PoolId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "poolId",
+			In:   "path",
 			Err:  err,
 		}
 	}

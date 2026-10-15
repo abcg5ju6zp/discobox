@@ -1811,3 +1811,148 @@ func TestMigrateBackfillsOCIImageKinds(t *testing.T) {
 		t.Errorf("pool created since: image kind = %q, want it left for its agent to declare", gotFresh.ImageKind)
 	}
 }
+
+// TestMigrateBackfillsCredentialPins upgrades a database whose approvals
+// predate ADR 26-10-15-871: every secret is version 1, approval grants pin to
+// version 1 and their sandbox's generation, host trusts and the agent asks to
+// the generation, and pre-configured grants stay unpinned (zero), which is the
+// behavior they keep. The step writes only zero rows, so a second run is a
+// no-op.
+func TestMigrateBackfillsCredentialPins(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.New(database.Config{
+		Driver: gormdb.DriverSQLite,
+		DSN:    "sqlite3://" + filepath.Join(t.TempDir(), "discobox.db"),
+	})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+	})
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+	if !db.Write.Migrator().HasTable("credential_retirements") {
+		t.Fatal("credential_retirements table missing on a fresh schema")
+	}
+
+	if err := db.Write.Create(&model.Project{ID: "project-1", OwnerUserID: "user-1", Name: "Project"}).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if err := db.Write.Create(&model.Sandbox{
+		ID: "sbx-1", ProjectID: "project-1", CreatedByUserID: "user-1", Name: "sbx", PoolID: "pool-1",
+	}).Error; err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	// The new sandbox takes an intent: generation 7 is what pre-existing
+	// approvals must pin to.
+	if err := db.Write.Model(&model.Sandbox{}).Where("id = ?", "sbx-1").
+		Updates(map[string]any{"generation": 7, "desired_state": model.DesiredStatePresent, "state": model.SandboxStateReady}).Error; err != nil {
+		t.Fatalf("advance sandbox generation: %v", err)
+	}
+	secret := &model.Secret{ID: "sec-1", ProjectID: "project-1", Name: "gh", Type: model.SecretTypeToken, MaxGrantTTL: 3600, EncryptedValue: []byte(`{"token":"a"}`)}
+	if err := db.Write.Create(secret).Error; err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	if secret.ValueVersion != 1 {
+		t.Fatalf("fresh secret value version = %d, want 1", secret.ValueVersion)
+	}
+	// Rewind every pin to zero, the rows an upgraded database actually carries
+	// (AutoMigrate added the columns with their defaults, then the pre-upgrade
+	// server kept writing zeros for value_version as well).
+	if err := db.Write.Model(&model.Secret{}).Where("id = ?", secret.ID).UpdateColumn("value_version", 0).Error; err != nil {
+		t.Fatalf("rewind secret version: %v", err)
+	}
+	approvalGrant := &model.SecretGrant{
+		ID: "grant_approved", ProjectID: "project-1", SecretID: secret.ID,
+		Scope: model.SecretGrantScopeSandbox, ScopeKey: "sbx-1", GrantedBy: "user-1",
+		Uses: []model.SecretUse{{UseID: "use_1", Description: "ship"}},
+	}
+	preGrant := &model.SecretGrant{
+		ID: "grant_pre", ProjectID: "project-1", SecretID: secret.ID,
+		Scope: model.SecretGrantScopeSandbox, ScopeKey: "sbx-1", GrantedBy: "user-1",
+		Uses:    []model.SecretUse{{UseID: "use_pre", Description: "pre"}},
+		EnvName: "GH_TOKEN",
+	}
+	for _, grant := range []*model.SecretGrant{approvalGrant, preGrant} {
+		if err := db.Write.Create(grant).Error; err != nil {
+			t.Fatalf("create grant %s: %v", grant.ID, err)
+		}
+	}
+	agentReq := &model.SecretRequest{
+		ID: "req_agent", ProjectID: "project-1", RequestedBy: "agent:sbx-1", SandboxID: "sbx-1",
+		Type: model.SecretTypeToken, Status: model.SecretRequestStatusApproved, GrantID: approvalGrant.ID,
+		Uses: []model.SecretUse{{UseID: "use_1", Description: "ship"}},
+	}
+	if err := db.Write.Create(agentReq).Error; err != nil {
+		t.Fatalf("create agent request: %v", err)
+	}
+	trust := &model.HostTrust{
+		ID: "trust_1", ProjectID: "project-1", SandboxID: "sbx-1", Host: "api.github.com:443",
+		Pin:       model.TrustPin{Kind: model.TrustPinKindCA, SHA256: "abc"},
+		Uses:      []model.SecretUse{{UseID: "tuse_1", Description: "ship"}},
+		ExpiresAt: time.Now().Add(time.Hour), GrantedBy: "user-1", RequestID: "treq_1",
+	}
+	if err := db.Write.Create(trust).Error; err != nil {
+		t.Fatalf("create trust: %v", err)
+	}
+	trustReq := &model.HostTrustRequest{
+		ID: "treq_1", ProjectID: "project-1", SandboxID: "sbx-1", RequestedBy: "agent:sbx-1",
+		Host: "api.github.com:443", Status: model.HostTrustRequestStatusPending,
+		Uses: []model.SecretUse{{Description: "ship"}},
+	}
+	if err := db.Write.Create(trustReq).Error; err != nil {
+		t.Fatalf("create trust request: %v", err)
+	}
+
+	for pass := 1; pass <= 2; pass++ {
+		if err := db.Migrate(ctx); err != nil {
+			t.Fatalf("pass %d: migrate: %v", pass, err)
+		}
+		var gotSecret model.Secret
+		if err := db.Write.First(&gotSecret, "id = ?", secret.ID).Error; err != nil {
+			t.Fatalf("read secret: %v", err)
+		}
+		if gotSecret.ValueVersion != 1 {
+			t.Fatalf("pass %d: secret value version = %d, want 1", pass, gotSecret.ValueVersion)
+		}
+		var gotApproval model.SecretGrant
+		if err := db.Write.First(&gotApproval, "id = ?", approvalGrant.ID).Error; err != nil {
+			t.Fatalf("read approval grant: %v", err)
+		}
+		if gotApproval.SecretVersion != 1 || gotApproval.SandboxGeneration != 7 {
+			t.Fatalf("pass %d: approval grant pins = (v%d, g%d), want (1, 7)", pass, gotApproval.SecretVersion, gotApproval.SandboxGeneration)
+		}
+		var gotPre model.SecretGrant
+		if err := db.Write.First(&gotPre, "id = ?", preGrant.ID).Error; err != nil {
+			t.Fatalf("read pre-configured grant: %v", err)
+		}
+		if gotPre.SecretVersion != 0 || gotPre.SandboxGeneration != 0 {
+			t.Fatalf("pass %d: pre-configured grant pins = (v%d, g%d), want unpinned (0, 0)", pass, gotPre.SecretVersion, gotPre.SandboxGeneration)
+		}
+		var gotRequest model.SecretRequest
+		if err := db.Write.First(&gotRequest, "id = ?", agentReq.ID).Error; err != nil {
+			t.Fatalf("read agent request: %v", err)
+		}
+		if gotRequest.SandboxGeneration != 7 {
+			t.Fatalf("pass %d: agent request generation = %d, want 7", pass, gotRequest.SandboxGeneration)
+		}
+		var gotTrust model.HostTrust
+		if err := db.Write.First(&gotTrust, "id = ?", trust.ID).Error; err != nil {
+			t.Fatalf("read trust: %v", err)
+		}
+		if gotTrust.SandboxGeneration != 7 {
+			t.Fatalf("pass %d: trust generation = %d, want 7", pass, gotTrust.SandboxGeneration)
+		}
+		var gotTrustReq model.HostTrustRequest
+		if err := db.Write.First(&gotTrustReq, "id = ?", trustReq.ID).Error; err != nil {
+			t.Fatalf("read trust request: %v", err)
+		}
+		if gotTrustReq.SandboxGeneration != 7 {
+			t.Fatalf("pass %d: trust request generation = %d, want 7", pass, gotTrustReq.SandboxGeneration)
+		}
+	}
+}

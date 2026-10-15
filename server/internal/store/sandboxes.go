@@ -425,30 +425,56 @@ func (s *Store) UpdateSandbox(ctx context.Context, sandbox *model.Sandbox, optio
 		}
 	}
 
-	write, err := s.getWrite(ctx)
-	if err != nil {
-		return err
-	}
 	persisted, err := s.sealSandboxForWrite(ctx, sandbox)
 	if err != nil {
 		return err
 	}
-	if opts.generation == nil {
-		return write.Omit(sandboxOmittedColumns...).Save(persisted).Error
-	}
+	// Read the run the write is replacing so a moved generation can retire
+	// the pinned uses of the old run in the same transaction (ADR
+	// 26-10-15-871). The write and the retirement are one act, like the
+	// cascades this table already owns.
+	var previous model.Sandbox
+	return s.Transaction(ctx, func(_ *Store, tx *gorm.DB) error {
+		err := tx.Where("project_id = ? AND id = ?", sandbox.ProjectID, sandbox.ID).
+			Select("id", "project_id", "pool_id", "generation", "desired_state").
+			First(&previous).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if opts.generation == nil {
+			if err := tx.Omit(sandboxOmittedColumns...).Save(persisted).Error; err != nil {
+				return err
+			}
+		} else {
+			result := tx.Model(&model.Sandbox{}).
+				Where("project_id = ? AND id = ? AND generation = ?", sandbox.ProjectID, sandbox.ID, *opts.generation).
+				Select("*").
+				Omit(sandboxOmittedColumns...).
+				Updates(persisted)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return ErrGenerationConflict
+			}
+		}
+		return enqueueSandboxGenerationRetirements(tx, &previous, persisted)
+	})
+}
 
-	result := write.Model(&model.Sandbox{}).
-		Where("project_id = ? AND id = ? AND generation = ?", sandbox.ProjectID, sandbox.ID, *opts.generation).
-		Select("*").
-		Omit(sandboxOmittedColumns...).
-		Updates(persisted)
-	if result.Error != nil {
-		return result.Error
+// enqueueSandboxGenerationRetirements writes the old run's pinned-use
+// retirements when a sandbox update moves its generation. Archival is its own
+// kind; any other generation movement is a new run. A write that does not move
+// the generation enqueues nothing.
+func enqueueSandboxGenerationRetirements(tx *gorm.DB, previous, current *model.Sandbox) error {
+	if previous == nil || current.Generation <= previous.Generation {
+		return nil
 	}
-	if result.RowsAffected == 0 {
-		return ErrGenerationConflict
+	kind := model.CredentialRetirementReasonSandboxGeneration
+	if current.DesiredState == model.DesiredStateArchived {
+		kind = model.CredentialRetirementReasonSandboxArchived
 	}
-	return nil
+	return enqueueSandboxUseRetirements(tx, current, kind)
 }
 
 // UpdateSandboxAgentStatus writes only the two agent-status columns, pushed
@@ -588,6 +614,12 @@ func (s *Store) DeleteSandbox(ctx context.Context, projectID, sandboxID string, 
 			if opts.generation != nil && errors.Is(err, ErrNotFound) {
 				return ErrGenerationConflict
 			}
+			return err
+		}
+		// Retire the sandbox's pinned uses before the trusts they live on are
+		// cascaded away, so its pool drops activations and cached values with
+		// the deletion rather than after their TTLs (ADR 26-10-15-871).
+		if err := enqueueSandboxUseRetirements(tx, sandbox, model.CredentialRetirementReasonSandboxDeleted); err != nil {
 			return err
 		}
 		if err := deleteSandboxSecretsTx(tx, projectID, sandboxID); err != nil {

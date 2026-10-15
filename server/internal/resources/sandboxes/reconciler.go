@@ -532,6 +532,10 @@ func (r *SandboxReconciler) createOptionsFromSandbox(ctx context.Context, sb *mo
 	opts.Image = ImageRef{Name: sb.Image, Digest: sb.ImageDigest}
 	opts.SpecFingerprint = sb.Fingerprint()
 	opts.PoolID = sb.PoolID
+	// The run the pool is creating is the sandbox's current generation; the
+	// pool records it for its proxy unit so credential and trust approvals
+	// can be gated to the run they were made to (ADR 26-10-15-871).
+	opts.Generation = sb.Generation
 	opts.Platform = sb.Platform
 	opts.Name = sb.Name
 	opts.Description = sb.Description

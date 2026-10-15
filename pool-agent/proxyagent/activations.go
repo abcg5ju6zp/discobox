@@ -32,12 +32,44 @@ type activation struct {
 	UseID     string
 	// Hosts are where the use was approved for. A request to any of them, or
 	// beneath one, may carry it; none at all is no host, not every host.
-	Hosts     []string
-	Command   []string
-	ExpiresAt time.Time
+	Hosts   []string
+	Command []string
+	// SandboxGeneration is the run current when the activation was minted
+	// (ADR 26-10-15-871). Zero means the run was unknown then and gates
+	// nothing; a positive value has to still match the generations file for
+	// the activation to resolve.
+	SandboxGeneration int64
+	ExpiresAt         time.Time
 }
 
 func (a activation) live(now time.Time) bool { return now.Before(a.ExpiresAt) }
+
+// generationLive reports whether an activation minted for generation may still
+// be used given the generations document. The gate being disabled
+// (generationsKnown false, i.e. no generations channel configured) or a
+// zero-pinned activation does not gate. With the gate enabled, a document
+// that no longer names the sandbox — an absent record, an archive that removed
+// the entry, or a rebuild that changed it — denies, as does a generation
+// mismatch.
+func (a activation) generationLive(generations map[string]int64, generationsKnown bool) bool {
+	if a.SandboxGeneration == 0 || !generationsKnown {
+		return true
+	}
+	current, ok := generations[a.SandboxID]
+	return ok && current == a.SandboxGeneration
+}
+
+// RetireUse drops every activation carrying the use ID (ADR 26-10-15-871).
+func (a *activations) RetireUse(useID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for sentinel, record := range a.byEphemeral {
+		if record.UseID == useID {
+			delete(a.byEphemeral, sentinel)
+			a.expired[sentinel] = record
+		}
+	}
+}
 
 // activations is the pool-local registry of live ephemeral sentinels.
 //
@@ -92,18 +124,19 @@ func (a *activations) setChangeHandler(onChange func()) {
 // sentinel so it byte-mimics a real key of the same provider — the same rule
 // the stable sentinel was minted under, so nothing downstream can tell the two
 // apart by looking.
-func (a *activations) mint(sandboxID, stableSentinel, useID string, hosts []string, format string, command []string) (activation, error) {
+func (a *activations) mint(sandboxID, stableSentinel, useID string, hosts []string, format string, command []string, generation int64) (activation, error) {
 	sentinel, err := secretformat.MintSentinel(format)
 	if err != nil {
 		return activation{}, err
 	}
 	record := activation{
-		SandboxID: sandboxID,
-		Sentinel:  sentinel,
-		Stable:    stableSentinel,
-		UseID:     useID,
-		Hosts:     hostscope.List(hosts...),
-		Command:   append([]string(nil), command...),
+		SandboxID:         sandboxID,
+		Sentinel:          sentinel,
+		Stable:            stableSentinel,
+		UseID:             useID,
+		Hosts:             hostscope.List(hosts...),
+		Command:           append([]string(nil), command...),
+		SandboxGeneration: generation,
 	}
 
 	a.mu.Lock()

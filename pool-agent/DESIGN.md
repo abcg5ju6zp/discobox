@@ -1467,19 +1467,26 @@ proxy would recognize it.
   which mints with no verdict. A use waits up to `credentialUseTimeout`, the
   judge's whole deadline plus the calls around it.
 - **Activations** (`activations.go`) are in-memory and pool-local: ephemeral
-  sentinel → `{stable sentinel, useId, hosts, declared command, expiry}`. They are
-  disposable by design — a restart costs a dead sentinel and one fresh `get`,
-  which fails closed. `activationTTL` is the *use* clock; the grant's expiry on
-  the control plane is the *consent* clock, and a value dies at whichever comes
-  first.
+  sentinel → `{stable sentinel, useId, hosts, declared command, expiry, sandbox
+  generation}`. They are disposable by design — a restart costs a dead sentinel
+  and one fresh `get`, which fails closed. `activationTTL` is the *use* clock;
+  the grant's expiry on the control plane is the *consent* clock, and a value
+  dies at whichever comes first.
+- **Each activation is stamped with the sandbox's current run**
+  ([ADR 26-10-15-871](../docs/adr/26-10-15-871-an-approval-pins-a-sandbox-generation-and-credential-version-and-is-replayed.md)).
+  The broker reads it from the generations file (below) at `get` time; a run the
+  file does not know yet stamps zero and gates nothing locally.
 - **The resolver checks activations first.** A sentinel it minted is refused
-  unless the activation is live, belongs to the calling sandbox, and the
-  destination is covered by one of the hosts its use was approved for
-  ([ADR 26-10-02-393](../docs/adr/26-10-02-393-a-credential-request-and-its-grant-may-name-several-hosts.md)).
-  An activation with no host covers nothing rather than everything; only then
-  is it
-  translated to the stable sentinel and resolved normally. The control plane
-  never learns ephemeral sentinels exist.
+  unless the activation is live, belongs to the calling sandbox, the
+  destination is covered by one of the hosts its use was approved for, and its
+  stamped run still matches the generations file
+  ([ADR 26-10-02-393](../docs/adr/26-10-02-393-a-credential-request-and-its-grant-may-name-several-hosts.md),
+  ADR 26-10-15-871). A pinned activation whose run moved or whose entry was
+  archived, and one with no host (covers nothing rather than everything), is
+  refused before it is translated to the stable sentinel and resolved normally.
+  The control plane's live grant/trust read re-checks the same pin, so the local
+  gate is defense in depth, not the authority; the control plane never learns
+  ephemeral sentinels exist.
 - **`policyPublisher` owns the proxy's per-client policy**, merging the stable
   sentinels from SecretsFile, live ephemeral ones, and the pool's host trusts.
   They have to be applied together because `ApplyConfig` replaces the whole of
@@ -1498,6 +1505,23 @@ proxy would recognize it.
   on every `trusts` list, and — before it answers — on a poll that reads
   `granted`, so the agent's next request finds the pin in force. A trust the
   proxy would refuse is reported and skipped, never allowed to fail the rest.
+- **The generations file and the retirement feed make a run change take
+  effect locally at once** (ADR 26-10-15-871). `sandboxruntime` writes the
+  sandbox's current generation to the per-pool generations file on create
+  (the create request carries it) and removes the entry on archive; the broker
+  and resolver read that one file. Alongside it, `useRetirements`
+  (`retirements.go`) polls
+  `GET /api/pools/{poolId}/credential-retirements` every few seconds and drops
+  local state for each item, then acknowledges its ID: a `use` item retires the
+  in-memory activation and asks the proxy to drop that use's positive cache
+  entries (`proxy.Server.InvalidateUse`); a `trust` item removes the pin from
+  the publisher. The control plane's live reads stay the authority; this only
+  closes the window a re-poll would leave. Delivery is at-least-once and
+  application is idempotent, so every drop is safe to repeat; an item that fails
+  to apply locally is held in a per-pool backoff file (30s) and never
+  acknowledged, so one target's failure never blocks or loses another's, and a
+  restart re-drives the un-acked backlog. Unknown item kinds from a newer server
+  are acknowledged rather than retried forever.
 - The token in the resolve-context file carries `secret:resolve` and
   `credential:broker`. They stay separate scopes so splitting these roles across
   processes later is a change of who holds which token, not of what one means.

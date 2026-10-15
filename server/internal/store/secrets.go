@@ -283,7 +283,32 @@ func (s *Store) ListSecrets(ctx context.Context, projectID string, listOptions .
 	return out, err
 }
 
-func (s *Store) UpdateSecret(ctx context.Context, secret *model.Secret) error {
+// UpdateSecretOption changes what an UpdateSecret does besides the write.
+type UpdateSecretOption func(*updateSecretOptions)
+
+type updateSecretOptions struct {
+	// bumpValueVersion moves the secret's credential generation when the
+	// write replaces the value, and retires the pinned uses of the old
+	// version (ADR 26-10-15-871). It is set only for a person's explicit
+	// replacement; renewal (an OAuth/exchange refresh, answering a refresh
+	// request) must not move it.
+	bumpValueVersion bool
+}
+
+// UpdateSecretBumpsValueVersion marks an explicit person-driven value
+// replacement: the credential version moves and approvals pinned to the old
+// version are retired in the same transaction.
+func UpdateSecretBumpsValueVersion() UpdateSecretOption {
+	return func(o *updateSecretOptions) { o.bumpValueVersion = true }
+}
+
+func (s *Store) UpdateSecret(ctx context.Context, secret *model.Secret, options ...UpdateSecretOption) error {
+	var opts updateSecretOptions
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
 	// Whether this write replaces the credential, which is what decides
 	// whether a recorded rejection of it is still true (ADR 0132 §4).
 	//
@@ -318,6 +343,19 @@ func (s *Store) UpdateSecret(ctx context.Context, secret *model.Secret) error {
 	// that is no longer there, is the state this must not leave behind. The
 	// same goes for an ask for a new value, which the write has answered.
 	if err := s.Transaction(ctx, func(_ *Store, tx *gorm.DB) error {
+		// A deliberate replacement is a new credential generation: the
+		// version is re-read and moved inside the transaction, so a
+		// replacement racing another write moves it exactly once and the
+		// Save below carries the new value (ADR 26-10-15-871).
+		if replacedValue && opts.bumpValueVersion {
+			var currentVersion int64
+			if err := tx.Model(&model.Secret{}).
+				Where("project_id = ? AND id = ?", sealed.ProjectID, sealed.ID).
+				Select("value_version").Row().Scan(&currentVersion); err != nil {
+				return err
+			}
+			sealed.ValueVersion = currentVersion + 1
+		}
 		// When the value stays, so do the fields that describe it: they have
 		// a writer of their own (MarkSecretValueStale), and a row read before
 		// that write must not put the old ones back (store DESIGN, "Field
@@ -331,6 +369,13 @@ func (s *Store) UpdateSecret(ctx context.Context, secret *model.Secret) error {
 		}
 		if !replacedValue {
 			return nil
+		}
+		// Retire the approvals pinned to the replaced value, in this
+		// transaction and before the grants are read by anything else.
+		if opts.bumpValueVersion {
+			if err := enqueueSecretUseRetirements(tx, sealed.ProjectID, sealed.ID); err != nil {
+				return err
+			}
 		}
 		if err := s.clearSecretRejections(tx, sealed.ProjectID, sealed.ID); err != nil {
 			return err
@@ -498,6 +543,12 @@ func (s *Store) DeleteSecret(ctx context.Context, projectID, secretID string) er
 		// Null the encrypted value before the row is deleted below, so the
 		// ciphertext is overwritten rather than only unlinked with its row.
 		if err := tx.Model(sec).Update("encrypted_value", nil).Error; err != nil {
+			return err
+		}
+		// Retire the pinned uses of grants about to be deleted, so a pool
+		// drops cached values for a credential that is about to vanish (ADR
+		// 26-10-15-871). Unpinned grants have no pool-side activation.
+		if err := enqueueSecretUseRetirements(tx, projectID, secretID); err != nil {
 			return err
 		}
 		// Drop harness-config bindings, standing grants, and sandbox sentinel

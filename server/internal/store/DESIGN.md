@@ -145,6 +145,45 @@ only on request: `secrets.encrypted_value` (`OpenSecretValue`) and
 unchanged. Deleting secrets (directly, with an anonymous sandbox assignment, or
 with the project) nulls `encrypted_value` before removing the row.
 
+## Credential approval pins and the retirement outbox
+
+Approval-minted grants and host trusts carry run/version pins
+([ADR 26-10-15-871](../../../docs/adr/26-10-15-871-an-approval-pins-a-sandbox-generation-and-credential-version-and-is-replayed.md)):
+`SecretGrant.SandboxGeneration`/`SecretVersion` and
+`HostTrust.SandboxGeneration`. **Zero is unpinned** and is the only shape a
+pre-configured grant or a pre-upgrade row takes.
+
+- `pins.go` owns the gates the live listings apply per row: `GrantPinLive`
+  (run present and matching, secret `value_version` unchanged) and
+  `TrustPinLive` (run present and matching). `ListLiveAgentCredentials` and the
+  live trust listings call them after the SQL time/scope filter, so a rebuild,
+  archive/delete, or replaced credential drops the authorization without the
+  row being deleted. A missing counterpart reads as dead, not an error — one
+  gone row must not fail a whole listing.
+- The credential version moves only on an explicit person-driven value
+  replacement: `UpdateSecret` with `UpdateSecretBumpsValueVersion` re-reads and
+  increments `value_version` inside its transaction. A refresh is not a
+  replacement.
+- `credential_retirements.go` is the outbox that makes a pool drop local state
+  when an authorization ends early. Rows are enqueued **inside the event's
+  transaction**, so the event can never commit without them: `UpdateSecret`
+  replacement and `DeleteSecret` (`enqueueSecretUseRetirements`), a sandbox
+  generation move or delete (`enqueueSandboxUseRetirements`), and trust revoke
+  (`enqueueTrustRetirement`). Only pinned (`sandbox_generation > 0`) rows are
+  enqueued; a standing grant has no pool activation to retire. Items are
+  addressed to the sandbox's pool, listed un-acked oldest-first
+  (`ListPendingCredentialRetirements`), and acknowledged by ID
+  (`AcknowledgeCredentialRetirements`); the ack is scoped to the pool and
+  idempotent. The live gates above stay authoritative — the outbox only drives
+  prompt local invalidation; see the pool's [proxyagent design](../../../pool-agent/DESIGN.md).
+- The upgrade is one migration step (`database.backfillCredentialPins`, every
+  start): secrets start on `value_version = 1`; approval-minted grants,
+  protocol requests, and trusts/trust requests pin to their sandbox's current
+  generation; grants no request references stay unpinned. A second run writes
+  nothing. The same step drops the database-level `sandboxes.pool_id` foreign
+  key (pool membership is enforced on use; the GORM relation stays for
+  preload).
+
 ## Error Contract
 
 `ErrNotFound` and `ErrGenerationConflict` alias server-owned `apperrors`
@@ -173,6 +212,9 @@ Keep files split by resource area:
 | `providers.go` | Provider instance persistence and `SandboxProviderInstanceStore`. |
 | `pools.go` | Pool persistence: CRUD, agent registration and heartbeats, bootstrap tokens, telemetry, the schedulable-pool placement gate, and pool-scoped sandbox counts. |
 | `secrets.go`, `secret_grants.go` | Secrets (sealed values), secret requests, and host-scoped grants. |
+| `pins.go` | The run/version gates (`GrantPinLive`, `TrustPinLive`) applied by the live grant/trust listings. |
+| `credential_retirements.go` | The per-pool retirement outbox: enqueue-with-the-event, list pending, acknowledge by ID. |
+| `host_trusts.go` | Host trust asks and pins, with the live run gate and revoke-time retirement enqueue. |
 | `sandbox_secrets.go` | Sandbox secret assignments and agent credentials. |
 | `credential_verdicts.go` | Recorded credential verdicts, command and request: written per decision, read per project through `CredentialVerdictFilter`; the judge reads its standing allows (`StandingVerdicts`) and a round's asks for a body (`BodyAsks`, from the primary: a read-after-write that decides who answers the next round) directly. |
 | `ssh_keys.go` | Project SSH keys. |

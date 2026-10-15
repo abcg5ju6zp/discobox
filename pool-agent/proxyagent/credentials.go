@@ -212,9 +212,26 @@ type credentialBroker struct {
 	judge       *controlPlaneCredentials
 	activations *activations
 	trusts      *hostTrusts
+	// generationsPath, when non-empty, is the proxy unit's record of current
+	// sandbox generations (ADR 26-10-15-871); an activation minted for a known
+	// run is stamped with it.
+	generationsPath string
 }
 
 var _ agentcreds.Service = (*credentialBroker)(nil)
+
+// currentGeneration returns the run recorded for the broker's sandbox, or zero
+// when the generations channel does not know it yet.
+func (b *credentialBroker) currentGeneration() int64 {
+	if b.generationsPath == "" {
+		return 0
+	}
+	doc, err := readSandboxGenerationsDoc(b.generationsPath)
+	if err != nil {
+		return 0
+	}
+	return doc.Clients[b.sandboxID]
+}
 
 func (b *credentialBroker) List(ctx context.Context) ([]agentcreds.Credential, error) {
 	docs, err := b.controlPlan.list(ctx, b.sandboxID)
@@ -308,7 +325,7 @@ func (b *credentialBroker) Get(ctx context.Context, body agentcreds.UseBody) (ag
 			if err := b.judgeCommand(ctx, useID, body); err != nil {
 				return agentcreds.UseResponse{}, err
 			}
-			record, err := b.activations.mint(b.sandboxID, doc.Sentinel, useID, doc.Hosts, doc.Format, body.Command)
+			record, err := b.activations.mint(b.sandboxID, doc.Sentinel, useID, doc.Hosts, doc.Format, body.Command, b.currentGeneration())
 			if err != nil {
 				return agentcreds.UseResponse{}, err
 			}

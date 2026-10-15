@@ -648,6 +648,14 @@ func (r *DockerSandboxRuntime) buildSandboxContainer(ctx context.Context, sandbo
 	if err := proxyagent.UpsertSandboxSentinels(r.root, r.projectID, r.poolID, sandboxID, sentinels); err != nil {
 		return nil, false, err
 	}
+	// Record the run for the proxy unit's local generation gate (ADR
+	// 26-10-15-871). A create request without a generation predates the
+	// channel and pins nothing.
+	if gen, ok := req.Generation.Get(); ok {
+		if err := proxyagent.UpsertSandboxGeneration(r.root, r.projectID, r.poolID, sandboxID, gen); err != nil {
+			return nil, false, err
+		}
+	}
 	// The bootstrap: placed before the container exists, and the one thing the
 	// pool ever writes into the sandbox's config volume (ADR 0126 §3).
 	if err := r.writeSandboxHarnessConfig(ctx, sandboxID, imageName, req, proxyMaterial.Env, project.Project); err != nil {

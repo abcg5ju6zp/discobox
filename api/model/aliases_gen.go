@@ -5,6 +5,7 @@ package model
 
 import apigen "github.com/discobox-ai/discobox/api/gen"
 
+type AcknowledgeCredentialRetirementsBody = apigen.AcknowledgeCredentialRetirementsBody
 type AppliedSourceCommit = apigen.AppliedSourceCommit
 type ApprovalRequest = apigen.ApprovalRequest
 type ApproveSecretRequestBody = apigen.ApproveSecretRequestBody
@@ -28,6 +29,7 @@ type CreateSandboxTrustRequestBody = apigen.CreateSandboxTrustRequestBody
 type CreateSecretBody = apigen.CreateSecretBody
 type CreateSecretGrantBody = apigen.CreateSecretGrantBody
 type CreateSecretRequestBody = apigen.CreateSecretRequestBody
+type CredentialRetirement = apigen.CredentialRetirement
 type CredentialVerdict = apigen.CredentialVerdict
 type DNSAuditQuery = apigen.DNSAuditQuery
 type ErrorDetail = apigen.ErrorDetail

@@ -463,7 +463,11 @@ func (s *Service) applyConfigureOutput(ctx context.Context, config *model.Harnes
 			existing.Type = secretType
 			existing.Host = secret.Host
 			existing.EncryptedValue = []byte(secret.Value)
-			if err := s.store.UpdateSecret(ctx, existing); err != nil {
+			// Configure writing a fresh login is a person's deliberate
+			// replacement, so it is a new credential generation and retires
+			// approvals pinned to the value it replaces (ADR 26-10-15-871);
+			// the configure grant itself is static and rides across.
+			if err := s.store.UpdateSecret(ctx, existing, store.UpdateSecretBumpsValueVersion()); err != nil {
 				return fmt.Errorf("update configured secret %q: %w", envName, err)
 			}
 			createdSecretIDs = append(createdSecretIDs, existing.ID)

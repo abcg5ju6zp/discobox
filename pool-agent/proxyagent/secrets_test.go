@@ -128,7 +128,7 @@ func TestActivationHostCoversSubdomainsAndNothingAbove(t *testing.T) {
 	live := newActivations()
 	resolver := newSecretResolver(root, testProjectID, testPoolID, live)
 
-	record, err := live.mint("sb-1", "STABLE", "use-1", []string{"github.com"}, "ghp_{base62:36}", nil)
+	record, err := live.mint("sb-1", "STABLE", "use-1", []string{"github.com"}, "ghp_{base62:36}", nil, 0)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestActivationHostCoversSubdomainsAndNothingAbove(t *testing.T) {
 		t.Fatal("a use approved for the site does not cover its API")
 	}
 
-	narrow, err := live.mint("sb-1", "STABLE", "use-2", []string{"api.github.com"}, "ghp_{base62:36}", nil)
+	narrow, err := live.mint("sb-1", "STABLE", "use-2", []string{"api.github.com"}, "ghp_{base62:36}", nil, 0)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestReportTranslatesAnEphemeralSentinel(t *testing.T) {
 	_ = WriteResolveContext(root, testProjectID, testPoolID, srv.URL, "tok")
 
 	live := newActivations()
-	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{"api.example.com"}, "", []string{"curl"})
+	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{"api.example.com"}, "", []string{"curl"}, 0)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestReportTranslatesALapsedActivation(t *testing.T) {
 	now := time.Now()
 	live := newActivations()
 	live.now = func() time.Time { return now }
-	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{"api.example.com"}, "", nil)
+	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{"api.example.com"}, "", nil, 0)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestReportRefusesAnotherSandboxesSentinel(t *testing.T) {
 	_ = WriteResolveContext(root, testProjectID, testPoolID, srv.URL, "tok")
 
 	live := newActivations()
-	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{"api.example.com"}, "", nil)
+	record, err := live.mint("sb-1", "STABLE-SENTINEL", "use-1", []string{"api.example.com"}, "", nil, 0)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}

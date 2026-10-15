@@ -21,7 +21,7 @@ import (
 // askFor asks for a well-known credential by ID, spelling out nothing else.
 func askFor(ctx context.Context, t *testing.T, svc *resourcesecrets.Service, id string) *model.SecretRequest {
 	t.Helper()
-	req, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	req, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId: testSandboxID,
 		ID:        serverapi.NewOptString(id),
 		Uses:      []apimodel.SecretUse{{Description: "open a pull request against org/repo"}},
@@ -54,7 +54,7 @@ func TestAnAskByWellKnownIDCarriesWhatTheIDNames(t *testing.T) {
 	// A host beneath the one the ID names is the narrower ask, not a
 	// contradiction: an agent that only calls the API may say so and be
 	// granted that alone.
-	narrower, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	narrower, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId: testSandboxID,
 		ID:        serverapi.NewOptString(wellknown.GitHubAPI),
 		Hosts:     []string{"api.github.com"},
@@ -71,7 +71,7 @@ func TestAnAskByWellKnownIDCarriesWhatTheIDNames(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			body.Uses = []apimodel.SecretUse{{Description: "open a pull request"}}
-			_, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, body)
+			_, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, body)
 			requireStatus(t, err, http.StatusBadRequest)
 		})
 	}
@@ -95,7 +95,7 @@ func TestTheFirstApprovalOfABoundCredentialMarksItsSecret(t *testing.T) {
 		t.Fatalf("marked = %+v, %v; want the secret the first approval named", marked, err)
 	}
 
-	second, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	second, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId: testSandboxID,
 		ID:        serverapi.NewOptString(wellknown.GitHubAPI),
 		Uses:      []apimodel.SecretUse{{Description: "read the issues in org/repo"}},
@@ -136,7 +136,7 @@ func TestAnAskByIDDoesNotReuseAPlainAsk(t *testing.T) {
 	ctx := testPrincipalContext()
 	svc, _ := newAgentCredentialService(t)
 
-	plain, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	plain, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId: testSandboxID,
 		Name:      "github",
 		EnvVar:    "GH_TOKEN",
@@ -208,7 +208,7 @@ func TestTheDiscoboxAPIsHostIsAskedForOnlyByID(t *testing.T) {
 	ctx := testPrincipalContext()
 	svc, _ := newAgentCredentialService(t)
 	for _, host := range []string{"api.discobox.internal", "x.api.discobox.internal"} {
-		_, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+		_, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 			SandboxId: testSandboxID,
 			Name:      "discobox",
 			EnvVar:    "DISCOBOX_TOKEN",

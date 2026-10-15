@@ -310,7 +310,7 @@ func TestTheDiscoboxAPIIsNotGivenAtCreateByItsSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create lead: %v", err)
 	}
-	req, err := svc.CreateSandboxCredentialRequest(ctx, lead.PoolID, services.CreateSandboxCredentialRequestBody{
+	req, _, err := svc.CreateSandboxCredentialRequest(ctx, lead.PoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId: lead.ID,
 		ID:        serverapi.NewOptString(wellknown.DiscoboxSandbox),
 		Uses:      []serverapi.SecretUse{{Description: "create workers"}},

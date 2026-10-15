@@ -27,6 +27,14 @@ func trimTrailingSlashes(u *url.URL) {
 
 // Invoker invokes operations described by OpenAPI v3 specification.
 type Invoker interface {
+	// AcknowledgeCredentialRetirements invokes acknowledge-credential-retirements operation.
+	//
+	// Acknowledges that the pool dropped the local state for the named retirements. Idempotent; unknown
+	// or already-acked IDs are acknowledged again. Items that fail one pool are retried with backoff and
+	// never block the other targets.
+	//
+	// POST /api/pools/{poolId}/credential-retirements
+	AcknowledgeCredentialRetirements(ctx context.Context, request *AcknowledgeCredentialRetirementsBody, params AcknowledgeCredentialRetirementsParams) (AcknowledgeCredentialRetirementsRes, error)
 	// ApproveSecretRequest invokes approve-secret-request operation.
 	//
 	// Approve a secret request.
@@ -487,6 +495,15 @@ type Invoker interface {
 	//
 	// GET /projects/{projectId}/approval-requests
 	ListApprovalRequests(ctx context.Context, params ListApprovalRequestsParams) (ListApprovalRequestsRes, error)
+	// ListCredentialRetirements invokes list-credential-retirements operation.
+	//
+	// Lists the pending local invalidations the pool owes: use retirements after a credential
+	// replacement or a sandbox generation change, and host trust retirements on a revoke. The live grant
+	// and trust reads are authoritative; these only make the pool drop its cached activations, positive
+	// cache entries, and pins promptly (ADR 26-10-15-871).
+	//
+	// GET /api/pools/{poolId}/credential-retirements
+	ListCredentialRetirements(ctx context.Context, params ListCredentialRetirementsParams) (ListCredentialRetirementsRes, error)
 	// ListCredentialVerdicts invokes list-credential-verdicts operation.
 	//
 	// The recorded judge verdicts for agent credential uses in a project, newest first. Project-scoped
@@ -1032,6 +1049,104 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 		return c.serverURL
 	}
 	return u
+}
+
+// AcknowledgeCredentialRetirements invokes acknowledge-credential-retirements operation.
+//
+// Acknowledges that the pool dropped the local state for the named retirements. Idempotent; unknown
+// or already-acked IDs are acknowledged again. Items that fail one pool are retried with backoff and
+// never block the other targets.
+//
+// POST /api/pools/{poolId}/credential-retirements
+func (c *Client) AcknowledgeCredentialRetirements(ctx context.Context, request *AcknowledgeCredentialRetirementsBody, params AcknowledgeCredentialRetirementsParams) (AcknowledgeCredentialRetirementsRes, error) {
+	res, err := c.sendAcknowledgeCredentialRetirements(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendAcknowledgeCredentialRetirements(ctx context.Context, request *AcknowledgeCredentialRetirementsBody, params AcknowledgeCredentialRetirementsParams) (res AcknowledgeCredentialRetirementsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("acknowledge-credential-retirements"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/pools/{poolId}/credential-retirements"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, AcknowledgeCredentialRetirementsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/pools/"
+	{
+		// Encode "poolId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "poolId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.StringToString(params.PoolId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/credential-retirements"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeAcknowledgeCredentialRetirementsRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeAcknowledgeCredentialRetirementsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
 }
 
 // ApproveSecretRequest invokes approve-secret-request operation.
@@ -8486,6 +8601,102 @@ func (c *Client) sendListApprovalRequests(ctx context.Context, params ListApprov
 
 	stage = "DecodeResponse"
 	result, err := decodeListApprovalRequestsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListCredentialRetirements invokes list-credential-retirements operation.
+//
+// Lists the pending local invalidations the pool owes: use retirements after a credential
+// replacement or a sandbox generation change, and host trust retirements on a revoke. The live grant
+// and trust reads are authoritative; these only make the pool drop its cached activations, positive
+// cache entries, and pins promptly (ADR 26-10-15-871).
+//
+// GET /api/pools/{poolId}/credential-retirements
+func (c *Client) ListCredentialRetirements(ctx context.Context, params ListCredentialRetirementsParams) (ListCredentialRetirementsRes, error) {
+	res, err := c.sendListCredentialRetirements(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListCredentialRetirements(ctx context.Context, params ListCredentialRetirementsParams) (res ListCredentialRetirementsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("list-credential-retirements"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/pools/{poolId}/credential-retirements"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListCredentialRetirementsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/pools/"
+	{
+		// Encode "poolId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "poolId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.StringToString(params.PoolId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/credential-retirements"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListCredentialRetirementsResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

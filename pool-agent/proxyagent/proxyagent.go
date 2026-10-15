@@ -324,6 +324,13 @@ func RunProxy(ctx context.Context, root layout.Root, logger *slog.Logger) error 
 		logger.Warn("host trusts", "error", err)
 	})
 	go trusts.run(ctx)
+	// The retirement feed: drops activations, cached values, and revoked
+	// pins promptly when the server ended an authorization early (ADR
+	// 26-10-15-871).
+	retirements := newUseRetirements(root, projectID, poolID, controlPlane, live, trusts, server, func(err error) {
+		logger.Warn("credential retirements", "error", err)
+	})
+	go retirements.run(ctx)
 	errCh := make(chan error, 2)
 	go func() {
 		logger.Info("pool proxy serving", "addr", ListenAddress)
@@ -341,7 +348,7 @@ func RunProxy(ctx context.Context, root layout.Root, logger *slog.Logger) error 
 		}()
 	}
 	go func() {
-		errCh <- serveCredentials(ctx, logger, bundle, controlPlane, live, trusts)
+		errCh <- serveCredentials(ctx, logger, bundle, controlPlane, live, trusts, root.ProxySandboxGenerationsFile(projectID, poolID))
 	}()
 	go func() {
 		// Logged, not sent to errCh, for the control API's reason: a sandbox

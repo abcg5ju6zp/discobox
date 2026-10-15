@@ -399,6 +399,10 @@ components:
                     type: string
                 config:
                     "$ref": "#/components/schemas/SandboxConfig"
+                generation:
+                    description: The sandbox runtime generation being created. The pool records it so its proxy gates approval-minted credentials and host trusts to that run, and drops them when the sandbox is rebuilt or archived (ADR 26-10-15-871).
+                    format: int64
+                    type: integer
                 resolvedHarnessConfig:
                     "$ref": "#/components/schemas/ResolvedHarnessConfig"
                 sandboxId:

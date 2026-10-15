@@ -703,6 +703,11 @@ func poolHarnessVolumes(volumes []harness.Volume) []poolapimodel.HarnessVolume {
 
 func poolCreateRequestFromOptions(sandboxID string, opts sandbox.CreateOptions) *poolapimodel.PoolSandboxCreateRequest {
 	out := &poolapimodel.PoolSandboxCreateRequest{SandboxId: sandboxID}
+	// The run being created pins what the pool's proxy may locally authorize
+	// (ADR 26-10-15-871).
+	if opts.Generation > 0 {
+		out.Generation = poolclient.NewOptInt64(opts.Generation)
+	}
 	config := &out.Config
 	if opts.Image.Name != "" {
 		config.Image = poolclient.NewOptString(opts.Image.Name)

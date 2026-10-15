@@ -90,6 +90,50 @@ a discobox it created: the sandbox role decides that for one request by its ID,
 and `ListSecretRequests` filters the listing with `store.OwnedBy`
 ([ADR 26-09-30-782](../../../../docs/adr/26-09-30-782-a-discobox-answers-its-own-discoboxes-requests-within-what-it-may-delegate.md) §2).
 
+## An approval is pinned to a run and a version, and replays
+
+An approval-minted authorization is fixed, at the instant it is approved, to the
+sandbox run (generation) that asked and — a grant — to the credential version
+that answered
+([ADR 26-10-15-871](../../../../docs/adr/26-10-15-871-an-approval-pins-a-sandbox-generation-and-credential-version-and-is-replayed.md)).
+The ask carries the run: a protocol `SecretRequest` and a `HostTrustRequest`
+record `SandboxGeneration` from the sandbox that filed them. A grant minted
+from one additionally records the secret's `ValueVersion`. **Zero on either pin
+means unpinned**, and is deliberately the only shape a pre-configured grant and
+an upgraded row take: standing grants and pre-pinning rows keep their old
+behavior wholesale.
+
+- **The run is re-checked inside the approval transaction**
+  (`checkSandboxRun`), not only before it: a rebuild or archive that lands while
+  the approval is in flight is refused with a 409, and a pending ask from the
+  old run is left unanswerable rather than approved for the new one. The agent
+  asks again in the current run.
+- **Every live read re-checks the pins** (`store.GrantPinLive`,
+  `store.TrustPinLive`): the sandbox is still a present runtime, its generation
+  still matches, and a grant's secret `ValueVersion` has not moved. A rebuild,
+  an archive/delete, or a replaced credential stops the authorization without
+  the row being deleted, which is what denies a value on every fetch rather than
+  at the end of the TTL. A missing sandbox or secret reads as dead, not an error.
+- **The credential version moves only on an explicit person-driven value
+  replacement** (`UpdateSecretBumpsValueVersion`), moved under the write's
+  transaction. An OAuth/exchange refresh and answering a refresh request are
+  not replacements and never move it.
+- **A repeated approval replays the first answer** (`replay.go`). An approve
+  that finds its request already decided does not mint a second grant or new use
+  IDs: the recorded body is checked against the incoming one and, when it
+  matches, the original request/grant/trust (and its use IDs) are returned. A
+  body asking for a different secret, scope, host set, uses, pin, or TTL is a
+  409 — one request has one answer. This covers a duplicate click, a restart,
+  and a response the client never got; the optimistic-lock conflict on the
+  request row is read as the concurrent approval to replay.
+- **Early retirement rides a pool outbox, not the live reads.** The events that
+  end an authorization before its TTL — value replacement, sandbox
+  rebuild/archive/delete, trust revoke — enqueue `CredentialRetirement` rows in
+  the same transaction; see the [store design](../store/DESIGN.md) and the pool's
+  [proxyagent design](../../../../pool-agent/DESIGN.md). The live gates above stay
+  the authority; the outbox only makes the pool drop local state promptly.
+
+
 ### A request and its grant name a list of hosts
 
 `SecretRequest.Hosts` and `SecretGrant.Hosts` are lists (ADR 26-10-02-393): one
@@ -383,12 +427,20 @@ credential path reads them.
   then the leaf's key. The trust carries the pinned CA's PEM for the proxy.
 - **Only a person approves one**: a sandbox principal is refused, since a pin
   decides who the sandbox's credentials for that host are handed to.
-- **A trust is one sandbox's and always lapses.** Its routes are under the
-  sandbox, it is deleted with the sandbox (`deleteSandboxHostTrustsTx`), and
-  its lifetime runs from an hour by default to thirty days at most.
+- **A trust is one sandbox's, pinned to the run that asked, and always
+  lapses.** Its routes are under the sandbox, it is deleted with the sandbox
+  (`deleteSandboxHostTrustsTx`), and its lifetime runs from an hour by default
+  to thirty days at most. The minted trust carries the ask's
+  `SandboxGeneration`, so — like a grant — it stops reading live once the
+  sandbox is rebuilt or archived, and a late approval after such a move is
+  refused; repeated approval replays the recorded pin and use IDs
+  ([ADR 26-10-15-871](../../../../docs/adr/26-10-15-871-an-approval-pins-a-sandbox-generation-and-credential-version-and-is-replayed.md)).
 - **`ListPoolHostTrusts`** is what a pool's proxy enforces: the live trusts of
-  every sandbox on it. A revoked or lapsed trust leaves it, and a poll of the
-  request that minted it answers `denied`, as a revoked grant does.
+  every sandbox on it, with the run pin re-checked on every read. A revoked or
+  lapsed trust, or one pinned to a run that moved, leaves it, and a poll of the
+  request that minted it answers `denied`, as a revoked grant does. Revoking a
+  trust additionally enqueues its `trust` retirement so the proxy drops the pin
+  without waiting for its trust poll.
 
 The window's inbox is `GET /projects/{projectId}/approval-requests`, a read
 model in the handlers over this resource's `ListSecretRequests` and

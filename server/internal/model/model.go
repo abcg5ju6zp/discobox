@@ -681,8 +681,13 @@ type Pool struct {
 
 	Project          *Project                 `gorm:"foreignKey:ProjectID" json:"-"`
 	ProviderInstance *SandboxProviderInstance `gorm:"foreignKey:ProviderInstanceID" json:"providerInstance,omitempty" doc:"Backing sandbox provider instance"`
-	Sandboxes        []Sandbox                `gorm:"foreignKey:PoolID" json:"-"`
-	BootstrapTokens  []PoolBootstrapToken     `gorm:"foreignKey:PoolID;constraint:fk_pool_bootstrap_tokens_pool,OnDelete:CASCADE" json:"-" doc:"Pool bootstrap tokens"`
+	// No database constraint backs the pool relation (ADR 26-10-15-871):
+	// pool_id is resolved and checked at every broker/resolve call, and pool
+	// lifecycle (an empty pool is deleted, a pool re-registers with its ID)
+	// must not be coupled to the sandbox table's DDL. Preload still follows
+	// the relation; the constraint:- tag only stops AutoMigrate creating it.
+	Sandboxes       []Sandbox            `gorm:"foreignKey:PoolID;constraint:-" json:"-"`
+	BootstrapTokens []PoolBootstrapToken `gorm:"foreignKey:PoolID;constraint:fk_pool_bootstrap_tokens_pool,OnDelete:CASCADE" json:"-" doc:"Pool bootstrap tokens"`
 }
 
 func (Pool) TableName() string { return "pools" }
@@ -901,9 +906,10 @@ type Sandbox struct {
 	CreatedAt      time.Time  `gorm:"autoCreateTime" json:"createdAt" doc:"Creation timestamp" format:"date-time"`
 	UpdatedAt      time.Time  `gorm:"autoUpdateTime" json:"updatedAt" doc:"Last update timestamp" format:"date-time"`
 
-	Project       *Project       `gorm:"foreignKey:ProjectID" json:"-"`
-	CreatedBy     *User          `gorm:"-" json:"createdBy,omitempty" doc:"Creating user"`
-	Pool          *Pool          `gorm:"foreignKey:PoolID" json:"pool,omitempty" doc:"Pool the sandbox is scheduled into"`
+	Project   *Project `gorm:"foreignKey:ProjectID" json:"-"`
+	CreatedBy *User    `gorm:"-" json:"createdBy,omitempty" doc:"Creating user"`
+	// No database constraint on pool (ADR 26-10-15-871); see Pool.Sandboxes.
+	Pool          *Pool          `gorm:"foreignKey:PoolID;constraint:-" json:"pool,omitempty" doc:"Pool the sandbox is scheduled into"`
 	HarnessConfig *HarnessConfig `gorm:"foreignKey:HarnessConfigID" json:"harnessConfig,omitempty" doc:"Harness config"`
 }
 
@@ -1187,7 +1193,16 @@ type Secret struct {
 	// here: GORM omits a zero-valued field from an INSERT when the column has
 	// one, so a default would quietly turn "no limit" into an hour. The
 	// service owns the default a creator who names none receives.
-	MaxGrantTTL    int64  `gorm:"column:max_grant_ttl_seconds;not null" json:"maxGrantTTLSeconds" doc:"Longest a grant on this secret may live, in seconds; 0 allows grants that never expire"`
+	MaxGrantTTL int64 `gorm:"column:max_grant_ttl_seconds;not null" json:"maxGrantTTLSeconds" doc:"Longest a grant on this secret may live, in seconds; 0 allows grants that never expire"`
+	// ValueVersion is the generation of the credential itself (ADR
+	// 26-10-15-871). It starts at 1 and moves only on a person's explicit
+	// value replacement, never on an OAuth/exchange refresh or on answering a
+	// refresh request: routine rotation is delivery within the granted
+	// lifetime, replacement is the decision that old approvals were for a
+	// different credential. An approval-minted grant pins the version it was
+	// approved against and stops being live once this moves; an unpinned grant
+	// never checks it.
+	ValueVersion   int64  `gorm:"column:value_version;not null;default:1" json:"-" doc:"Credential generation, moved only by a person's explicit value replacement; an approval pinned to an older version stops being live when this moves"`
 	EncryptedValue []byte `gorm:"column:encrypted_value" json:"-"`
 	// WellKnownID is the well-known credential this secret fulfills: a
 	// request for that ID resolves to it. At most one secret in a project
@@ -1382,7 +1397,12 @@ type SecretRequest struct {
 	ProjectID   string `gorm:"column:project_id;not null;type:text;index;uniqueIndex:idx_secret_request_open_refresh,priority:1" json:"projectId" doc:"Project ID"`
 	RequestedBy string `gorm:"column:requested_by;not null;type:text" json:"requestedBy" doc:"Principal ID of the requestor"`
 	SandboxID   string `gorm:"column:sandbox_id;not null;type:text;default:'';index" json:"sandboxId,omitempty" doc:"Sandbox that owns the sentinel, for sandbox-originated requests"`
-	Type        string `gorm:"column:type;not null;type:text" json:"type" doc:"Secret type requested" enum:"token,oauth,exchange"`
+	// SandboxGeneration pins a protocol-originated ask to the sandbox run that
+	// made it (ADR 26-10-15-871). Approving refuses once the sandbox has moved
+	// to another generation, so a late answer to an old run mints nothing.
+	// Zero is a non-protocol or pre-pinning request and pins nothing.
+	SandboxGeneration int64  `gorm:"column:sandbox_generation;not null;default:0" json:"-" doc:"Sandbox generation that made a protocol-originated ask; approval is refused once it has moved"`
+	Type              string `gorm:"column:type;not null;type:text" json:"type" doc:"Secret type requested" enum:"token,oauth,exchange"`
 	// Hosts are where the credential is asked for (ADR 26-10-02-393 §1): the
 	// destination the proxy observed, for a reactive or refresh request, and
 	// every host an agent named, for one from the protocol.
@@ -1503,6 +1523,15 @@ type SecretGrant struct {
 	SecretID  string `gorm:"column:secret_id;not null;type:text;index" json:"secretId" doc:"Granted secret ID"`
 	Scope     string `gorm:"column:scope;not null;type:text" json:"scope" doc:"How widely the grant applies" enum:"sandbox,harnessConfig,project"`
 	ScopeKey  string `gorm:"column:scope_key;not null;type:text;index" json:"scopeKey" doc:"Identifier the scope resolves against: sandbox ID, harness config ID, or project ID"`
+	// SandboxGeneration and SecretVersion pin a grant minted by approving an
+	// agent's ask to the run that asked and the credential version that
+	// answered (ADR 26-10-15-871). Every live read drops the grant once the
+	// sandbox moves generation or the secret is deliberately replaced. A
+	// static grant — a pre-approval, a sandbox-create grant, a configure
+	// grant — and every row written before pinning carry zero on both and are
+	// held to nothing here.
+	SandboxGeneration int64 `gorm:"column:sandbox_generation;not null;default:0;index" json:"-" doc:"Sandbox generation the approving ask named; zero is an unpinned static grant"`
+	SecretVersion     int64 `gorm:"column:secret_version;not null;default:0" json:"-" doc:"Credential version the approval answered; zero is an unpinned static grant"`
 	// Hosts are where the grant lets the credential go: a destination any of
 	// them covers (hostscope.CoversAny). None at all is the wildcard, which
 	// only an explicit grant create mints (ADR 26-10-02-393 §1).
@@ -1865,5 +1894,6 @@ func AllModels() []any {
 		&SecretRejection{},
 		&HostTrustRequest{},
 		&HostTrust{},
+		&CredentialRetirement{},
 	}
 }

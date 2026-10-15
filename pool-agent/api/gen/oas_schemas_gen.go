@@ -3542,8 +3542,12 @@ func (s *PoolListHTTPAuditOrder) UnmarshalText(data []byte) error {
 // Ref: #/components/schemas/PoolSandboxCreateRequest
 type PoolSandboxCreateRequest struct {
 	// A URL to the JSON Schema for this object.
-	Schema                OptURI                   `json:"$schema"`
-	Config                SandboxConfig            `json:"config"`
+	Schema OptURI        `json:"$schema"`
+	Config SandboxConfig `json:"config"`
+	// The sandbox runtime generation being created. The pool records it so its proxy gates
+	// approval-minted credentials and host trusts to that run, and drops them when the sandbox is
+	// rebuilt or archived (ADR 26-10-15-871).
+	Generation            OptInt64                 `json:"generation"`
 	ResolvedHarnessConfig OptResolvedHarnessConfig `json:"resolvedHarnessConfig"`
 	SandboxId             string                   `json:"sandboxId"`
 	// Sentinel placeholder values injected into this sandbox. The pool registers them with the proxy so
@@ -3563,6 +3567,11 @@ func (s *PoolSandboxCreateRequest) GetSchema() OptURI {
 // GetConfig returns the value of Config.
 func (s *PoolSandboxCreateRequest) GetConfig() SandboxConfig {
 	return s.Config
+}
+
+// GetGeneration returns the value of Generation.
+func (s *PoolSandboxCreateRequest) GetGeneration() OptInt64 {
+	return s.Generation
 }
 
 // GetResolvedHarnessConfig returns the value of ResolvedHarnessConfig.
@@ -3593,6 +3602,11 @@ func (s *PoolSandboxCreateRequest) SetSchema(val OptURI) {
 // SetConfig sets the value of Config.
 func (s *PoolSandboxCreateRequest) SetConfig(val SandboxConfig) {
 	s.Config = val
+}
+
+// SetGeneration sets the value of Generation.
+func (s *PoolSandboxCreateRequest) SetGeneration(val OptInt64) {
+	s.Generation = val
 }
 
 // SetResolvedHarnessConfig sets the value of ResolvedHarnessConfig.

@@ -118,39 +118,69 @@ func (s *Store) GetHostTrust(ctx context.Context, projectID, trustID string) (*m
 	return firstByID[model.HostTrust](read.Where("project_id = ?", projectID), "id", trustID)
 }
 
-// ListLiveSandboxHostTrusts returns the trusts a sandbox holds at now.
+// ListLiveSandboxHostTrusts returns the trusts a sandbox holds at now and for
+// its current run: a trust pinned to an older generation is gone (ADR
+// 26-10-15-871).
 func (s *Store) ListLiveSandboxHostTrusts(ctx context.Context, projectID, sandboxID string, now time.Time) ([]model.HostTrust, error) {
 	read, err := s.getRead(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := []model.HostTrust{}
+	var candidates []model.HostTrust
 	err = read.Where("project_id = ? AND sandbox_id = ? AND expires_at > ?", projectID, sandboxID, now.UTC()).
-		Order("created_at ASC").Find(&out).Error
-	return out, err
+		Order("created_at ASC").Find(&candidates).Error
+	if err != nil {
+		return nil, err
+	}
+	return s.liveTrusts(ctx, candidates)
 }
 
 // ListLivePoolHostTrusts returns the live trusts of every sandbox placed on
-// the pool: what that pool's proxy enforces.
+// the pool: what that pool's proxy enforces. Trusts pinned to runs that have
+// since moved are left out (ADR 26-10-15-871).
 func (s *Store) ListLivePoolHostTrusts(ctx context.Context, poolID string, now time.Time) ([]model.HostTrust, error) {
 	read, err := s.getRead(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := []model.HostTrust{}
+	var candidates []model.HostTrust
 	err = read.
 		Where("expires_at > ? AND sandbox_id IN (?)", now.UTC(),
 			read.Model(&model.Sandbox{}).Select("id").Where("pool_id = ?", poolID)).
-		Order("created_at ASC").Find(&out).Error
-	return out, err
+		Order("created_at ASC").Find(&candidates).Error
+	if err != nil {
+		return nil, err
+	}
+	return s.liveTrusts(ctx, candidates)
+}
+
+// liveTrusts filters time-live trust rows by their run pin.
+func (s *Store) liveTrusts(ctx context.Context, candidates []model.HostTrust) ([]model.HostTrust, error) {
+	out := make([]model.HostTrust, 0, len(candidates))
+	for i := range candidates {
+		live, err := s.TrustPinLive(ctx, &candidates[i])
+		if err != nil {
+			return nil, err
+		}
+		if live {
+			out = append(out, candidates[i])
+		}
+	}
+	return out, nil
 }
 
 // DeleteHostTrust revokes one of a sandbox's trusts. The lookup and the
 // delete share a transaction because trustID may be an ID prefix (firstByID).
+// The trust's pinned uses are enqueued for pool retirement in the same
+// transaction, so a revoke never commits without its cache invalidation (ADR
+// 26-10-15-871).
 func (s *Store) DeleteHostTrust(ctx context.Context, projectID, sandboxID, trustID string) error {
 	return s.Transaction(ctx, func(_ *Store, tx *gorm.DB) error {
 		trust, err := firstByID[model.HostTrust](tx.Where("project_id = ? AND sandbox_id = ?", projectID, sandboxID), "id", trustID)
 		if err != nil {
+			return err
+		}
+		if err := enqueueTrustRetirement(tx, trust); err != nil {
 			return err
 		}
 		return tx.Delete(trust).Error

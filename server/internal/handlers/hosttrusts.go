@@ -138,7 +138,7 @@ func (h *Handler) CreateSandboxTrustRequest(ctx context.Context, req *apimodel.C
 	if err != nil {
 		return apiError(err), nil
 	}
-	result, err := h.services.HostTrusts.CreateSandboxTrustRequest(ctx, principal.PoolID, *req)
+	result, _, err := h.services.HostTrusts.CreateSandboxTrustRequest(ctx, principal.PoolID, *req)
 	if err != nil {
 		return apiError(err), nil
 	}

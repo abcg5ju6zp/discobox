@@ -13,6 +13,17 @@ type UnimplementedHandler struct{}
 
 var _ Handler = UnimplementedHandler{}
 
+// AcknowledgeCredentialRetirements implements acknowledge-credential-retirements operation.
+//
+// Acknowledges that the pool dropped the local state for the named retirements. Idempotent; unknown
+// or already-acked IDs are acknowledged again. Items that fail one pool are retried with backoff and
+// never block the other targets.
+//
+// POST /api/pools/{poolId}/credential-retirements
+func (UnimplementedHandler) AcknowledgeCredentialRetirements(ctx context.Context, req *AcknowledgeCredentialRetirementsBody, params AcknowledgeCredentialRetirementsParams) (r AcknowledgeCredentialRetirementsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ApproveSecretRequest implements approve-secret-request operation.
 //
 // Approve a secret request.
@@ -671,6 +682,18 @@ func (UnimplementedHandler) JudgeSandbox(ctx context.Context, req *JudgeJob, par
 //
 // GET /projects/{projectId}/approval-requests
 func (UnimplementedHandler) ListApprovalRequests(ctx context.Context, params ListApprovalRequestsParams) (r ListApprovalRequestsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListCredentialRetirements implements list-credential-retirements operation.
+//
+// Lists the pending local invalidations the pool owes: use retirements after a credential
+// replacement or a sandbox generation change, and host trust retirements on a revoke. The live grant
+// and trust reads are authoritative; these only make the pool drop its cached activations, positive
+// cache entries, and pins promptly (ADR 26-10-15-871).
+//
+// GET /api/pools/{poolId}/credential-retirements
+func (UnimplementedHandler) ListCredentialRetirements(ctx context.Context, params ListCredentialRetirementsParams) (r ListCredentialRetirementsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

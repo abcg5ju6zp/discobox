@@ -114,6 +114,11 @@ func (r *DockerSandboxRuntime) ArchiveSandbox(ctx context.Context, sandboxID str
 	if err := proxyagent.RemoveSandboxSentinels(r.root, r.projectID, r.poolID, sandboxID); err != nil {
 		return err
 	}
+	// Drop the run record too: an archived run authorizes nothing locally,
+	// and the new run stages a new generation on create (ADR 26-10-15-871).
+	if err := proxyagent.RemoveSandboxGeneration(r.root, r.projectID, r.poolID, sandboxID); err != nil {
+		return err
+	}
 	return proxyagent.RemoveSandboxMaterial(r.root, r.projectID, r.poolID, sandboxID)
 }
 

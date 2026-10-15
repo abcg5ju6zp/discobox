@@ -24,7 +24,7 @@ func TestOneRequestAndGrantNameSeveralHosts(t *testing.T) {
 	svc, st := newAgentCredentialService(t)
 	secret := createBearerSecret(ctx, t, svc)
 
-	req, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+	req, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 		SandboxId: testSandboxID, Name: "github", EnvVar: "GH_TOKEN",
 		Hosts: []string{"API.GitHub.com", "api.githubcopilot.com", "api.github.com"},
 		Uses:  []apimodel.SecretUse{{Description: "run copilot against org/repo"}},
@@ -81,7 +81,7 @@ func TestARetryNamingTheSameHostsInAnotherOrderIsTheSameRequest(t *testing.T) {
 	svc, _ := newAgentCredentialService(t)
 	ask := func(hosts ...string) *model.SecretRequest {
 		t.Helper()
-		req, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+		req, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 			SandboxId: testSandboxID, Name: "github", EnvVar: "GH_TOKEN", Hosts: hosts,
 			Uses: []apimodel.SecretUse{{Description: "run copilot against org/repo"}},
 		})
@@ -148,10 +148,11 @@ func TestAWellKnownAskNamesItsFirstHostUnlessItNamesMore(t *testing.T) {
 	ctx := testPrincipalContext()
 	svc, _ := newAgentCredentialService(t)
 	ask := func(hosts ...string) (*model.SecretRequest, error) {
-		return svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
+		req, _, err := svc.CreateSandboxCredentialRequest(ctx, testPoolID, services.CreateSandboxCredentialRequestBody{
 			SandboxId: testSandboxID, ID: serverapi.NewOptString(wellknown.GitHubAPI), Hosts: hosts,
 			Uses: []apimodel.SecretUse{{Description: "run copilot against org/repo"}},
 		})
+		return req, err
 	}
 	plain, err := ask()
 	if err != nil {

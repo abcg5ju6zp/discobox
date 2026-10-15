@@ -154,6 +154,12 @@ func (db *DB) Migrate(ctx context.Context) error {
 	if err := migrateCredentialVerdictNeeds(write); err != nil {
 		return err
 	}
+	if err := dropSandboxPoolConstraint(write); err != nil {
+		return err
+	}
+	if err := backfillCredentialPins(write); err != nil {
+		return err
+	}
 	return rekeySandboxOrigins(write)
 }
 

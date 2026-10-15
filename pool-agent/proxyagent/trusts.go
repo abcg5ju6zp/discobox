@@ -99,6 +99,15 @@ func (h *hostTrusts) probe(ctx context.Context, sandboxID, endpoint string) (pro
 	return result, err
 }
 
+// retireTrust drops a revoked trust by ID from the proxy's policy (ADR
+// 26-10-15-871). A trust the poll never carried is already retired.
+func (h *hostTrusts) retireTrust(trustID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.publisher.retireTrust(trustID)
+	return nil
+}
+
 // suppliedCA parses the CA an agent offered and checks the observed chain
 // verifies against it for the endpoint's name. An agent is never allowed to
 // put a certificate in front of a person that the host did not answer to.
@@ -202,6 +211,7 @@ func (d hostTrustDoc) proxyTrust() proxy.HostTrust {
 		useIDs = append(useIDs, use.UseID)
 	}
 	return proxy.HostTrust{
+		ID:        d.ID,
 		ClientID:  d.SandboxID,
 		Host:      d.Host,
 		Pin:       proxy.TrustPin{Kind: d.Pin.Kind, SHA256: d.Pin.SHA256, PEM: d.PinPEM},

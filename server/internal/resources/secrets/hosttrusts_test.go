@@ -35,7 +35,7 @@ var (
 
 func createTrustRequest(ctx context.Context, t *testing.T, svc *resourcesecrets.Service, chain ...apimodel.ObservedCertificate) *model.HostTrustRequest {
 	t.Helper()
-	req, err := svc.CreateSandboxTrustRequest(ctx, testPoolID, services.CreateSandboxTrustRequestBody{
+	req, _, err := svc.CreateSandboxTrustRequest(ctx, testPoolID, services.CreateSandboxTrustRequestBody{
 		SandboxId:     testSandboxID,
 		Host:          "34.70.64.109",
 		Justification: serverapi.NewOptString("the user's GKE cluster"),
@@ -71,13 +71,13 @@ func TestTrustRequestRefusesAnAskWithNothingToPin(t *testing.T) {
 		"no uses":  {SandboxId: testSandboxID, Host: "10.0.0.1", ObservedChain: []apimodel.ObservedCertificate{testLeaf}},
 		"no host":  {SandboxId: testSandboxID, Host: "https://x/y", Uses: []apimodel.SecretUse{{Description: "x"}}, ObservedChain: []apimodel.ObservedCertificate{testLeaf}},
 	} {
-		if _, err := svc.CreateSandboxTrustRequest(ctx, testPoolID, body); err == nil {
+		if _, _, err := svc.CreateSandboxTrustRequest(ctx, testPoolID, body); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	// A pool speaks only for its own sandboxes.
 	body := services.CreateSandboxTrustRequestBody{SandboxId: testSandboxID, Host: "10.0.0.1", Uses: []apimodel.SecretUse{{Description: "x"}}, ObservedChain: []apimodel.ObservedCertificate{testLeaf}}
-	if _, err := svc.CreateSandboxTrustRequest(ctx, "pool-other", body); err == nil {
+	if _, _, err := svc.CreateSandboxTrustRequest(ctx, "pool-other", body); err == nil {
 		t.Error("another pool's ask was accepted")
 	}
 }

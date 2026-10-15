@@ -510,7 +510,11 @@ Key properties:
   (`NegativeTTLSeconds`, 10s by default); transient resolver errors are not
   cached. A resolver may shorten that bound by returning an earlier `ExpiresAt`
   — which is how an ephemeral sentinel's use window is honored, since its grant
-  outlives it.
+  outlives it. A positive entry also records the approved use it was resolved
+  under, so `Server.InvalidateUse(useID)` can drop every value a retired use
+  could keep serving when the pool's retirement feed says the authorization
+  ended early ([ADR 26-10-15-871](../docs/adr/26-10-15-871-an-approval-pins-a-sandbox-generation-and-credential-version-and-is-replayed.md));
+  denials are keyed without a use and are left to their short TTL.
 - **Stale-while-revalidate.** Past `RefreshIntervalSeconds` (30s by default) a
   cached value keeps serving while one deduplicated background refresh runs: a
   new value replaces it, a denial replaces it with a cached denial, and a
@@ -799,6 +803,12 @@ flowchart LR
   proxy and exemptions — per trust, keeps a trust's transport across
   `ApplyConfig` while its pin is unchanged, and closes the idle connections of
   one that is gone.
+- **`HostTrust.ID` is carried, not matched on.** It is the control-plane row ID
+  the pool's retirement feed names when a trust is revoked early
+  ([ADR 26-10-15-871](../docs/adr/26-10-15-871-an-approval-pins-a-sandbox-generation-and-credential-version-and-is-replayed.md));
+  the transport identity stays `(client, host, pin)`, so the ID rides on the
+  trust only so the pool's policy can remove that one row and republish without
+  waiting for its trust poll.
 - **A request to a trusted host is judged** against the trust's uses
   (`AuthorizeRequest.TrustUseIDs`), whether or not it carries a credential; one
   that does is judged against both, in the one ask that runs before anything is

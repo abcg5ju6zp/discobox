@@ -255,11 +255,48 @@ func (h *Handler) CreateSandboxCredentialRequest(ctx context.Context, req *apimo
 	if err != nil {
 		return apiError(err), nil
 	}
-	result, err := h.services.Secrets.CreateSandboxCredentialRequest(ctx, principal.PoolID, *req)
+	result, _, err := h.services.Secrets.CreateSandboxCredentialRequest(ctx, principal.PoolID, *req)
 	if err != nil {
 		return apiError(err), nil
 	}
 	return agentCredentialRequestStatus(result, nil), nil
+}
+
+// ListCredentialRetirements serves a pool its pending local invalidations
+// (ADR 26-10-15-871).
+func (h *Handler) ListCredentialRetirements(ctx context.Context, _ serverapi.ListCredentialRetirementsParams) (serverapi.ListCredentialRetirementsRes, error) {
+	principal, err := credentialBrokerPrincipal(ctx)
+	if err != nil {
+		return apiError(err), nil
+	}
+	items, err := h.services.Secrets.ListCredentialRetirements(ctx, principal.PoolID)
+	if err != nil {
+		return apiError(err), nil
+	}
+	resp := &serverapi.ListCredentialRetirementsOK{Retirements: make([]serverapi.CredentialRetirement, 0, len(items))}
+	for _, item := range items {
+		resp.Retirements = append(resp.Retirements, serverapi.CredentialRetirement{
+			ID:        item.ID,
+			Kind:      serverapi.CredentialRetirementKind(item.Kind),
+			Reason:    serverapi.CredentialRetirementReason(item.Reason),
+			SandboxId: item.SandboxID,
+			TargetId:  item.TargetID,
+		})
+	}
+	return resp, nil
+}
+
+// AcknowledgeCredentialRetirements marks the items the pool applied (ADR
+// 26-10-15-871); idempotent.
+func (h *Handler) AcknowledgeCredentialRetirements(ctx context.Context, req *serverapi.AcknowledgeCredentialRetirementsBody, _ serverapi.AcknowledgeCredentialRetirementsParams) (serverapi.AcknowledgeCredentialRetirementsRes, error) {
+	principal, err := credentialBrokerPrincipal(ctx)
+	if err != nil {
+		return apiError(err), nil
+	}
+	if err := h.services.Secrets.AcknowledgeCredentialRetirements(ctx, principal.PoolID, req.RetirementIds); err != nil {
+		return apiError(err), nil
+	}
+	return &serverapi.AcknowledgeCredentialRetirementsNoContent{}, nil
 }
 
 func (h *Handler) GetSandboxCredentialRequest(ctx context.Context, params serverapi.GetSandboxCredentialRequestParams) (serverapi.GetSandboxCredentialRequestRes, error) {

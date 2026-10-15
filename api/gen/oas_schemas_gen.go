@@ -11,6 +11,27 @@ import (
 	"github.com/go-faster/jx"
 )
 
+// Ref: #/components/schemas/AcknowledgeCredentialRetirementsBody
+type AcknowledgeCredentialRetirementsBody struct {
+	// The retirement items the pool has dropped local state for. Acknowledging is idempotent.
+	RetirementIds []string `json:"retirementIds"`
+}
+
+// GetRetirementIds returns the value of RetirementIds.
+func (s *AcknowledgeCredentialRetirementsBody) GetRetirementIds() []string {
+	return s.RetirementIds
+}
+
+// SetRetirementIds sets the value of RetirementIds.
+func (s *AcknowledgeCredentialRetirementsBody) SetRetirementIds(val []string) {
+	s.RetirementIds = val
+}
+
+// AcknowledgeCredentialRetirementsNoContent is response for AcknowledgeCredentialRetirements operation.
+type AcknowledgeCredentialRetirementsNoContent struct{}
+
+func (*AcknowledgeCredentialRetirementsNoContent) acknowledgeCredentialRetirementsRes() {}
+
 // Records one successful discobox apply of a source's commits into a host working tree.
 // Client-declared provenance, like Origin, since the server cannot observe host-side Git state.
 // Ref: #/components/schemas/AppliedSourceCommit
@@ -2164,6 +2185,177 @@ func (s *CreateSecretRequestBodyType) UnmarshalText(data []byte) error {
 	}
 }
 
+// One pool-local invalidation owed after an authorization retired (ADR 26-10-15-871): the pool drops
+// activations, positive cache entries, or a trust pin for it, then acknowledges its ID.
+// Ref: #/components/schemas/CredentialRetirement
+type CredentialRetirement struct {
+	// The retirement item ID, used when acknowledging.
+	ID string `json:"id"`
+	// What targetId names.
+	Kind CredentialRetirementKind `json:"kind"`
+	// Why the authorization retired.
+	Reason CredentialRetirementReason `json:"reason"`
+	// The sandbox whose local pool state the item retires.
+	SandboxId string `json:"sandboxId"`
+	// The approved use ID (kind use) or host trust ID (kind trust) the pool drops locally.
+	TargetId string `json:"targetId"`
+}
+
+// GetID returns the value of ID.
+func (s *CredentialRetirement) GetID() string {
+	return s.ID
+}
+
+// GetKind returns the value of Kind.
+func (s *CredentialRetirement) GetKind() CredentialRetirementKind {
+	return s.Kind
+}
+
+// GetReason returns the value of Reason.
+func (s *CredentialRetirement) GetReason() CredentialRetirementReason {
+	return s.Reason
+}
+
+// GetSandboxId returns the value of SandboxId.
+func (s *CredentialRetirement) GetSandboxId() string {
+	return s.SandboxId
+}
+
+// GetTargetId returns the value of TargetId.
+func (s *CredentialRetirement) GetTargetId() string {
+	return s.TargetId
+}
+
+// SetID sets the value of ID.
+func (s *CredentialRetirement) SetID(val string) {
+	s.ID = val
+}
+
+// SetKind sets the value of Kind.
+func (s *CredentialRetirement) SetKind(val CredentialRetirementKind) {
+	s.Kind = val
+}
+
+// SetReason sets the value of Reason.
+func (s *CredentialRetirement) SetReason(val CredentialRetirementReason) {
+	s.Reason = val
+}
+
+// SetSandboxId sets the value of SandboxId.
+func (s *CredentialRetirement) SetSandboxId(val string) {
+	s.SandboxId = val
+}
+
+// SetTargetId sets the value of TargetId.
+func (s *CredentialRetirement) SetTargetId(val string) {
+	s.TargetId = val
+}
+
+// What targetId names.
+type CredentialRetirementKind string
+
+const (
+	CredentialRetirementKindUse   CredentialRetirementKind = "use"
+	CredentialRetirementKindTrust CredentialRetirementKind = "trust"
+)
+
+// AllValues returns all CredentialRetirementKind values.
+func (CredentialRetirementKind) AllValues() []CredentialRetirementKind {
+	return []CredentialRetirementKind{
+		CredentialRetirementKindUse,
+		CredentialRetirementKindTrust,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s CredentialRetirementKind) MarshalText() ([]byte, error) {
+	switch s {
+	case CredentialRetirementKindUse:
+		return []byte(s), nil
+	case CredentialRetirementKindTrust:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *CredentialRetirementKind) UnmarshalText(data []byte) error {
+	switch CredentialRetirementKind(data) {
+	case CredentialRetirementKindUse:
+		*s = CredentialRetirementKindUse
+		return nil
+	case CredentialRetirementKindTrust:
+		*s = CredentialRetirementKindTrust
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Why the authorization retired.
+type CredentialRetirementReason string
+
+const (
+	CredentialRetirementReasonCredentialReplaced CredentialRetirementReason = "credential_replaced"
+	CredentialRetirementReasonSandboxArchived    CredentialRetirementReason = "sandbox_archived"
+	CredentialRetirementReasonSandboxDeleted     CredentialRetirementReason = "sandbox_deleted"
+	CredentialRetirementReasonSandboxGeneration  CredentialRetirementReason = "sandbox_generation"
+	CredentialRetirementReasonTrustRevoked       CredentialRetirementReason = "trust_revoked"
+)
+
+// AllValues returns all CredentialRetirementReason values.
+func (CredentialRetirementReason) AllValues() []CredentialRetirementReason {
+	return []CredentialRetirementReason{
+		CredentialRetirementReasonCredentialReplaced,
+		CredentialRetirementReasonSandboxArchived,
+		CredentialRetirementReasonSandboxDeleted,
+		CredentialRetirementReasonSandboxGeneration,
+		CredentialRetirementReasonTrustRevoked,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s CredentialRetirementReason) MarshalText() ([]byte, error) {
+	switch s {
+	case CredentialRetirementReasonCredentialReplaced:
+		return []byte(s), nil
+	case CredentialRetirementReasonSandboxArchived:
+		return []byte(s), nil
+	case CredentialRetirementReasonSandboxDeleted:
+		return []byte(s), nil
+	case CredentialRetirementReasonSandboxGeneration:
+		return []byte(s), nil
+	case CredentialRetirementReasonTrustRevoked:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *CredentialRetirementReason) UnmarshalText(data []byte) error {
+	switch CredentialRetirementReason(data) {
+	case CredentialRetirementReasonCredentialReplaced:
+		*s = CredentialRetirementReasonCredentialReplaced
+		return nil
+	case CredentialRetirementReasonSandboxArchived:
+		*s = CredentialRetirementReasonSandboxArchived
+		return nil
+	case CredentialRetirementReasonSandboxDeleted:
+		*s = CredentialRetirementReasonSandboxDeleted
+		return nil
+	case CredentialRetirementReasonSandboxGeneration:
+		*s = CredentialRetirementReasonSandboxGeneration
+		return nil
+	case CredentialRetirementReasonTrustRevoked:
+		*s = CredentialRetirementReasonTrustRevoked
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 // One recorded judge decision about an agent credential use. The row lives in the control plane and
 // outlives its sandbox. A command verdict (kind command, origin judge) is the project's judge
 // answering about a command a discobox was about to run, recorded by the control plane before the
@@ -3054,6 +3246,7 @@ func (s *ErrorModelStatusCode) SetResponse(val ErrorModel) {
 	s.Response = val
 }
 
+func (*ErrorModelStatusCode) acknowledgeCredentialRetirementsRes() {}
 func (*ErrorModelStatusCode) approveSecretRequestRes()             {}
 func (*ErrorModelStatusCode) approveTrustRequestRes()              {}
 func (*ErrorModelStatusCode) assignSandboxHarnessSecretsRes()      {}
@@ -3107,6 +3300,7 @@ func (*ErrorModelStatusCode) getTrustRequestRes()                  {}
 func (*ErrorModelStatusCode) judgeCommandForPoolRes()              {}
 func (*ErrorModelStatusCode) judgeForPoolRes()                     {}
 func (*ErrorModelStatusCode) listApprovalRequestsRes()             {}
+func (*ErrorModelStatusCode) listCredentialRetirementsRes()        {}
 func (*ErrorModelStatusCode) listCredentialVerdictsRes()           {}
 func (*ErrorModelStatusCode) listDNSAuditRes()                     {}
 func (*ErrorModelStatusCode) listHTTPAuditRes()                    {}
@@ -6945,6 +7139,22 @@ func (s *ListApprovalRequestsStatus) UnmarshalText(data []byte) error {
 		return errors.Errorf("invalid value: %q", data)
 	}
 }
+
+type ListCredentialRetirementsOK struct {
+	Retirements []CredentialRetirement `json:"retirements"`
+}
+
+// GetRetirements returns the value of Retirements.
+func (s *ListCredentialRetirementsOK) GetRetirements() []CredentialRetirement {
+	return s.Retirements
+}
+
+// SetRetirements sets the value of Retirements.
+func (s *ListCredentialRetirementsOK) SetRetirements(val []CredentialRetirement) {
+	s.Retirements = val
+}
+
+func (*ListCredentialRetirementsOK) listCredentialRetirementsRes() {}
 
 // Ref: #/components/schemas/ListCredentialVerdictsBody
 type ListCredentialVerdictsBody struct {

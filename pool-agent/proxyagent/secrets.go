@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,69 @@ type resolveContext struct {
 // secretsFileMu serializes read-modify-write updates to SecretsFile within the
 // pool-agent process. The proxy unit only reads the file.
 var secretsFileMu sync.Mutex
+
+var sandboxGenerationsFileMu sync.Mutex
+
+// sandboxGenerationsDoc is the current run of every sandbox on a pool, as the
+// pool agent's create/rebuild/archive calls record it (ADR 26-10-15-871). The
+// proxy unit reads it before it hands an approved value out.
+type sandboxGenerationsDoc struct {
+	Clients map[string]int64 `json:"clients"`
+}
+
+// UpsertSandboxGeneration records the current generation for one sandbox in
+// the generations file the proxy unit reads.
+func UpsertSandboxGeneration(root layout.Root, projectID, poolID, sandboxID string, generation int64) error {
+	if generation <= 0 {
+		return nil
+	}
+	sandboxGenerationsFileMu.Lock()
+	defer sandboxGenerationsFileMu.Unlock()
+	path := root.ProxySandboxGenerationsFile(projectID, poolID)
+	doc, err := readSandboxGenerationsDoc(path)
+	if err != nil {
+		return err
+	}
+	if doc.Clients[sandboxID] == generation {
+		return nil
+	}
+	doc.Clients[sandboxID] = generation
+	return writeJSONAtomic(path, doc)
+}
+
+// RemoveSandboxGeneration drops one sandbox's generation on archive/delete.
+func RemoveSandboxGeneration(root layout.Root, projectID, poolID, sandboxID string) error {
+	sandboxGenerationsFileMu.Lock()
+	defer sandboxGenerationsFileMu.Unlock()
+	path := root.ProxySandboxGenerationsFile(projectID, poolID)
+	doc, err := readSandboxGenerationsDoc(path)
+	if err != nil {
+		return err
+	}
+	if _, ok := doc.Clients[sandboxID]; !ok {
+		return nil
+	}
+	delete(doc.Clients, sandboxID)
+	return writeJSONAtomic(path, doc)
+}
+
+func readSandboxGenerationsDoc(path string) (sandboxGenerationsDoc, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return sandboxGenerationsDoc{Clients: map[string]int64{}}, nil
+	}
+	if err != nil {
+		return sandboxGenerationsDoc{}, fmt.Errorf("read sandbox generations: %w", err)
+	}
+	var doc sandboxGenerationsDoc
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return sandboxGenerationsDoc{}, fmt.Errorf("parse sandbox generations: %w", err)
+	}
+	if doc.Clients == nil {
+		doc.Clients = map[string]int64{}
+	}
+	return doc, nil
+}
 
 // UpsertSandboxSentinels registers a sandbox's sentinel set with the proxy by
 // updating SecretsFile. Passing an empty set removes the sandbox entry.
@@ -127,16 +191,21 @@ type secretResolver struct {
 	// sentinels stand for. Nil asks nobody, which allows every request that
 	// reaches it.
 	judge *judgeClient
+	// generationsPath is the proxy unit's per-sandbox current-run record
+	// (ADR 26-10-15-871); a value goes out only under an activation whose run
+	// still matches it. Empty disables the local gate.
+	generationsPath string
 }
 
 func newSecretResolver(root layout.Root, projectID, poolID string, live *activations) *secretResolver {
 	contextPath := root.ProxyResolveContextFile(projectID, poolID)
 	client := controlPlaneHTTPClient()
 	return &secretResolver{
-		contextPath: contextPath,
-		client:      client,
-		gateClient:  gateHTTPClient(),
-		activations: live,
+		contextPath:     contextPath,
+		client:          client,
+		gateClient:      gateHTTPClient(),
+		activations:     live,
+		generationsPath: root.ProxySandboxGenerationsFile(projectID, poolID),
 		// Its own client: a verdict takes as long as a model takes, which is
 		// nothing like the time a resolve takes.
 		judge: &judgeClient{plane: &controlPlaneCredentials{
@@ -581,7 +650,33 @@ func (r *secretResolver) activation(req proxy.SecretResolveRequest) (activation,
 	if len(record.Hosts) == 0 || !hostscope.CoversAny(record.Hosts, req.Host) {
 		return activation{}, false
 	}
+	// Local run gate, read before a value leaves (ADR 26-10-15-871).
+	generations, known := r.sandboxGenerations()
+	if !record.generationLive(generations, known) {
+		return activation{}, false
+	}
 	return record, true
+}
+
+// sandboxGenerations reads the current-run record. The second value reports
+// whether the local gate is enabled: false only when no generations path is
+// configured, in which case nothing is gated. With it enabled, an absent or
+// empty record — or one that cannot be parsed — names no current run, so a
+// pinned activation fails closed. A positive pin is only stamped on a mint
+// when the channel names the run, so a record that stopped naming it means the
+// run moved; a zero-pinned activation is held to no generation regardless.
+func (r *secretResolver) sandboxGenerations() (map[string]int64, bool) {
+	if r.generationsPath == "" {
+		return nil, false
+	}
+	doc, err := readSandboxGenerationsDoc(r.generationsPath)
+	if err != nil {
+		// A record that cannot be read names no current run: fail a pinned
+		// activation closed rather than trusting a run the channel cannot
+		// place.
+		return map[string]int64{}, true
+	}
+	return doc.Clients, true
 }
 
 // isEphemeralCandidate reports whether a sentinel looks like one this process
@@ -646,8 +741,31 @@ func newPolicyPublisher(server *proxy.Server, base proxy.Config, live *activatio
 func (p *policyPublisher) setFileSentinels(clients map[string][]string) {
 	p.mu.Lock()
 	p.file = clients
-	p.mu.Unlock()
 	p.publish()
+	p.mu.Unlock()
+}
+
+// retireTrust removes a revoked trust by ID and republishes (ADR
+// 26-10-15-871). It returns whether the trust was present, so a caller never
+// told about it treats the retirement as already applied.
+func (p *policyPublisher) retireTrust(trustID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	kept := make([]proxy.HostTrust, 0, len(p.trusts))
+	removed := false
+	for _, trust := range p.trusts {
+		if trust.ID == trustID {
+			removed = true
+			continue
+		}
+		kept = append(kept, trust)
+	}
+	if !removed {
+		return false
+	}
+	p.trusts = kept
+	p.publish()
+	return true
 }
 
 // setTrusts records the pool's live host trusts and republishes.

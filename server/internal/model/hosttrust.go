@@ -72,13 +72,17 @@ type TrustPin struct {
 // is an approval-inbox item beside SecretRequest; a person resolves it by
 // approving a pin, which mints a HostTrust, or by denying it.
 type HostTrustRequest struct {
-	ID            string      `gorm:"primaryKey;type:text" json:"id" doc:"Stable request ID"`
-	ProjectID     string      `gorm:"column:project_id;not null;type:text;index" json:"projectId" doc:"Project ID"`
-	SandboxID     string      `gorm:"column:sandbox_id;not null;type:text;index" json:"sandboxId" doc:"Sandbox the trust is asked for"`
-	RequestedBy   string      `gorm:"column:requested_by;not null;type:text" json:"requestedBy" doc:"Principal ID of the requestor"`
-	Host          string      `gorm:"column:host;not null;type:text" json:"host" doc:"The endpoint to trust, host:port"`
-	Justification string      `gorm:"column:justification;not null;type:text;default:''" json:"justification,omitempty" doc:"Why the agent says it needs to reach the host"`
-	Uses          []SecretUse `gorm:"column:uses;type:text;serializer:json" json:"uses,omitempty" doc:"What the agent says it will send the host"`
+	ID          string `gorm:"primaryKey;type:text" json:"id" doc:"Stable request ID"`
+	ProjectID   string `gorm:"column:project_id;not null;type:text;index" json:"projectId" doc:"Project ID"`
+	SandboxID   string `gorm:"column:sandbox_id;not null;type:text;index" json:"sandboxId" doc:"Sandbox the trust is asked for"`
+	RequestedBy string `gorm:"column:requested_by;not null;type:text" json:"requestedBy" doc:"Principal ID of the requestor"`
+	Host        string `gorm:"column:host;not null;type:text" json:"host" doc:"The endpoint to trust, host:port"`
+	// SandboxGeneration pins the ask to the run that made it (ADR
+	// 26-10-15-871): approving after the sandbox moved generations is refused.
+	// Zero is an ask written before pinning and pins nothing.
+	SandboxGeneration int64       `gorm:"column:sandbox_generation;not null;default:0" json:"-" doc:"Sandbox generation that made the ask; approval is refused once it has moved"`
+	Justification     string      `gorm:"column:justification;not null;type:text;default:''" json:"justification,omitempty" doc:"Why the agent says it needs to reach the host"`
+	Uses              []SecretUse `gorm:"column:uses;type:text;serializer:json" json:"uses,omitempty" doc:"What the agent says it will send the host"`
 	// GrantTTL is how long the agent asked the trust to last, in seconds. It is
 	// the approval's default, never its term; zero asked for nothing in
 	// particular.
@@ -112,11 +116,16 @@ func (r *HostTrustRequest) BeforeCreate(_ *gorm.DB) error {
 // HostTrust is one sandbox's pin for one endpoint. Every request the sandbox
 // sends the host is judged against Uses.
 type HostTrust struct {
-	ID        string   `gorm:"primaryKey;type:text" json:"id" doc:"Stable host trust ID"`
-	ProjectID string   `gorm:"column:project_id;not null;type:text;index" json:"projectId" doc:"Project ID"`
-	SandboxID string   `gorm:"column:sandbox_id;not null;type:text;index" json:"sandboxId" doc:"The one sandbox that trusts the host"`
-	Host      string   `gorm:"column:host;not null;type:text" json:"host" doc:"The trusted endpoint, host:port"`
-	Pin       TrustPin `gorm:"embedded;embeddedPrefix:pin_" json:"pin" doc:"The pinned certificate"`
+	ID        string `gorm:"primaryKey;type:text" json:"id" doc:"Stable host trust ID"`
+	ProjectID string `gorm:"column:project_id;not null;type:text;index" json:"projectId" doc:"Project ID"`
+	SandboxID string `gorm:"column:sandbox_id;not null;type:text;index" json:"sandboxId" doc:"The one sandbox that trusts the host"`
+	// SandboxGeneration is the run the approving ask named (ADR
+	// 26-10-15-871); every live read drops the trust once the sandbox has
+	// moved. Zero is a trust written before pinning and is held to no
+	// generation.
+	SandboxGeneration int64    `gorm:"column:sandbox_generation;not null;default:0;index" json:"-" doc:"Sandbox run the trust was approved for; it stops being live when the generation moves"`
+	Host              string   `gorm:"column:host;not null;type:text" json:"host" doc:"The trusted endpoint, host:port"`
+	Pin               TrustPin `gorm:"embedded;embeddedPrefix:pin_" json:"pin" doc:"The pinned certificate"`
 	// PinPEM is the pinned CA itself, which the proxy builds its root set
 	// from. A leaf-spki pin has none: the key's hash is the whole pin.
 	PinPEM    string      `gorm:"column:pin_pem;not null;type:text;default:''" json:"pinPem,omitempty" doc:"The pinned CA, PEM-encoded; absent for a leaf-spki pin"`

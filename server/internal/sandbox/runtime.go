@@ -201,14 +201,18 @@ type CreateOptions struct {
 	// identity itself.
 	SourceDataKey               string
 	SourceCodeReferenceDataKeys map[string]string
-	UserName                    *string
-	UserUID                     *int
-	UserGID                     *int
-	UserGroupName               *string
-	UserAdditionalGroups        []string
-	HomeDirectory               *string
-	GitUserName                 *string
-	GitUserEmail                *string
+	// Generation is the sandbox run being created. The pool records it in the
+	// file its proxy unit reads, so approvals pinned to an older run are
+	// stopped locally as well as at the server (ADR 26-10-15-871).
+	Generation           int64
+	UserName             *string
+	UserUID              *int
+	UserGID              *int
+	UserGroupName        *string
+	UserAdditionalGroups []string
+	HomeDirectory        *string
+	GitUserName          *string
+	GitUserEmail         *string
 	// Skills are the skills the sandbox was created with, forwarded into its
 	// bootstrap (ADR 26-10-09-395 §2).
 	Skills                sandboxconfig.Skills

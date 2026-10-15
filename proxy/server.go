@@ -40,6 +40,14 @@ type Server struct {
 	closed   chan struct{}
 }
 
+// InvalidateUse drops cached positive values resolved under the use ID
+// (ADR 26-10-15-871). It is safe to call while serving.
+func (s *Server) InvalidateUse(useID string) {
+	if s.swapper != nil {
+		s.swapper.InvalidateUse(useID)
+	}
+}
+
 // NewServer creates a pool-scoped proxy server. A nil resolver disables
 // sentinel secret swapping; the resolver is a stable dependency preserved across
 // ApplyConfig reloads.

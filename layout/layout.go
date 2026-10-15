@@ -356,6 +356,23 @@ func (r Root) ProxyResolveContextFile(projectID, poolID string) string {
 	return r.join(r.ProxyPool(projectID, poolID), "resolve-context.json")
 }
 
+// ProxySandboxGenerationsFile is the current sandbox generation per sandbox
+// for one pool, written by the pool agent on create/rebuild and read by the
+// proxy unit before it hands a value out (ADR 26-10-15-871).
+//
+// Pool-scoped for the same reason the secrets file is: it names that pool's
+// sandboxes.
+func (r Root) ProxySandboxGenerationsFile(projectID, poolID string) string {
+	return r.join(r.ProxyPool(projectID, poolID), "sandbox-generations.json")
+}
+
+// ProxyUseRetirementsFile is the cursor for the credential retirement feed of
+// one pool (ADR 26-10-15-871). The proxy unit stores the last applied state so
+// a restart replays from what it actually dropped.
+func (r Root) ProxyUseRetirementsFile(projectID, poolID string) string {
+	return r.join(r.ProxyPool(projectID, poolID), "use-retirements.json")
+}
+
 // --- host translation ------------------------------------------------------
 
 // HostMapping translates a path under a container root into the path the

@@ -757,6 +757,24 @@ func (s *Swapper) deferRefresh(key string, refreshAt time.Time) {
 	s.cache[key] = entry
 }
 
+// InvalidateUse drops every positive cache entry carrying the use ID, across
+// every client and host (ADR 26-10-15-871). It is the value-cache half of a
+// credential retirement: activations die in their own registry, this kills
+// values already resolved for the retired use. Denials are keyed without a use
+// and are left alone — they resolve anew on their soft interval anyway.
+func (s *Swapper) InvalidateUse(useID string) {
+	if useID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, entry := range s.cache {
+		if !entry.denied && entry.useID == useID {
+			delete(s.cache, key)
+		}
+	}
+}
+
 // ApplyPrevious substitutes sentinels in req's headers for the value that was
 // being served before the most recent change, when there is one and it is still
 // within previousValueGrace. It exists for one case: the upstream rejected a

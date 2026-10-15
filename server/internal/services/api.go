@@ -451,7 +451,13 @@ type SecretService interface {
 	// agent on behalf of one of its own sandboxes, so each takes the calling
 	// pool's ID and verifies the sandbox belongs to it.
 	ListSandboxCredentials(ctx context.Context, poolID, sandboxID string) ([]store.AgentCredential, error)
-	CreateSandboxCredentialRequest(ctx context.Context, poolID string, input CreateSandboxCredentialRequestBody) (*model.SecretRequest, error)
+	CreateSandboxCredentialRequest(ctx context.Context, poolID string, input CreateSandboxCredentialRequestBody) (*model.SecretRequest, int64, error)
+	// ListCredentialRetirements returns the pending local invalidations the
+	// pool owes after an approval-minted authorization ended early (ADR
+	// 26-10-15-871); AcknowledgeCredentialRetirements marks the items the pool
+	// applied. Both are idempotent.
+	ListCredentialRetirements(ctx context.Context, poolID string) ([]model.CredentialRetirement, error)
+	AcknowledgeCredentialRetirements(ctx context.Context, poolID string, retirementIDs []string) error
 	GetSandboxCredentialRequest(ctx context.Context, poolID, sandboxID, requestID string) (*model.SecretRequest, *model.SecretGrant, error)
 	// ListCredentialVerdicts reads that record back for a project's members.
 	// Unlike the broker calls above it is a user read, scoped by project, and
@@ -467,7 +473,7 @@ type SecretService interface {
 // pins a person approves for one sandbox. The pool calls take the calling
 // pool's ID and verify the sandbox belongs to it, as the broker's do.
 type HostTrustService interface {
-	CreateSandboxTrustRequest(ctx context.Context, poolID string, input CreateSandboxTrustRequestBody) (*model.HostTrustRequest, error)
+	CreateSandboxTrustRequest(ctx context.Context, poolID string, input CreateSandboxTrustRequestBody) (*model.HostTrustRequest, int64, error)
 	GetSandboxTrustRequest(ctx context.Context, poolID, sandboxID, requestID string) (*model.HostTrustRequest, *model.HostTrust, error)
 	ListPoolHostTrusts(ctx context.Context, poolID string) ([]model.HostTrust, error)
 
