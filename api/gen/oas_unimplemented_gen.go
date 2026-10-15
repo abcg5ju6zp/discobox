@@ -106,7 +106,10 @@ func (UnimplementedHandler) CommitHarnessConfigConfigure(ctx context.Context, pa
 //
 // Record that the client successfully applied a source's sandbox commits onto a host working tree.
 // Called once per source, only after the client's fast-forward has actually landed the commits;
-// appends to the sandbox's applied-commits history.
+// appends to the sandbox's applied-commits history. Idempotent on the (slug, commit, hostCommit)
+// tuple: an identical request after a lost response or a server restart appends nothing and returns
+// the sandbox with the original entry (including its original appliedAt). The same slug and commit
+// with a different hostCommit is a distinct event and appends a new entry.
 //
 // POST /projects/{projectId}/sandboxes/{sandboxId}/complete-apply
 func (UnimplementedHandler) CompleteSandboxApply(ctx context.Context, req *CompleteSandboxApplyBody, params CompleteSandboxApplyParams) (r CompleteSandboxApplyRes, _ error) {

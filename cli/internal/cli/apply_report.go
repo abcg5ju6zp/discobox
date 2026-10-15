@@ -31,6 +31,10 @@ const (
 	// uncommitted changes, or the local working tree is no longer what the
 	// sandbox was created from.
 	applyStatusBlocked applyStatus = "blocked"
+	// applyStatusPending: an earlier source in the same multi-source run
+	// conflicted and stopped the run, so this source has not been touched.
+	// Resolve the conflict and re-run; a single-source run never ends here.
+	applyStatusPending applyStatus = "pending"
 	// applyStatusError: anything else went wrong before or during the attempt.
 	applyStatusError applyStatus = "error"
 )
@@ -127,6 +131,16 @@ type applySourceReport struct {
 
 	// ConflictCommit is set when Status is conflict.
 	ConflictCommit string `json:"conflictCommit,omitempty"`
+	// WorktreeDir is the private linked worktree the conflict is held open
+	// in (ADR 26-10-15-223), set when Status is conflict.
+	WorktreeDir string `json:"worktreeDir,omitempty"`
+	// PlanSuperseded marks an error that retired the run's plan in the same
+	// run (a branch that advanced); it is bookkeeping between the orchestrator
+	// and itself, not rendered as a field of its own.
+	PlanSuperseded bool `json:"-"`
+	// dirOverride is the --dir this run selected for the source, carried into
+	// resume commands the report prints. Bookkeeping, not rendered.
+	dirOverride string `json:"-"`
 	// UncommittedChanges is the sandbox working tree's `git status --porcelain`
 	// entries, set whenever it was dirty — whether that blocked the source or
 	// was applied over with --allow-dirty.
@@ -334,10 +348,27 @@ func applyStatusMark(status applyStatus) (string, lipgloss.Style) {
 		return "✓", applyStyleDim
 	case applyStatusBlocked:
 		return "⚠", applyStyleWarn
+	case applyStatusPending:
+		return "…", applyStyleDim
 	case applyStatusConflict, applyStatusError:
 		return "✗", applyStyleErr
 	}
 	return "·", applyStyleDim
+}
+
+// pendingSource names a source the stopped run did not reach: no header was
+// ever printed for it, so its one line carries its target as well as what it
+// is waiting for.
+func (p applyPrinter) pendingSource(report applySourceReport) {
+	if !p.on {
+		return
+	}
+	p.blank()
+	target := report.HostPath
+	if target == "" {
+		target = "no local directory resolved"
+	}
+	p.mark("…", applyStyleDim, "PENDING: %s (%s) — not started; resolve the conflict above and re-run discobox apply to continue", report.Slug, target)
 }
 
 func (p applyPrinter) sandboxHeader(report applyReport, sourceCount int) {
@@ -544,7 +575,7 @@ func (p applyPrinter) summary(report applyReport) {
 		counts[source.Status]++
 	}
 	var parts []string
-	for _, status := range []applyStatus{applyStatusApplied, applyStatusUpToDate, applyStatusConflict, applyStatusBlocked, applyStatusError} {
+	for _, status := range []applyStatus{applyStatusApplied, applyStatusUpToDate, applyStatusConflict, applyStatusBlocked, applyStatusPending, applyStatusError} {
 		if counts[status] == 0 {
 			continue
 		}

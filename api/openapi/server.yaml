@@ -2360,7 +2360,7 @@ components:
             type: object
         AppliedSourceCommit:
             additionalProperties: false
-            description: Records one successful discobox apply of a source's commits into a host working tree. Client-declared provenance, like Origin, since the server cannot observe host-side Git state.
+            description: "Records one successful discobox apply of a source's commits into a host working tree. Client-declared provenance, like Origin, since the server cannot observe host-side Git state. The complete-apply endpoint deduplicates on (slug, commit, hostCommit): re-reporting the same tuple after a lost response returns this original entry unchanged instead of appending, while a different hostCommit appends a new entry."
             properties:
                 appliedAt:
                     description: When this apply was recorded
@@ -9162,7 +9162,7 @@ paths:
     /projects/{projectId}/sandboxes/{sandboxId}/complete-apply:
         post:
             operationId: complete-sandbox-apply
-            description: Record that the client successfully applied a source's sandbox commits onto a host working tree. Called once per source, only after the client's fast-forward has actually landed the commits; appends to the sandbox's applied-commits history.
+            description: "Record that the client successfully applied a source's sandbox commits onto a host working tree. Called once per source, only after the client's fast-forward has actually landed the commits; appends to the sandbox's applied-commits history. Idempotent on the (slug, commit, hostCommit) tuple: an identical request after a lost response or a server restart appends nothing and returns the sandbox with the original entry (including its original appliedAt). The same slug and commit with a different hostCommit is a distinct event and appends a new entry."
             parameters:
                 - description: Project ID
                   in: path

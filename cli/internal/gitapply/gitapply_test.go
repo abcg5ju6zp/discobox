@@ -77,6 +77,22 @@ func addCommits(t *testing.T, repoRoot string, files ...string) string {
 	return run(t, repoRoot, "rev-parse", "HEAD")
 }
 
+// newWorktreeDir is where a test's persistent apply worktree lives: a fresh
+// path under the test's temp area, like the CLI state directory is in real
+// use. It does not exist yet; Attempt creates it.
+func newWorktreeDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "apply", "primary")
+}
+
+func onlyMainWorktree(t *testing.T, host string) {
+	t.Helper()
+	worktrees := run(t, host, "worktree", "list", "--porcelain")
+	if strings.Count(worktrees, "worktree ") != 1 {
+		t.Fatalf("expected only the main worktree to remain, got:\n%s", worktrees)
+	}
+}
+
 func TestAttemptLandsCleanRangeAndFastForwards(t *testing.T) {
 	ctx := context.Background()
 	setGitIdentity(t)
@@ -89,7 +105,7 @@ func TestAttemptLandsCleanRangeAndFastForwards(t *testing.T) {
 	tip := addCommits(t, host, "a.txt", "b.txt")
 	run(t, host, "checkout", "-q", "main")
 
-	result, err := Attempt(ctx, host, base, tip)
+	result, err := Attempt(ctx, host, base, tip, newWorktreeDir(t))
 	if err != nil {
 		t.Fatalf("attempt: %v", err)
 	}
@@ -113,14 +129,11 @@ func TestAttemptLandsCleanRangeAndFastForwards(t *testing.T) {
 	if count != "2" {
 		t.Fatalf("landed commit count = %s, want 2", count)
 	}
-	// No leftover scratch worktree.
-	worktrees := run(t, host, "worktree", "list", "--porcelain")
-	if strings.Count(worktrees, "worktree ") != 1 {
-		t.Fatalf("expected only the main worktree to remain, got:\n%s", worktrees)
-	}
+	// No leftover apply worktree.
+	onlyMainWorktree(t, host)
 }
 
-func TestAttemptConflictLeavesHostUntouched(t *testing.T) {
+func TestAttemptConflictRetainsAWorktreeAndLeavesHostUntouched(t *testing.T) {
 	ctx := context.Background()
 	setGitIdentity(t)
 	host, base := newRepo(t)
@@ -137,7 +150,8 @@ func TestAttemptConflictLeavesHostUntouched(t *testing.T) {
 	tip := run(t, host, "rev-parse", "HEAD")
 	run(t, host, "checkout", "-q", "main")
 
-	result, err := Attempt(ctx, host, base, tip)
+	worktreeDir := newWorktreeDir(t)
+	result, err := Attempt(ctx, host, base, tip, worktreeDir)
 	if err != nil {
 		t.Fatalf("attempt: %v", err)
 	}
@@ -146,6 +160,9 @@ func TestAttemptConflictLeavesHostUntouched(t *testing.T) {
 	}
 	if result.ConflictCommit != tip {
 		t.Fatalf("conflictCommit = %s, want %s", result.ConflictCommit, tip)
+	}
+	if result.WorktreeDir != worktreeDir {
+		t.Fatalf("worktreeDir = %q, want %q", result.WorktreeDir, worktreeDir)
 	}
 	// A conflict still reports where the host branch stands, since that is
 	// what the caller tells the user is unchanged.
@@ -156,13 +173,149 @@ func TestAttemptConflictLeavesHostUntouched(t *testing.T) {
 	if headNow != hostHead {
 		t.Fatalf("host HEAD moved from %s to %s after a conflicting attempt", hostHead, headNow)
 	}
-	status := run(t, host, "status", "--porcelain")
-	if status != "" {
+	if status := run(t, host, "status", "--porcelain"); status != "" {
 		t.Fatalf("host working tree is dirty after a conflicting attempt: %q", status)
 	}
-	worktrees := run(t, host, "worktree", "list", "--porcelain")
-	if strings.Count(worktrees, "worktree ") != 1 {
-		t.Fatalf("expected only the main worktree to remain, got:\n%s", worktrees)
+	// The conflict is parked in the retained worktree, in a real
+	// cherry-pick the user can finish.
+	if got := run(t, worktreeDir, "rev-parse", "CHERRY_PICK_HEAD"); got != tip {
+		t.Fatalf("CHERRY_PICK_HEAD = %s, want %s", got, tip)
+	}
+	if unmerged := run(t, worktreeDir, "diff", "--name-only", "--diff-filter=U"); !strings.Contains(unmerged, "README.md") {
+		t.Fatalf("unmerged paths = %q, want README.md in conflict", unmerged)
+	}
+	// Git prints canonical paths (/var is /private/var on macOS), so compare
+	// against the resolved form.
+	resolved, err := filepath.EvalSymlinks(worktreeDir)
+	if err != nil {
+		t.Fatalf("resolve worktree path: %v", err)
+	}
+	if worktrees := run(t, host, "worktree", "list", "--porcelain"); !strings.Contains(worktrees, "worktree "+resolved) {
+		t.Fatalf("retained worktree not registered:\n%s", worktrees)
+	}
+
+	// Inspecting it on a re-run reports the still-open conflict.
+	state, _, err := InspectWorktree(ctx, host, worktreeDir, hostHead)
+	if err != nil || state != WorktreeConflict {
+		t.Fatalf("inspect retained conflict: state=%d err=%v, want WorktreeConflict", state, err)
+	}
+}
+
+func TestResolveInWorktreeThenFinishLandsIt(t *testing.T) {
+	ctx := context.Background()
+	setGitIdentity(t)
+	host, base := newRepo(t)
+
+	writeFile(t, host, "README.md", "host change\n")
+	run(t, host, "commit", "-am", "host edits README")
+	hostHead := run(t, host, "rev-parse", "HEAD")
+
+	run(t, host, "checkout", "-q", "-b", "sandbox-tip", base)
+	writeFile(t, host, "README.md", "sandbox change\n")
+	run(t, host, "commit", "-am", "sandbox edits README")
+	tip := run(t, host, "rev-parse", "HEAD")
+	run(t, host, "checkout", "-q", "main")
+
+	worktreeDir := newWorktreeDir(t)
+	result, err := Attempt(ctx, host, base, tip, worktreeDir)
+	if err != nil || result.Landed {
+		t.Fatalf("attempt: result=%+v err=%v, want a retained conflict", result, err)
+	}
+
+	// The user resolves the conflict in the worktree and continues the
+	// cherry-pick themselves.
+	writeFile(t, worktreeDir, "README.md", "resolved by the user\n")
+	run(t, worktreeDir, "add", "README.md")
+	run(t, worktreeDir, "cherry-pick", "--continue")
+
+	state, resolvedTip, err := InspectWorktree(ctx, host, worktreeDir, hostHead)
+	if err != nil {
+		t.Fatalf("inspect after resolution: %v", err)
+	}
+	if state != WorktreeResolved {
+		t.Fatalf("state = %d, want WorktreeResolved", state)
+	}
+	landed, err := FinishResolvedWorktree(ctx, host, worktreeDir, "", resolvedTip, "", false)
+	if err != nil {
+		t.Fatalf("finish resolved worktree: %v", err)
+	}
+	if landed != resolvedTip {
+		t.Fatalf("landed = %s, want %s", landed, resolvedTip)
+	}
+	if run(t, host, "rev-parse", "HEAD") != landed {
+		t.Fatal("host branch did not fast-forward to the resolved tip")
+	}
+	if got := run(t, host, "show", "HEAD:README.md"); got != "resolved by the user" {
+		t.Fatalf("resolved content did not land: %q", got)
+	}
+	onlyMainWorktree(t, host)
+}
+
+func TestAbortInWorktreeIsDetectedAndDiscardable(t *testing.T) {
+	ctx := context.Background()
+	setGitIdentity(t)
+	host, base := newRepo(t)
+
+	writeFile(t, host, "README.md", "host change\n")
+	run(t, host, "commit", "-am", "host edits README")
+	hostHead := run(t, host, "rev-parse", "HEAD")
+
+	run(t, host, "checkout", "-q", "-b", "sandbox-tip", base)
+	writeFile(t, host, "README.md", "sandbox change\n")
+	run(t, host, "commit", "-am", "sandbox edits README")
+	tip := run(t, host, "rev-parse", "HEAD")
+	run(t, host, "checkout", "-q", "main")
+
+	worktreeDir := newWorktreeDir(t)
+	if _, err := Attempt(ctx, host, base, tip, worktreeDir); err != nil {
+		t.Fatalf("attempt: %v", err)
+	}
+	run(t, worktreeDir, "cherry-pick", "--abort")
+
+	state, head, err := InspectWorktree(ctx, host, worktreeDir, hostHead)
+	if err != nil {
+		t.Fatalf("inspect after abort: %v", err)
+	}
+	if state != WorktreeAborted || head != hostHead {
+		t.Fatalf("state = %d head = %s, want WorktreeAborted at %s", state, head, hostHead)
+	}
+
+	RemoveWorktree(ctx, host, worktreeDir, "")
+	onlyMainWorktree(t, host)
+	if run(t, host, "rev-parse", "HEAD") != hostHead {
+		t.Fatal("host branch moved after discarding an aborted worktree")
+	}
+}
+
+func TestMissingWorktreeIsDetected(t *testing.T) {
+	ctx := context.Background()
+	setGitIdentity(t)
+	host, base := newRepo(t)
+
+	writeFile(t, host, "README.md", "host change\n")
+	run(t, host, "commit", "-am", "host edits README")
+	hostHead := run(t, host, "rev-parse", "HEAD")
+
+	run(t, host, "checkout", "-q", "-b", "sandbox-tip", base)
+	writeFile(t, host, "README.md", "sandbox change\n")
+	run(t, host, "commit", "-am", "sandbox edits README")
+	tip := run(t, host, "rev-parse", "HEAD")
+	run(t, host, "checkout", "-q", "main")
+
+	worktreeDir := newWorktreeDir(t)
+	if _, err := Attempt(ctx, host, base, tip, worktreeDir); err != nil {
+		t.Fatalf("attempt: %v", err)
+	}
+	// Simulate `git worktree prune` plus the directory being lost.
+	run(t, host, "worktree", "remove", "--force", worktreeDir)
+	_ = os.RemoveAll(worktreeDir)
+
+	state, _, err := InspectWorktree(ctx, host, worktreeDir, hostHead)
+	if err != nil {
+		t.Fatalf("inspect missing worktree: %v", err)
+	}
+	if state != WorktreeMissing {
+		t.Fatalf("state = %d, want WorktreeMissing", state)
 	}
 }
 
@@ -170,7 +323,7 @@ func TestAttemptConflictLeavesHostUntouched(t *testing.T) {
 // for a reason other than conflicting content — no identity to attribute the
 // resulting commit to, in this case. That must surface as an error, not be
 // misreported as a conflict on some commit: nothing about it is a content
-// conflict a caller could ask the user to resolve.
+// conflict a caller could ask the user to resolve, and nothing is retained.
 func TestAttemptNonConflictFailureReturnsError(t *testing.T) {
 	ctx := context.Background()
 	setGitIdentity(t)
@@ -189,7 +342,7 @@ func TestAttemptNonConflictFailureReturnsError(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_NAME", "")
 	t.Setenv("GIT_COMMITTER_EMAIL", "")
 
-	result, err := Attempt(ctx, host, base, tip)
+	result, err := Attempt(ctx, host, base, tip, newWorktreeDir(t))
 	if err == nil {
 		t.Fatalf("expected a non-conflict cherry-pick failure to return an error, got result %+v", result)
 	}
@@ -200,10 +353,7 @@ func TestAttemptNonConflictFailureReturnsError(t *testing.T) {
 	if headNow != hostHead {
 		t.Fatalf("host HEAD moved from %s to %s after a failed attempt", hostHead, headNow)
 	}
-	worktrees := run(t, host, "worktree", "list", "--porcelain")
-	if strings.Count(worktrees, "worktree ") != 1 {
-		t.Fatalf("expected only the main worktree to remain, got:\n%s", worktrees)
-	}
+	onlyMainWorktree(t, host)
 }
 
 func TestMergeBase(t *testing.T) {
@@ -302,14 +452,15 @@ func TestAttemptRootGivesAnUnbornRepositoryItsHistory(t *testing.T) {
 	setGitIdentity(t)
 	host, base, tip, wantTree := newUnbornHostAndSandbox(t, map[string]string{"README.md": "hello\n"})
 
-	result, err := AttemptRoot(context.Background(), host, base, tip, wantTree)
+	result, err := AttemptRoot(context.Background(), host, base, tip, wantTree,
+		newWorktreeDir(t), "discobox-apply/test/primary")
 	if err != nil {
 		t.Fatalf("AttemptRoot: %v", err)
 	}
 	if !result.Landed || result.HostTip == "" {
 		t.Fatalf("result = %+v, want the commits landed", result)
 	}
-	// The branch HEAD already named is what was born, at the applied commits.
+	// The branch HEAD already names is what was born, at the applied commits.
 	if head := run(t, host, "rev-parse", "refs/heads/main"); head != result.HostTip {
 		t.Fatalf("main = %s, want the applied tip %s", head, result.HostTip)
 	}
@@ -330,17 +481,19 @@ func TestAttemptRootGivesAnUnbornRepositoryItsHistory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(host, "NEW.md")); err != nil {
 		t.Fatalf("the discobox's new file did not land: %v", err)
 	}
-	// No scratch branch outlives the worktree it was made in.
+	// No scratch branch or worktree outlives the attempt.
 	if branches := run(t, host, "for-each-ref", "--format=%(refname:short)", "refs/heads"); branches != "main" {
 		t.Fatalf("branches = %q, want only main left behind", branches)
 	}
+	onlyMainWorktree(t, host)
 }
 
 func TestAttemptRootLandsIntoAnEmptyRepository(t *testing.T) {
 	setGitIdentity(t)
 	host, base, tip, wantTree := newUnbornHostAndSandbox(t, nil)
 
-	result, err := AttemptRoot(context.Background(), host, base, tip, wantTree)
+	result, err := AttemptRoot(context.Background(), host, base, tip, wantTree,
+		newWorktreeDir(t), "discobox-apply/test/primary")
 	if err != nil {
 		t.Fatalf("AttemptRoot: %v", err)
 	}
@@ -359,7 +512,8 @@ func TestAttemptRootRefusesWhenTheWorkingTreeMovedOn(t *testing.T) {
 	// survive in and would be replaced by what the discobox made of the file.
 	writeFile(t, host, "README.md", "hello, and something only local\n")
 
-	result, err := AttemptRoot(context.Background(), host, base, tip, wantTree)
+	result, err := AttemptRoot(context.Background(), host, base, tip, wantTree,
+		newWorktreeDir(t), "discobox-apply/test/primary")
 	if err != nil {
 		t.Fatalf("AttemptRoot: %v", err)
 	}
@@ -376,5 +530,46 @@ func TestAttemptRootRefusesWhenTheWorkingTreeMovedOn(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(host, "README.md"))
 	if err != nil || string(content) != "hello, and something only local\n" {
 		t.Fatalf("README.md = %q (%v), want the local change untouched", content, err)
+	}
+}
+
+// TestAttemptRootNonConflictFailureRemovesTheWorktreeAndLeavesHostUnborn is
+// ADR 0139's keep rule under the retained-worktree design: the orphan
+// cherry-pick starts from an empty tree, so a linear range cannot
+// content-conflict there (every picked delta applies onto the tree its own
+// history guaranteed) — the failure mode that actually exists for the root
+// strategy before it lands is a non-conflict cherry-pick error, and it has to
+// abort, remove the worktree and scratch branch, and leave the host checkout
+// unborn so apply's remove-if-unborn cleanup still removes the .git it made.
+func TestAttemptRootNonConflictFailureRemovesTheWorktreeAndLeavesHostUnborn(t *testing.T) {
+	setGitIdentity(t)
+	host, base, tip, wantTree := newUnbornHostAndSandbox(t, map[string]string{"README.md": "hello\n"})
+
+	t.Setenv("GIT_AUTHOR_NAME", "")
+	t.Setenv("GIT_AUTHOR_EMAIL", "")
+	t.Setenv("GIT_COMMITTER_NAME", "")
+	t.Setenv("GIT_COMMITTER_EMAIL", "")
+
+	worktreeDir := newWorktreeDir(t)
+	const scratchBranch = "discobox-apply/test/primary"
+	result, err := AttemptRoot(context.Background(), host, base, tip, wantTree,
+		worktreeDir, scratchBranch)
+	if err == nil {
+		t.Fatalf("AttemptRoot without a git identity: got %+v, want an error", result)
+	}
+	if !reflect.DeepEqual(result, Result{}) {
+		t.Fatalf("result = %+v, want zero alongside the error", result)
+	}
+	// No branch was born, nothing was checked out, and no worktree or scratch
+	// branch survived the failed attempt.
+	if refs := run(t, host, "for-each-ref", "--format=%(refname)", "refs/heads"); refs != "" {
+		t.Fatalf("refs/heads = %q, want the repository still without commits", refs)
+	}
+	if content, err := os.ReadFile(filepath.Join(host, "README.md")); err != nil || string(content) != "hello\n" {
+		t.Fatalf("host README.md = %q (%v), want it untouched", content, err)
+	}
+	onlyMainWorktree(t, host)
+	if branches := run(t, host, "for-each-ref", "--format=%(refname:short)", "refs/heads/discobox-apply"); branches != "" {
+		t.Fatalf("scratch branch survived: %q", branches)
 	}
 }

@@ -96,7 +96,10 @@ type Invoker interface {
 	//
 	// Record that the client successfully applied a source's sandbox commits onto a host working tree.
 	// Called once per source, only after the client's fast-forward has actually landed the commits;
-	// appends to the sandbox's applied-commits history.
+	// appends to the sandbox's applied-commits history. Idempotent on the (slug, commit, hostCommit)
+	// tuple: an identical request after a lost response or a server restart appends nothing and returns
+	// the sandbox with the original entry (including its original appliedAt). The same slug and commit
+	// with a different hostCommit is a distinct event and appends a new entry.
 	//
 	// POST /projects/{projectId}/sandboxes/{sandboxId}/complete-apply
 	CompleteSandboxApply(ctx context.Context, request *CompleteSandboxApplyBody, params CompleteSandboxApplyParams) (CompleteSandboxApplyRes, error)
@@ -2001,7 +2004,10 @@ func (c *Client) sendCommitHarnessConfigConfigure(ctx context.Context, params Co
 //
 // Record that the client successfully applied a source's sandbox commits onto a host working tree.
 // Called once per source, only after the client's fast-forward has actually landed the commits;
-// appends to the sandbox's applied-commits history.
+// appends to the sandbox's applied-commits history. Idempotent on the (slug, commit, hostCommit)
+// tuple: an identical request after a lost response or a server restart appends nothing and returns
+// the sandbox with the original entry (including its original appliedAt). The same slug and commit
+// with a different hostCommit is a distinct event and appends a new entry.
 //
 // POST /projects/{projectId}/sandboxes/{sandboxId}/complete-apply
 func (c *Client) CompleteSandboxApply(ctx context.Context, request *CompleteSandboxApplyBody, params CompleteSandboxApplyParams) (CompleteSandboxApplyRes, error) {

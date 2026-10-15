@@ -346,6 +346,15 @@ permits fetch.
   `sandboxes.updateSandboxMetadata` rather than `recordSandboxIntent`:
   nothing about desired or observed runtime state changes, so there is
   nothing for the reconcile engine to act on.
+- The operation is **idempotent on `(slug, commit, hostCommit)`** (ADR
+  26-10-15-223): the client's apply is a resumable plan that can die after
+  landing but before recording, and re-sends the identical request. An exact
+  match already on the sandbox appends nothing and returns the original entry
+  with its original `appliedAt`; the check and the append share one
+  generation-checked metadata transaction, so concurrent retries append at
+  most once, and the guarantee survives a server restart because it reads
+  persisted state. The same sandbox commit with a different host commit is a
+  distinct host-side outcome and appends a new entry.
 - `AcquireSandboxHTTPClient` is the one way into a sandbox, and takes what the
   request is for. For every use it checks that the sandbox exists and is not
   being deleted and that its pool has current ready health (`Pool.IsReady`).

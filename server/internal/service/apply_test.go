@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	serverapi "github.com/discobox-ai/discobox/api/gen"
@@ -122,6 +123,95 @@ func TestCompleteSandboxApplyAccumulates(t *testing.T) {
 	}
 	if updated.AppliedCommits[0].Commit != first.Commit || updated.AppliedCommits[1].Commit != second.Commit {
 		t.Fatalf("applied commits out of order: %+v", updated.AppliedCommits)
+	}
+}
+
+// A confirmation retried after its response was lost is the same event, not a
+// second one: the tuple already exists, so nothing is appended and even the
+// timestamp does not move (ADR 26-10-15-223 §5).
+func TestCompleteSandboxApplyIdempotentOnExactTuple(t *testing.T) {
+	ctx := context.Background()
+	svc, _, st, projectID := newSandboxTestService(t, nil)
+
+	created, err := svc.CreateSandbox(ctx, projectID, services.CreateSandboxBody{
+		HarnessName: serverapi.NewOptString("shell"),
+		Config:      serverapi.SandboxCreateConfig{Name: "alpha"},
+	})
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	withSource(t, st, projectID, created.ID)
+
+	body := services.CompleteSandboxApplyBody{
+		Slug:       primarySlug,
+		Commit:     "0123456789abcdef0123456789abcdef01234567",
+		HostCommit: "fedcba9876543210fedcba9876543210fedcba98",
+		HostId:     "host_test",
+		HostPath:   "/home/user/repo",
+	}
+	first, err := svc.CompleteSandboxApply(ctx, projectID, created.ID, body)
+	if err != nil {
+		t.Fatalf("complete first apply: %v", err)
+	}
+	if len(first.AppliedCommits) != 1 {
+		t.Fatalf("applied commits after first = %d, want 1", len(first.AppliedCommits))
+	}
+	firstAppliedAt := first.AppliedCommits[0].AppliedAt
+
+	// Whitespace and case on the SHAs are normalized before the match, as the
+	// fields already are on the first write.
+	retry := body
+	retry.Commit = "  " + strings.ToUpper(body.Commit) + " "
+	retry.HostCommit = " " + strings.ToUpper(body.HostCommit) + "  "
+	second, err := svc.CompleteSandboxApply(ctx, projectID, created.ID, retry)
+	if err != nil {
+		t.Fatalf("retry complete apply: %v", err)
+	}
+	if len(second.AppliedCommits) != 1 {
+		t.Fatalf("applied commits after retry = %d, want still 1", len(second.AppliedCommits))
+	}
+	if !second.AppliedCommits[0].AppliedAt.Equal(firstAppliedAt) {
+		t.Fatalf("appliedAt moved on retry: first %s, second %s", firstAppliedAt, second.AppliedCommits[0].AppliedAt)
+	}
+	if second.AppliedCommits[0].Commit != first.AppliedCommits[0].Commit ||
+		second.AppliedCommits[0].HostCommit != first.AppliedCommits[0].HostCommit {
+		t.Fatalf("retry changed the recorded entry: %+v", second.AppliedCommits[0])
+	}
+}
+
+// The same sandbox commit landing as a different host-side commit is a new
+// fact — another host, or a re-cherry-pick after history moved — and appends.
+func TestCompleteSandboxApplyAppendsForDifferentHostCommit(t *testing.T) {
+	ctx := context.Background()
+	svc, _, st, projectID := newSandboxTestService(t, nil)
+
+	created, err := svc.CreateSandbox(ctx, projectID, services.CreateSandboxBody{
+		HarnessName: serverapi.NewOptString("shell"),
+		Config:      serverapi.SandboxCreateConfig{Name: "alpha"},
+	})
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	withSource(t, st, projectID, created.ID)
+
+	first := services.CompleteSandboxApplyBody{
+		Slug:       primarySlug,
+		Commit:     "1111111111111111111111111111111111111111",
+		HostCommit: "2222222222222222222222222222222222222222",
+		HostId:     "host_test",
+		HostPath:   "/home/user/repo",
+	}
+	if _, err := svc.CompleteSandboxApply(ctx, projectID, created.ID, first); err != nil {
+		t.Fatalf("complete first apply: %v", err)
+	}
+	again := first
+	again.HostCommit = "3333333333333333333333333333333333333333"
+	updated, err := svc.CompleteSandboxApply(ctx, projectID, created.ID, again)
+	if err != nil {
+		t.Fatalf("complete second host outcome: %v", err)
+	}
+	if len(updated.AppliedCommits) != 2 {
+		t.Fatalf("applied commits = %d, want 2 for a distinct hostCommit", len(updated.AppliedCommits))
 	}
 }
 

@@ -1211,12 +1211,21 @@ func verifySourcePushCommits(pending []gitSourceEntry, reported map[string]strin
 	return nil
 }
 
-// CompleteSandboxApply records a successful `discobox apply` (ADR 0014): the
-// client cherry-picked a source's sandbox commits into a scratch worktree and
-// fast-forwarded them onto a host working tree, and reports the result here.
-// Called once per source, per apply run, only after the fast-forward has
-// already landed the commits — this is a record of something that already
-// happened, not a request to do anything.
+// CompleteSandboxApply records a successful `discobox apply` (ADR 0014, made
+// resumable by ADR 26-10-15-223): the client cherry-picked a source's sandbox
+// commits into a worktree and fast-forwarded them onto a host working tree,
+// and reports the result here. Called once per source, per apply run, only
+// after the fast-forward has already landed the commits — this is a record of
+// something that already happened, not a request to do anything.
+//
+// It is idempotent on the (slug, commit, hostCommit) tuple: a resumable apply
+// that landed its commits but lost this call's response retries the very same
+// request, and must not grow the audit trail or move appliedAt. An existing
+// exact match is therefore left untouched and the current sandbox returned —
+// the same answer after a server restart. The check and the append share one
+// generation-checked transaction, so concurrent duplicate requests append at
+// most once. A different hostCommit for the same slug and commit is a
+// different host-side outcome and appends a new entry.
 //
 // Like CompleteSandboxSourcePush, this does not verify the reported commits
 // against the sandbox's actual Git state: that would mean a round trip to
@@ -1251,6 +1260,13 @@ func (s *Service) CompleteSandboxApply(ctx context.Context, projectID, sandboxID
 		AppliedAt:  time.Now().UTC(),
 	}
 	sandbox, err := s.updateSandboxMetadata(ctx, projectID, sandboxID, func(sb *model.Sandbox) {
+		for _, recorded := range sb.AppliedCommits {
+			if recorded.Slug == slug && recorded.Commit == commit && recorded.HostCommit == hostCommit {
+				// A retried confirmation of something already landed and
+				// recorded: keep the original entry, appliedAt included.
+				return
+			}
+		}
 		sb.AppliedCommits = append(sb.AppliedCommits, entry)
 	})
 	if err != nil {

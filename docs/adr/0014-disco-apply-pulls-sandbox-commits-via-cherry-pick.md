@@ -1,6 +1,11 @@
 # 0014 — `disco apply` pulls sandbox commits to the host via cherry-pick
 
-- **Status**: Accepted
+- **Status**: Accepted (§3 point 4's "abort the scratch worktree and hand
+  back a manual command" conflict handling, and the matching Consequences
+  bullet, are superseded by
+  [26-10-15-223](26-10-15-223-a-multi-source-apply-is-a-resumable-per-source-plan.md),
+  which retains a resolvable worktree and makes a multi-source apply a
+  resumable per-source plan with idempotent confirmation; the rest stands)
 - **Date**: 2026-07-23
 
 ## Context

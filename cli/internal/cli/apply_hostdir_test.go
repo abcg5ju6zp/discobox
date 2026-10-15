@@ -328,7 +328,8 @@ func TestFirstApplyIntoADirectoryWithNoRepositoryMakesOne(t *testing.T) {
 	if err != nil || carried {
 		t.Fatalf("createdFromTree = %s (carried %v, err %v), want the empty tree an empty directory was", wantTree, carried, err)
 	}
-	result, err := gitapply.AttemptRoot(ctx, repoRoot, base, tip, wantTree)
+	result, err := gitapply.AttemptRoot(ctx, repoRoot, base, tip, wantTree,
+		filepath.Join(t.TempDir(), "apply-primary"), "discobox-apply/test/primary")
 	if err != nil || !result.Landed {
 		t.Fatalf("AttemptRoot = %+v, %v; want it landed", result, err)
 	}

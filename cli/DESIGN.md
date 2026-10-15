@@ -12,7 +12,7 @@ transport helpers where OpenAPI does not model the stream.
 | `internal/cli` | Cobra command tree, output formatting, local server resolution and auto-start, console API adapter, and the attach transports and policy layered on `execstream/client`. Staging itself is the root module's `serverstage`. |
 | `internal/sandboxcreate` | UI-independent client-side sandbox request preparation and creation, including prompt options, source resolution, workspace snapshots, environment/secrets, local user identity, and source push delivery. See [`internal/sandboxcreate/DESIGN.md`](internal/sandboxcreate/DESIGN.md). |
 | `internal/sandboxapply` | `discobox apply`'s fetch: a source's sandbox commits fetched into the local repository under `refs/discobox/apply/<sandbox>/<slug>` (ADR 0014). |
-| `internal/gitapply` | Landing a fetched range on the local branch by cherry-pick in a disposable worktree (`Attempt`), and onto a repository with no commits (`AttemptRoot`, ADR 0084). |
+| `internal/gitapply` | Landing a fetched range on the local branch by cherry-pick in a retained, resumable worktree (`Attempt`, conflict inspection/finish, patch-id recognition), and onto a repository with no commits (`AttemptRoot`, ADR 0084). |
 | `internal/sandboxgit` | The client's git transport to a sandbox: the worktree and origin repository URLs the control plane proxies, bearer-token auth on those requests, and the client-side ref names that record what has been sent. Shared by create, apply and push. |
 | `internal/sandboxpush` | `discobox push`: sending a local source's commits into the origin on its pool that its sandbox fetches from, under a lease (ADR 0058), and resolving locally whether there is anything to send (ADR 26-09-05-008). |
 | `internal/origin` | Resolves the client host a sandbox is created from, and a directory's project root (its repository root). Host identity itself is shared, in the root module's `internal/hostid`. |
@@ -319,8 +319,10 @@ first connection that gets through.
 `cliStateDir()` (`internal/cli/statedir.go`) is `<state>` throughout this
 document: the picker's memory, the console's unsent prompts, this machine's
 iroh identity (`<state>/iroh/id_ed25519`, whose peer ID `discobox admin peer id` prints
-and an operator enrolls), the SSH identity, and the generated per-project
-`ssh_config` files. It is `<discobox state>/cli`, a sibling of
+and an operator enrolls), the SSH identity, the generated per-project
+`ssh_config` files, and the resumable apply plans and their retained conflict
+worktrees under `<state>/apply/<discobox-id>/` (see "Resumable Apply" below).
+It is `<discobox state>/cli`, a sibling of
 `<discobox state>/server` where staged server versions live
 (`stagedServerRoot()`): what is staged there is another program, and the CLI is
 only what fetched it. `<discobox state>/images`, beside both, is the image cache
@@ -2850,6 +2852,63 @@ Everything that shells out to git shares it — `sandboxcreate.DeliverSource`
 `sandboxpush.Push` (re-push) — so neither the local socket, which is the default endpoint, nor a peer address
 is a server only half the CLI can reach.
 
+## Resumable Apply (ADR 26-10-15-223)
+
+A discobox can carry several sources, and apply walks them in one run. That run
+is itself recorded, so an interruption never makes a re-run guess what already
+happened. Before any local mutation, apply writes a plan under
+`<state>/apply/<discobox-id>/plan.json` (`internal/cli/apply_plan.go`, via the
+same atomic `writeStateFile` as the other memories): the server and discobox
+it targets, the command-line selection fingerprint (`--source`, every `--dir`,
+`--allow-dirty`), and the sources in order — each with its target repository,
+the local HEAD the run started from, the landing strategy (cherry-pick or the
+unborn-root path), the base and its origin, the discobox tip, and the commits
+in range. A process-level advisory lock beside the plan (`flock`/`LockFileEx`,
+released by the kernel when the process exits) makes two applies of one
+discobox on one machine mutually exclusive.
+
+Each source advances through `planned → fetched → landed → confirmed`, with
+`conflict` a retained side state and `up-to-date` a terminal short circuit;
+every transition is persisted before its next action begins. The report walks
+the same state on a re-run rather than re-deriving it from merge bases:
+
+- **landed, not confirmed** — the kill or network failure happened after the
+  fast-forward. The recorded host tip must exist and be reachable from HEAD;
+  then apply does no new fetch and no cherry-pick, re-sends complete-apply,
+  reads the exact tuple back, and afterwards falls through to the ordinary
+  evaluation so commits made since still move. With no plan file at all,
+  patch IDs make the same recognition: every commit in the range must have a
+  patch-id equivalent on the host branch (`gitapply.AlreadyApplied`); a
+  partial match is deliberately not enough, because that is the case where
+  the user also has local commits.
+- **conflict** — the cherry-pick is kept live, not aborted. It runs in a
+  linked worktree under the plan directory (`applyWorktreeDir`), not in the
+  user's checkout and not in a `MkdirTemp` path: `CHERRY_PICK_HEAD` and the
+  unmerged index stay exactly where the user resolves them (`git add`,
+  `git cherry-pick --continue`), while the host branch never sits in a
+  partial cherry-pick. The run then stops; sources later in the order are
+  reported `pending` and never fetched. A re-run inspects the worktree
+  (`gitapply.InspectWorktree`): still conflicting reports and stops again,
+  resolved fast-forwards the host branch, removes the worktree and continues
+  the order, aborted or pruned starts the attempt cleanly again.
+- **stale plan** — a source that has not landed resumes only when its target
+  is the same repository, its branch is still at the planned HEAD, and its
+  working tree is clean. A replaced target is refused until `--dir` re-points
+  it; a dirty local tree is refused unless `--allow-dirty` acknowledges it
+  (the flag's sandbox-side meaning is unchanged, and the two dirtinesses stay
+  separately worded); a branch that advanced retires the plan in the refusal
+  run itself, and a plain re-run starts fresh — sources already confirmed are
+  recognized through the server's last-applied record. Re-running with a
+  different selection supersedes an old plan outright, discarding any parked
+  worktree with its path announced.
+
+`AppliedCommits` stays the append-only, server-side audit trail ADR 0014
+designed; the complete-apply endpoint is idempotent on the
+`(slug, commit, hostCommit)` tuple, so the client's retries after a lost
+response or a server restart append nothing and move no `appliedAt`. The plan
+is purely client-side run state, deleted once every selected source is
+terminal.
+
 ## Apply Output
 
 `discobox apply` (`internal/cli/apply.go`) performs git operations on the user's
@@ -2883,9 +2942,13 @@ git operation read as a wall of text. It is drawn in three:
   `✓` green applied, `✓` grey up-to-date, `⚠` amber blocked — nothing is broken,
   something is yours to do — `✗` red for a conflict or an error. Each keeps its
   status word in capitals, so the ending is findable by eye in a scrolled-back
-  terminal with or without color. `nextSteps` prints its commands in the
-  console's command color, because they are the part of a failed report meant
-  to be copied.
+  terminal with or without color. A multi-source run stopped by a conflict
+  marks every source it did not reach `…` **pending** (no header, one dim line
+  naming the target); a single-source run can never produce it. `nextSteps`
+  prints its commands in the console's command color, because they are the
+  part of a failed report meant to be copied — a conflict's steps name the
+  retained worktree the cherry-pick is held open in and the plain `discobox
+  apply` re-run that lands the resolution.
 
 Color is **written unconditionally and taken away by the writer**:
 `newApplyPrinter` wraps the command's output in a `colorprofile.Writer`, which

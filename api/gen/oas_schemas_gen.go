@@ -12,7 +12,10 @@ import (
 )
 
 // Records one successful discobox apply of a source's commits into a host working tree.
-// Client-declared provenance, like Origin, since the server cannot observe host-side Git state.
+// Client-declared provenance, like Origin, since the server cannot observe host-side Git state. The
+// complete-apply endpoint deduplicates on (slug, commit, hostCommit): re-reporting the same tuple
+// after a lost response returns this original entry unchanged instead of appending, while a
+// different hostCommit appends a new entry.
 // Ref: #/components/schemas/AppliedSourceCommit
 type AppliedSourceCommit struct {
 	// When this apply was recorded.
