@@ -149,7 +149,7 @@ func DeliverSource(ctx context.Context, client sourceDeliveryClient, projectID s
 		defer reporting.Unlock()
 		report.step(step)
 	})
-	cache := cacheDelivery{client: client, serverURL: serverURL, projectID: projectID, sandboxID: sandbox.ID, token: token, report: serialized}
+	cache := cacheDelivery{client: client, serverURL: serverURL, projectID: projectID, sandboxID: sandbox.ID, token: token, generation: strings.TrimSpace(sandbox.SourceGeneration.Or("")), report: serialized}
 	pushed := make(apiclientgen.CompleteSandboxSourcePushBodySources, len(pending))
 	// Sources delivered into a cache go all at once: each is its own
 	// namespace, in its own cache or the same one, and nothing orders them.
@@ -199,7 +199,7 @@ func DeliverSource(ctx context.Context, client sourceDeliveryClient, projectID s
 	if err := group.Wait(); err != nil {
 		return err
 	}
-	if err := completeSourcePush(ctx, client, projectID, sandbox.ID, pushed); err != nil {
+	if err := completeSourcePush(ctx, client, projectID, sandbox.ID, sandbox.SourceGeneration.Or(""), pushed); err != nil {
 		// The same overlap as a refused push, one step later: the other
 		// delivery reported first and the discobox has moved on, so this
 		// report is refused as not awaiting its source. That is a delivery
@@ -401,9 +401,12 @@ func pushBranch(branch string) string {
 	return sandboxgit.SourcePushBranch
 }
 
-func completeSourcePush(ctx context.Context, client sourceDeliveryClient, projectID, sandboxID string, pushed apiclientgen.CompleteSandboxSourcePushBodySources) error {
-	res, err := client.CompleteSandboxSourcePush(ctx,
-		&apimodel.CompleteSandboxSourcePushBody{Sources: pushed},
+func completeSourcePush(ctx context.Context, client sourceDeliveryClient, projectID, sandboxID, generation string, pushed apiclientgen.CompleteSandboxSourcePushBodySources) error {
+	body := &apimodel.CompleteSandboxSourcePushBody{Sources: pushed}
+	if generation = strings.TrimSpace(generation); generation != "" {
+		body.SetGeneration(apiclientgen.NewOptString(generation))
+	}
+	res, err := client.CompleteSandboxSourcePush(ctx, body,
 		apiclientgen.CompleteSandboxSourcePushParams{ProjectId: projectID, SandboxId: sandboxID})
 	if err != nil {
 		return err

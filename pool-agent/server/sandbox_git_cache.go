@@ -56,9 +56,12 @@ func (s *sandboxService) cacheOriginHandler() http.Handler {
 			return
 		}
 		pin := suffix == sourcecache.PinSuffix
-		if pin && r.Method != http.MethodPost {
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-			return
+		verify := suffix == sourcecache.VerifySuffix
+		if pin || verify {
+			if r.Method != http.MethodPost {
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+				return
+			}
 		}
 		if err := s.authorizeGitScope(r, func(r *http.Request, claims SignedTokenClaims) error {
 			if pin {
@@ -76,6 +79,7 @@ func (s *sandboxService) cacheOriginHandler() http.Handler {
 		}
 		sandboxID := chi.URLParam(r, "sandboxId")
 		caller := strings.TrimSpace(r.Header.Get(sourcecache.CallerHeader))
+		generation := strings.TrimSpace(r.Header.Get(sourcecache.GenerationHeader))
 		store := s.runtime.GitCache()
 		path, release, err := store.Use(r.Context(), key)
 		if err != nil {
@@ -94,13 +98,17 @@ func (s *sandboxService) cacheOriginHandler() http.Handler {
 				http.Error(w, fmt.Sprintf("read pin request: %v", err), http.StatusBadRequest)
 				return
 			}
-			result, err := store.Pin(r.Context(), path, sandboxID, slug, request.Refs, caller)
+			result, err := store.Pin(r.Context(), path, sandboxID, slug, generation, request.Refs, caller)
 			if err != nil {
 				http.Error(w, err.Error(), statusCodeForCacheError(err))
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(result)
+			return
+		}
+		if verify {
+			serveGenerationVerify(w, r, store, path, sandboxID, slug, generation)
 			return
 		}
 
@@ -114,11 +122,28 @@ func (s *sandboxService) cacheOriginHandler() http.Handler {
 				return
 			}
 			repo.Config = gitcache.ReceiveConfig()
+			// The gate is checked before receive-pack runs: a generation
+			// delivery lands only in a namespace its pin fenced, fenced to
+			// that same generation.
+			if err := store.CheckGenerationPush(path, sandboxID, slug, generation); err != nil {
+				http.Error(w, err.Error(), statusCodeForCacheError(err))
+				return
+			}
 			if caller == "" {
-				repo.Config = append(repo.Config, gitcache.MemberReceiveConfig()...)
+				if generation == "" {
+					repo.Config = append(repo.Config, gitcache.MemberReceiveConfig()...)
+				} else {
+					config, err := store.GenerationReceiveConfig()
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					repo.Config = append(repo.Config, config...)
+					repo.Env = []string{gitcache.GenerationEnv + "=" + generation}
+				}
 				break
 			}
-			config, env, err := store.SandboxReceiveConfig(path, caller, sandboxID, slug)
+			config, env, err := store.SandboxReceiveConfig(path, caller, sandboxID, slug, generation)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -179,9 +204,43 @@ func (s *sandboxService) cacheRemoteHandler() http.Handler {
 	})
 }
 
+// generationVerifyAnswer is the verify response body.
+type generationVerifyAnswer struct {
+	Generation string                 `json:"generation"`
+	OK         bool                   `json:"ok"`
+	Verdict    gitcache.VerifyVerdict `json:"verdict,omitempty"`
+}
+
+// serveGenerationVerify answers the control plane's read-only completion gate:
+// 200 only when the namespace is exactly the frozen generation; a deficit is a
+// 409 naming it, so the sandbox stays awaiting its source.
+func serveGenerationVerify(w http.ResponseWriter, r *http.Request, store *gitcache.Store, path, sandboxID, slug, generation string) {
+	if strings.TrimSpace(generation) == "" {
+		http.Error(w, "verify requires the frozen delivery generation", http.StatusBadRequest)
+		return
+	}
+	verdict, err := store.VerifyGeneration(r.Context(), path, sandboxID, slug, generation)
+	if err != nil {
+		http.Error(w, err.Error(), statusCodeForCacheError(err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	status := http.StatusOK
+	if !verdict.OK() {
+		status = http.StatusConflict
+	}
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(generationVerifyAnswer{Generation: generation, OK: verdict.OK(), Verdict: verdict}); err != nil {
+		slog.WarnContext(r.Context(), "encode a generation verify answer", "error", err)
+	}
+}
+
 func statusCodeForCacheError(err error) int {
 	if errors.Is(err, gitcache.ErrInvalid) {
 		return http.StatusBadRequest
+	}
+	if errors.Is(err, gitcache.ErrGenerationMismatch) || errors.Is(err, gitcache.ErrNoGenerationRecord) {
+		return http.StatusConflict
 	}
 	return statusCodeForGitError(err)
 }

@@ -1212,6 +1212,9 @@ func (d *apiDataSource) create(ctx context.Context, req tui.RunRequest, report f
 		return tui.Sandbox{}, err
 	}
 
+	if resolved, err := d.app.resolvedServer(); err == nil {
+		opts.ServerURL = resolved.Value
+	}
 	step := func(step sandboxcreate.Step) {
 		if report != nil {
 			report(string(step))

@@ -69,12 +69,13 @@ var clientGitCacheRoot = func() (string, error) {
 
 // cacheDelivery is where a delivery goes and as whom.
 type cacheDelivery struct {
-	client    sourceDeliveryClient
-	serverURL string
-	projectID string
-	sandboxID string
-	token     string
-	report    Report
+	client     sourceDeliveryClient
+	serverURL  string
+	projectID  string
+	sandboxID  string
+	token      string
+	generation string
+	report     Report
 }
 
 // deliveredToCache reports whether a source is delivered into its pool's
@@ -112,13 +113,121 @@ func (d cacheDelivery) deliver(ctx context.Context, entry pushDeliveredSource, l
 		return err
 	}
 	if remote := remoteURLSource(entry.source); remote != "" {
+		// A resumed generation delivery re-pins from this client's recorded
+		// view of the remote and pushes on, without listing the remote again;
+		// the first delivery, or anything this cache cannot resume, lists it.
+		if d.generation != "" {
+			if cache, ok := resumableRemoteCache(ctx, remote, commit); ok {
+				return d.deliverRemoteGeneration(ctx, entry.source, slug, cache, originURL, commit)
+			}
+		}
 		return d.deliverRemote(ctx, entry.source, slug, remote, originURL, commit, branch)
 	}
 	repoRoot, err := local.pushRoot(entry.key)
 	if err != nil {
 		return err
 	}
+	// A takeover finishes a local source only while the local repository
+	// still is the frozen generation.
+	if d.generation != "" {
+		if err := assertLocalGeneration(ctx, repoRoot, entry.source); err != nil {
+			return err
+		}
+	}
 	return d.deliverLocal(ctx, entry.source, slug, repoRoot, originURL, commit, branch, snapshotRef)
+}
+
+// resumableRemoteCache reports this client's existing bare cache of remote
+// when it already holds the pinned commit, i.e. when a first delivery fetched
+// the remote into it. That cache's recorded view of the remote is what a
+// resumed generation delivery re-pins from, so a remote that moved after the
+// create cannot change the frozen refs. An absent or empty cache is the first
+// delivery, which still lists the remote.
+func resumableRemoteCache(ctx context.Context, remote, commit string) (string, bool) {
+	root, err := clientGitCacheRoot()
+	if err != nil {
+		return "", false
+	}
+	name := sourcecache.NormalizeRemote(remote)
+	if name == "" {
+		name = strings.TrimSpace(remote)
+	}
+	sum := sha256.Sum256([]byte(name))
+	path := filepath.Join(root, hex.EncodeToString(sum[:16])+".git")
+	if _, err := os.Stat(filepath.Join(path, "HEAD")); err != nil {
+		return "", false
+	}
+	if _, err := gitutil.Output(ctx, path, nil, nil, "cat-file", "-e", commit+"^{commit}"); err != nil {
+		return "", false
+	}
+	return path, true
+}
+
+// deliverRemoteGeneration resumes a generation-fenced remote-URL source
+// without listing the remote again (ADR 26-10-15-943 §6): the pin is rebuilt
+// from this client cache's recorded view of the remote — taken before
+// anything is fetched here — and only what the pool still lacks is pushed. A
+// branch the remote moved or deleted after the create cannot change what the
+// sandbox clones.
+func (d cacheDelivery) deliverRemoteGeneration(ctx context.Context, source apimodel.GitSource, _ string, cache, originURL, commit string) error {
+	// The same branch the first delivery used, and for an annotated tag the
+	// commit it peels to — the frozen ref set has to be rebuilt exactly.
+	_, branch, _, refErr := pushRefs(source)
+	if refErr != nil {
+		return refErr
+	}
+	tip := strings.TrimSpace(commit)
+	if peeled, err := gitutil.Output(ctx, cache, nil, nil, "rev-parse", "--verify", "--quiet", commit+"^{commit}"); err == nil && strings.TrimSpace(peeled) != "" {
+		tip = strings.TrimSpace(peeled)
+	}
+	// Rebuild the frozen refs from the recorded view before any fetch can
+	// move it.
+	refs, err := cachedRemoteRefs(ctx, cache, pushBranch(branch), tip)
+	if err != nil {
+		return err
+	}
+	missing, err := d.pin(ctx, source, refs)
+	if err != nil {
+		return err
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	// Negotiation only: what an interrupted push already put in the pool
+	// keeps this push from resending it; the pool mirror is never read back
+	// into the frozen ref set.
+	if poolURL, err := sandboxgit.CacheRemoteURL(d.serverURL, d.projectID, d.sandboxID, source); err == nil {
+		_, _ = gitutil.Output(ctx, cache, nil, sandboxgit.NoPromptEnv,
+			sandboxgit.AuthArgs(d.token, []string{"fetch", "--quiet", "--no-tags", poolURL, poolTrackingRefspec})...)
+	}
+	d.report.step(StepPushingSource)
+	return d.push(ctx, cache, originURL, []string{
+		commit + "^{commit}:refs/heads/" + pushBranch(branch),
+		"+" + remoteTrackingPrefix + "*:" + remoteTrackingPrefix + "*",
+		"+refs/tags/*:refs/tags/*",
+	})
+}
+
+// cachedRemoteRefs rebuilds the frozen delivery's complete pin set from this
+// client's cache of the remote: the branch at the recorded tip, the remote
+// branches under the pool tracking refs, and the tags.
+func cachedRemoteRefs(ctx context.Context, cache, branch, tip string) (map[string]string, error) {
+	refs := map[string]string{"refs/heads/" + branch: tip}
+	tracking, err := refsUnder(ctx, cache, remoteTrackingPrefix)
+	if err != nil {
+		return nil, err
+	}
+	for name, object := range tracking {
+		refs[remoteTrackingPrefix+name] = object
+	}
+	tags, err := refsUnder(ctx, cache, "refs/tags/")
+	if err != nil {
+		return nil, err
+	}
+	for name, object := range tags {
+		refs["refs/tags/"+name] = object
+	}
+	return refs, nil
 }
 
 // deliverLocal delivers a source out of a repository on this machine, which
@@ -256,6 +365,12 @@ func (d cacheDelivery) deliverRemote(ctx context.Context, source apimodel.GitSou
 // do, or the branch holds this commit and the push is a no-op.
 func (d cacheDelivery) push(ctx context.Context, repoRoot, originURL string, refspecs []string) error {
 	args := append([]string{"push", "--atomic", "--progress", originURL}, refspecs...)
+	// The delivery push carries the frozen generation so the pool's gate can
+	// bind it to the namespace the pin fenced. A later discobox push sends no
+	// header and keeps the ordinary push rules.
+	if d.generation != "" {
+		args = append([]string{"-c", "http.extraHeader=" + sourcecache.GenerationHeader + ": " + d.generation}, args...)
+	}
 	attempt := func() error {
 		return gitTransfer(ctx, repoRoot, sandboxgit.NoPromptEnv, StepPushingSource, d.report, sandboxgit.PushArgs(d.token, args)...)
 	}
@@ -324,6 +439,9 @@ func (d cacheDelivery) pinOnce(ctx context.Context, pinURL string, body []byte) 
 	req.Header.Set("Content-Type", "application/json")
 	if token := strings.TrimSpace(d.token); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if d.generation != "" {
+		req.Header.Set(sourcecache.GenerationHeader, d.generation)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

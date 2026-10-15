@@ -21,6 +21,7 @@ var regexMap = map[string]ogenregex.Regexp{
 	"^(oci|discovm/[a-z0-9]+)$":              ogenregex.MustCompile("^(oci|discovm/[a-z0-9]+)$"),
 	"^(|oci|discovm/[a-z0-9]+)$":             ogenregex.MustCompile("^(|oci|discovm/[a-z0-9]+)$"),
 	"^[0-9a-f]{40}$":                         ogenregex.MustCompile("^[0-9a-f]{40}$"),
+	"^[0-9a-f]{64}$":                         ogenregex.MustCompile("^[0-9a-f]{64}$"),
 	"^[A-Za-z0-9_-]+:dns_[0-9]+$":            ogenregex.MustCompile("^[A-Za-z0-9_-]+:dns_[0-9]+$"),
 	"^[A-Za-z0-9_-]+:http_[0-9]+$":           ogenregex.MustCompile("^[A-Za-z0-9_-]+:http_[0-9]+$"),
 	"^[A-Za-z_][A-Za-z0-9_]*$":               ogenregex.MustCompile("^[A-Za-z_][A-Za-z0-9_]*$"),

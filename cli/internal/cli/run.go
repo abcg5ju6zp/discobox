@@ -320,6 +320,11 @@ func (a *App) runPrompt(cmd *cobra.Command, opts *runCommandOptions, args []stri
 	if parsedOpts.PoolID, parsedOpts.Platform, err = a.newSandboxPlacement(cmd.Context(), client, projectID, opts.pool); err != nil {
 		return err
 	}
+	// The server identity files the idempotent create record; best effort,
+	// since an unresolvable name must not block the create itself.
+	if resolved, err := a.resolvedServer(); err == nil {
+		parsedOpts.ServerURL = resolved.Value
+	}
 	report := func(step sandboxcreate.Step) { status.set(string(step)) }
 	sandbox, local, err := sandboxcreate.CreatePromptSandbox(cmd.Context(), client, projectID, parsedOpts, report)
 	if err != nil {
@@ -358,7 +363,12 @@ func (a *App) runPrompt(cmd *cobra.Command, opts *runCommandOptions, args []stri
 	if opts.detach {
 		return a.writeSandbox(cmd, sandbox)
 	}
-	return a.attachRunSandbox(cmd, projectID, sandbox)
+	// The foreground wait ends with the sandbox settled or failed; the create
+	// replay record has nothing left to do. Detach/json return while it is
+	// still booting and leave the record for a later restart.
+	attachErr := a.attachRunSandbox(cmd, projectID, sandbox)
+	sandboxcreate.DiscardCreateRecord(parsedOpts.ServerURL, projectID, sandbox.SourceGeneration.Or(""))
+	return attachErr
 }
 
 // addRunFlags gives cmd everything a run takes, and keeps the set in opts for

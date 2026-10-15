@@ -1742,3 +1742,26 @@ by simply being re-fetched if it does age out.
 - Keep in-sandbox agent API implementation code in the `sandbox-agent`
   module; pool-local provider operation routes and their generated server
   adapter belong under `server`.
+
+### Delivery generations in the cache
+
+A cache namespace that a client pins into records the delivery generation it
+has accepted, beside its ownership marker (`discobox-namespaces/<ns>.generation`,
+ADR [26-10-15-943](../../docs/adr/26-10-15-943-a-created-sandboxs-source-is-one-frozen-delivery-generation.md)):
+the generation digest and the complete ref set the first pin named — the source's
+branch at its pinned commit, any dirty-workspace snapshot, and the remote's
+branches and tags as the delivery knew them. A pin carrying a different
+generation is refused (`ErrGenerationMismatch`); a push into a fenced namespace
+is checked before receive-pack runs (`GenerationGate`); a namespace with no
+record is a pre-ADR namespace and keeps the old path.
+
+`POST .../git-cache-origins/<slug>.git/verify` is the read-only gate the control
+plane calls before accepting a delivery completion: `VerifyGeneration` resolves
+every recorded ref to its recorded object, proves every dirty snapshot's parent
+is the pinned checkout, and walks `rev-list --objects` over the namespace refs
+with a batched `cat-file --batch-check`, naming any missing refs, bad snapshots
+or absent objects in a 409 verdict. It is a local connectivity check, never a
+full object rehash: incoming packs stay the only content-hash boundary, and the
+walk runs under the cache's existing lock. The sandbox runtime's landing check
+(`pushedSourcesLanded`) releases a sandbox only when verify passes; a
+pre-generation namespace falls back to "the namespace holds a branch".

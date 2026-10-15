@@ -19,9 +19,22 @@ const (
 	PreReceiveCommand = "git-cache-pre-receive"
 	// CallerEnv names, to the hook, the sandbox whose push is being received.
 	CallerEnv = "DISCOBOX_GIT_CACHE_CALLER"
+	// GenerationEnv names, to the hook, the frozen delivery generation the
+	// push must satisfy. Empty means the push is not a generation delivery —
+	// a later discobox push — and the gate does not run.
+	GenerationEnv = "DISCOBOX_GIT_CACHE_GENERATION"
 
 	hooksDir = ".hooks"
 )
+
+// hookCommand is one ref update git handed the pre-receive hook.
+type hookCommand struct {
+	oldID string
+	newID string
+	ref   string
+}
+
+func zeroObjectID(id string) bool { return strings.Trim(id, "0") == "" }
 
 // SandboxReceiveConfig is what a push from a sandbox — one delivering the
 // source of a discobox it created — is received under, on top of
@@ -34,7 +47,7 @@ const (
 // the caller's own namespaces and the one it is pushing into, and a hook
 // refuses any ref that reaches an object which neither arrived in this push
 // nor is reachable from those namespaces.
-func (s *Store) SandboxReceiveConfig(path, caller, sandboxID, slug string) (config, env []string, err error) {
+func (s *Store) SandboxReceiveConfig(path, caller, sandboxID, slug, generation string) (config, env []string, err error) {
 	hooks, err := s.hooksPath()
 	if err != nil {
 		return nil, nil, err
@@ -58,11 +71,33 @@ func (s *Store) SandboxReceiveConfig(path, caller, sandboxID, slug string) (conf
 	for _, namespace := range own {
 		config = append(config, "-c", "receive.hideRefs=!^refs/namespaces/"+namespace+"/")
 	}
-	return config, []string{CallerEnv + "=" + caller}, nil
+	env = []string{CallerEnv + "=" + caller}
+	env = appendGenerationEnv(env, generation)
+	return config, env, nil
 }
 
-// MemberReceiveConfig is what a project member's push is received under, on
-// top of ReceiveConfig: no hook runs.
+// GenerationReceiveConfig is what a project member's generation delivery push
+// is received under: the same hook a sandbox gets for the frozen-generation
+// gate, without the sandbox's reachability confinement, which a trusted member
+// does not need. A later discobox push carries no generation and gets
+// MemberReceiveConfig's no-hook behavior instead.
+func (s *Store) GenerationReceiveConfig() (config []string, err error) {
+	hooks, err := s.hooksPath()
+	if err != nil {
+		return nil, err
+	}
+	return []string{"-c", "core.hooksPath=" + hooks}, nil
+}
+
+func appendGenerationEnv(env []string, generation string) []string {
+	if generation = strings.TrimSpace(generation); generation != "" {
+		env = append(env, GenerationEnv+"="+generation)
+	}
+	return env
+}
+
+// MemberReceiveConfig is what a project member's non-delivery push is received
+// under, on top of ReceiveConfig: no hook runs.
 func MemberReceiveConfig() []string {
 	return []string{"-c", "core.hooksPath=" + os.DevNull}
 }
@@ -106,13 +141,11 @@ func RunPreReceive(stdin io.Reader, stderr io.Writer) int {
 func preReceive(stdin io.Reader) error {
 	caller := strings.TrimSpace(os.Getenv(CallerEnv))
 	quarantine := os.Getenv("GIT_QUARANTINE_PATH")
-	if caller == "" || quarantine == "" {
-		return errors.New("this push cannot be checked, so it is refused")
-	}
 	gitDir, err := hookGit(nil, nil, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		return err
 	}
+	var commands []hookCommand
 	var revisions bytes.Buffer
 	scanner := bufio.NewScanner(stdin)
 	for scanner.Scan() {
@@ -120,13 +153,28 @@ func preReceive(stdin io.Reader) error {
 		if len(fields) != 3 {
 			return errors.New("malformed ref update")
 		}
-		if strings.Trim(fields[1], "0") == "" {
-			continue
+		commands = append(commands, hookCommand{oldID: fields[0], newID: fields[1], ref: fields[2]})
+		if !zeroObjectID(fields[1]) {
+			revisions.WriteString(fields[1] + "\n")
 		}
-		revisions.WriteString(fields[1] + "\n")
 	}
 	if err := scanner.Err(); err != nil {
 		return err
+	}
+	// The frozen-generation gate binds even a trusted member's delivery push,
+	// and needs neither a caller nor the quarantine to run.
+	if strings.TrimSpace(os.Getenv(GenerationEnv)) != "" {
+		if err := enforceGenerationGate(strings.TrimSpace(gitDir), commands); err != nil {
+			return err
+		}
+	}
+	if caller == "" || quarantine == "" {
+		// A member delivery is checked by the generation gate above; anything
+		// else without the caller's reachability confinement is refused.
+		if caller == "" && strings.TrimSpace(os.Getenv(GenerationEnv)) != "" {
+			return nil
+		}
+		return errors.New("this push cannot be checked, so it is refused")
 	}
 	if revisions.Len() == 0 {
 		return nil

@@ -2,10 +2,12 @@ package sandboxcreate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	apiclientgen "github.com/discobox-ai/discobox/api/gen"
 	apimodel "github.com/discobox-ai/discobox/api/model"
@@ -71,6 +73,10 @@ type PromptOptions struct {
 	// whether the whole directory is copied in. Leave it nil when the frontend
 	// cannot ask.
 	ConfirmCopyDirectory ConfirmCopyDirectoryFunc
+	// ServerURL names the server this create is sent to, for the idempotent
+	// create record a lost response or a restarted client replays. Empty keeps
+	// the create replayable only within this process.
+	ServerURL string
 }
 
 // ParsePromptOptions adds positional prompt arguments and normalizes the source.
@@ -211,6 +217,11 @@ func BuildPromptSandboxBody(ctx context.Context, opts PromptOptions) (*apimodel.
 		userIdentity.setCreateSandboxUser(body)
 	}
 	setCreateSandboxGit(body, resolveGitIdentity(ctx, sourceArg))
+	// The frozen delivery generation is the last thing set on a built body:
+	// every source the request names is resolved and on it now.
+	if generation := bodySourceGeneration(body); generation != "" {
+		body.SetSourceGeneration(apiclientgen.NewOptString(generation))
+	}
 	return body, local, nil
 }
 
@@ -381,6 +392,33 @@ func CreatePromptSandbox(ctx context.Context, client promptSandboxCreator, proje
 	if err != nil {
 		return nil, nil, err
 	}
+	generation := strings.TrimSpace(body.SourceGeneration.Or(""))
+	if generation != "" {
+		sweepCreateRecords()
+		// A lost response or a restarted client replays the exact recorded
+		// request and token, returning the one sandbox the first request made.
+		if record, err := loadCreateRecord(opts.ServerURL, projectID, generation); err != nil {
+			local.Close()
+			return nil, nil, err
+		} else if record != nil {
+			replayed, err := recordedCreateBody(record.Body)
+			if err != nil {
+				local.Close()
+				return nil, nil, err
+			}
+			body = replayed
+		} else {
+			token, err := mintCreateToken()
+			if err != nil {
+				local.Close()
+				return nil, nil, err
+			}
+			body.SetCreateToken(apiclientgen.NewOptString(token))
+			// The record is filed before the request is sent; a local write
+			// failure does not block the create, it only forgoes replay.
+			_ = persistCreateRecord(opts.ServerURL, projectID, generation, body)
+		}
+	}
 	report.step(StepCreating)
 	for attempt := 1; ; attempt++ {
 		res, err := client.CreateSandbox(ctx, body, apiclientgen.CreateSandboxParams{ProjectId: projectID})
@@ -401,7 +439,44 @@ func CreatePromptSandbox(ctx context.Context, client promptSandboxCreator, proje
 			return nil, nil, fmt.Errorf("generate discobox name: %w", err)
 		}
 		body.Config.Name = name
+		// The body changed, so the idempotency token changes with it; the
+		// generation did not, so the same record slot is overwritten.
+		if generation != "" {
+			token, err := mintCreateToken()
+			if err != nil {
+				local.Close()
+				return nil, nil, err
+			}
+			body.SetCreateToken(apiclientgen.NewOptString(token))
+			_ = persistCreateRecord(opts.ServerURL, projectID, generation, body)
+		}
 	}
+}
+
+// persistCreateRecord stores the exact body and token for a later replay.
+func persistCreateRecord(serverURL, projectID, generation string, body *apimodel.CreateSandboxBody) error {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	return saveCreateRecord(&createRecord{
+		ServerURL:  serverURL,
+		ProjectID:  projectID,
+		Generation: generation,
+		Token:      body.CreateToken.Or(""),
+		Body:       raw,
+		CreatedAt:  time.Now().UTC(),
+	})
+}
+
+// DiscardCreateRecord removes a settled create's replay record once a
+// frontend has observed its sandbox ready, failed or deleted. It is a no-op
+// for a no-source create and when replay storage is unavailable.
+func DiscardCreateRecord(serverURL, projectID, generation string) {
+	if strings.TrimSpace(generation) == "" {
+		return
+	}
+	_ = discardCreateRecord(serverURL, projectID, generation)
 }
 
 // isNameConflict reports whether res is the conflict a duplicate sandbox name

@@ -83,7 +83,7 @@ func (w *work) push(s *Store, path, sandboxID, slug, caller string, refspecs ...
 	if caller == "" {
 		config = append(config, MemberReceiveConfig()...)
 	} else {
-		extra, hookEnv, err := s.SandboxReceiveConfig(path, caller, sandboxID, slug)
+		extra, hookEnv, err := s.SandboxReceiveConfig(path, caller, sandboxID, slug, "")
 		if err != nil {
 			w.t.Fatal(err)
 		}
@@ -108,7 +108,7 @@ func nameWithoutSending(t *testing.T, s *Store, path, caller, sandboxID, slug, o
 	if _, err := s.Receiving(context.Background(), path, sandboxID, slug); err != nil {
 		t.Fatal(err)
 	}
-	config, env, err := s.SandboxReceiveConfig(path, caller, sandboxID, slug)
+	config, env, err := s.SandboxReceiveConfig(path, caller, sandboxID, slug, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestAPinCreatesWhatTheCacheHoldsAndReportsTheRest(t *testing.T) {
 	}
 
 	// Everything asked for is held: nothing is transferred.
-	result, err := s.Pin(ctx, path, "sbx-two", "widget", map[string]string{
+	result, err := s.Pin(ctx, path, "sbx-two", "widget", "", map[string]string{
 		"refs/heads/main":          first,
 		"refs/remotes/origin/main": first,
 	}, "")
@@ -193,7 +193,7 @@ func TestAPinCreatesWhatTheCacheHoldsAndReportsTheRest(t *testing.T) {
 
 	// One object is not held: the branch waits for the push that brings it,
 	// so a sandbox never clones a namespace that is half delivered.
-	result, err = s.Pin(ctx, path, "sbx-three", "widget", map[string]string{
+	result, err = s.Pin(ctx, path, "sbx-three", "widget", "", map[string]string{
 		"refs/heads/main":          first,
 		"refs/remotes/origin/main": second,
 	}, "")
@@ -316,7 +316,7 @@ func TestASandboxDeliversOnlyWhatItSendsAndWhatItsOwnSourcesHold(t *testing.T) {
 	}
 
 	// It is told its own namespaces' tips, and nobody else's.
-	config, _, err := s.SandboxReceiveConfig(path, "sbx-caller", "sbx-child", "widget")
+	config, _, err := s.SandboxReceiveConfig(path, "sbx-caller", "sbx-child", "widget", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,14 +365,14 @@ func TestASandboxDeliversOnlyWhatItSendsAndWhatItsOwnSourcesHold(t *testing.T) {
 	}
 
 	// A pin is held to the same reach.
-	result, err := s.Pin(ctx, path, "sbx-child3", "widget", map[string]string{"refs/heads/main": secretTip}, "sbx-caller")
+	result, err := s.Pin(ctx, path, "sbx-child3", "widget", "", map[string]string{"refs/heads/main": secretTip}, "sbx-caller")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Pinned) != 0 {
 		t.Fatalf("a sandbox pinned another sandbox's commit: %+v", result)
 	}
-	result, err = s.Pin(ctx, path, "sbx-child3", "widget", map[string]string{"refs/heads/main": base}, "sbx-caller")
+	result, err = s.Pin(ctx, path, "sbx-child3", "widget", "", map[string]string{"refs/heads/main": base}, "sbx-caller")
 	if err != nil {
 		t.Fatal(err)
 	}

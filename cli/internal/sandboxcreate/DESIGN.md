@@ -261,3 +261,38 @@ An unknown pool after server restart is narrated as "waiting for the pool agent
 to become ready". Fresh driver provisioning progress refines that message;
 image preparation can continue while the health wait is pending. The server
 holds creation until a current status report permits placement.
+
+### Frozen delivery generation
+
+Every source-bearing create carries `sourceGeneration`, the SHA-256 of the
+canonical source records the request names (root URL or local directory,
+checkout ref type/name/commit, dirty-workspace mode/base commit/snapshot ref,
+destination): the same canonical form the server recomputes independently, so
+a digest the server does not get back from the request is refused
+([ADR 26-10-15-943](../../../docs/adr/26-10-15-943-a-created-sandboxs-source-is-one-frozen-delivery-generation.md)).
+A no-source create names none and takes no part in generation fencing. The
+digest covers request fields only — delivery, cache key and pool routing are
+the server's later decisions.
+
+The create also carries an opaque client-minted `createToken`. The exact
+request is recorded in the CLI state directory
+(`creates/<sha256(server|project|generation)>.json`, `0700`, atomic writes,
+seven-day TTL) before it is sent. A repeat create that resolves to the same
+generation — a retry after a lost response, or a process restarted before the
+sandbox settled — re-sends the recorded body and token, and the server replays
+it to the one sandbox the first request made. A new name after a name conflict
+means a new token (the body changed); a different generation is a different
+record and a different sandbox. The record is removed once a create response
+is ready/failed/deleted, or once a foreground/TUI wait observes the sandbox
+settled; delivered-but-still-booting stays recorded.
+
+`DeliverSource` can be taken over from any client, but for local sources only
+while the local repositories still are the frozen generation
+(`takeover_generation.go`): the pinned commit must still exist, a branch
+checkout's local HEAD must not have moved off it, and a dirty snapshot ref
+must still be present. A mismatch is a refusal naming the source — pushing it
+would make the frozen namespace point at different objects. Remote-URL sources
+are exempt, and pre-generation sandboxes take the old path. A remote source
+resumed after an interruption is re-pinned and fetched by its recorded commit
+hash without a fresh `ls-remote` (`deliverRemoteGeneration`), so the remote
+moving after the create cannot redirect the delivery.

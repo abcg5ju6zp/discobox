@@ -357,6 +357,9 @@ func SandboxToAPI(sandbox *model.Sandbox, fallback *model.HarnessConfig) (server
 	if sandbox.PoolID != "" {
 		fields["poolId"] = sandbox.PoolID
 	}
+	if sandbox.SourceGeneration != nil {
+		fields["sourceGeneration"] = *sandbox.SourceGeneration
+	}
 	if !sandbox.Platform.IsZero() {
 		fields["platform"] = sandbox.Platform.String()
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/moby/moby/client"
 
 	workerapimodel "github.com/discobox-ai/discobox/pool-agent/api/model"
+	"github.com/discobox-ai/discobox/pool-agent/gitcache"
 	"github.com/discobox-ai/discobox/pool-agent/proxyagent"
 	"github.com/discobox-ai/discobox/pool-agent/sandboxtoken"
 	"github.com/discobox-ai/discobox/sandboxconfig"
@@ -374,20 +375,32 @@ func (r *DockerSandboxRuntime) pushedSourcesLanded(ctx context.Context, sandboxI
 	return true, nil
 }
 
-// cachedSourceLanded reports whether a cache-delivered source's namespace
-// holds a branch, and points the namespace's HEAD at the source's own.
+// cachedSourceLanded reports whether a cache-delivered source's namespace is
+// ready for the sandbox to clone. A namespace fenced to a frozen delivery
+// generation is released only when its recorded refs, snapshot parentage and
+// reachable objects all verify (ADR 26-10-15-943); a pre-generation namespace
+// keeps the older "it holds a branch" check. Either way the namespace's HEAD is
+// pointed at the source's own branch once it lands.
 func (r *DockerSandboxRuntime) cachedSourceLanded(ctx context.Context, key, sandboxID string, source sandboxSource) (bool, error) {
 	path, release, err := r.gitCache.Use(ctx, key)
 	if err != nil {
 		return false, fmt.Errorf("source %q cache: %w", source.slug, err)
 	}
 	defer release()
-	landed, err := r.gitCache.HasBranches(ctx, path, sandboxID, source.slug)
-	if err != nil {
+	if _, verdict, err := r.gitCache.NamespaceReady(ctx, path, sandboxID, source.slug); err == nil {
+		if !verdict.OK() {
+			return false, nil
+		}
+	} else if errors.Is(err, gitcache.ErrNoGenerationRecord) {
+		landed, err := r.gitCache.HasBranches(ctx, path, sandboxID, source.slug)
+		if err != nil {
+			return false, fmt.Errorf("source %q cache: %w", source.slug, err)
+		}
+		if !landed {
+			return false, nil
+		}
+	} else {
 		return false, fmt.Errorf("source %q cache: %w", source.slug, err)
-	}
-	if !landed {
-		return false, nil
 	}
 	if err := r.gitCache.EnsureHead(ctx, path, sandboxID, source.slug, gitSourceInitialBranch(source.git)); err != nil {
 		return false, fmt.Errorf("source %q cache: %w", source.slug, err)

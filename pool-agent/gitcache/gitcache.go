@@ -276,10 +276,10 @@ type PinResult struct {
 // cache holds. For a sandbox delivering to one it created it is that
 // sandbox's id, and an object is held only where the caller's own namespaces
 // reach it (ADR 26-10-10-545 §7).
-func (s *Store) Pin(ctx context.Context, path, sandboxID, slug string, refs map[string]string, caller string) (PinResult, error) {
+func (s *Store) Pin(ctx context.Context, path, sandboxID, slug, generation string, refs map[string]string, caller string) (PinResult, error) {
 	namespace := Namespace(sandboxID, slug)
 	if !validNamespace(namespace) {
-		return PinResult{}, fmt.Errorf("%w: namespace %q", ErrInvalid, namespace)
+		return PinResult{}, fmt.Errorf("%w: %q", ErrInvalid, namespace)
 	}
 	names := make([]string, 0, len(refs))
 	for ref, object := range refs {
@@ -287,9 +287,24 @@ func (s *Store) Pin(ctx context.Context, path, sandboxID, slug string, refs map[
 			return PinResult{}, fmt.Errorf("%w: ref %q", ErrInvalid, ref)
 		}
 		if !validObjectID(object) {
-			return PinResult{}, fmt.Errorf("%w: object %q for %s", ErrInvalid, object, ref)
+			return PinResult{}, fmt.Errorf("%w: object %q", ErrInvalid, object)
 		}
 		names = append(names, ref)
+	}
+	generation = strings.TrimSpace(generation)
+	checkout := ""
+	if generation != "" {
+		var err error
+		checkout, err = pinnedCheckout(refs)
+		if err != nil {
+			return PinResult{}, err
+		}
+	}
+	// Freeze the namespace to the generation before any ref is created: a pin
+	// that dies after the record fences the retry, and one that dies before it
+	// changes nothing.
+	if _, err := ensureGenerationRecord(path, namespace, generation, refs, checkout); err != nil {
+		return PinResult{}, err
 	}
 	sort.Strings(names)
 	result := PinResult{Pinned: []string{}, Missing: []string{}}

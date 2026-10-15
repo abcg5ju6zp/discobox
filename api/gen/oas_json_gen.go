@@ -1190,14 +1190,21 @@ func (s *CompleteSandboxSourcePushBody) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.Generation.Set {
+			e.FieldStart("generation")
+			s.Generation.Encode(e)
+		}
+	}
+	{
 		e.FieldStart("sources")
 		s.Sources.Encode(e)
 	}
 }
 
-var jsonFieldsNameOfCompleteSandboxSourcePushBody = [2]string{
+var jsonFieldsNameOfCompleteSandboxSourcePushBody = [3]string{
 	0: "$schema",
-	1: "sources",
+	1: "generation",
+	2: "sources",
 }
 
 // Decode decodes CompleteSandboxSourcePushBody from json.
@@ -1219,8 +1226,18 @@ func (s *CompleteSandboxSourcePushBody) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"$schema\"")
 			}
+		case "generation":
+			if err := func() error {
+				s.Generation.Reset()
+				if err := s.Generation.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"generation\"")
+			}
 		case "sources":
-			requiredBitSet[0] |= 1 << 1
+			requiredBitSet[0] |= 1 << 2
 			if err := func() error {
 				if err := s.Sources.Decode(d); err != nil {
 					return err
@@ -1239,7 +1256,7 @@ func (s *CompleteSandboxSourcePushBody) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00000010,
+		0b00000100,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -2182,15 +2199,29 @@ func (s *CreateSandboxBody) encodeFields(e *jx.Encoder) {
 			e.ArrEnd()
 		}
 	}
+	{
+		if s.CreateToken.Set {
+			e.FieldStart("createToken")
+			s.CreateToken.Encode(e)
+		}
+	}
+	{
+		if s.SourceGeneration.Set {
+			e.FieldStart("sourceGeneration")
+			s.SourceGeneration.Encode(e)
+		}
+	}
 }
 
-var jsonFieldsNameOfCreateSandboxBody = [6]string{
+var jsonFieldsNameOfCreateSandboxBody = [8]string{
 	0: "$schema",
 	1: "harnessName",
 	2: "config",
 	3: "origin",
 	4: "poolId",
 	5: "grants",
+	6: "createToken",
+	7: "sourceGeneration",
 }
 
 // Decode decodes CreateSandboxBody from json.
@@ -2268,6 +2299,26 @@ func (s *CreateSandboxBody) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"grants\"")
+			}
+		case "createToken":
+			if err := func() error {
+				s.CreateToken.Reset()
+				if err := s.CreateToken.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"createToken\"")
+			}
+		case "sourceGeneration":
+			if err := func() error {
+				s.SourceGeneration.Reset()
+				if err := s.SourceGeneration.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"sourceGeneration\"")
 			}
 		default:
 			return errors.Errorf("unexpected field %q", k)
@@ -28759,6 +28810,12 @@ func (s *Sandbox) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.SourceGeneration.Set {
+			e.FieldStart("sourceGeneration")
+			s.SourceGeneration.Encode(e)
+		}
+	}
+	{
 		e.FieldStart("runtime")
 		s.Runtime.Encode(e)
 	}
@@ -28780,7 +28837,7 @@ func (s *Sandbox) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSandbox = [19]string{
+var jsonFieldsNameOfSandbox = [20]string{
 	0:  "$schema",
 	1:  "harnessConfig",
 	2:  "config",
@@ -28796,10 +28853,11 @@ var jsonFieldsNameOfSandbox = [19]string{
 	12: "projectId",
 	13: "pool",
 	14: "poolId",
-	15: "runtime",
-	16: "meta",
-	17: "metaObservedAt",
-	18: "updatedAt",
+	15: "sourceGeneration",
+	16: "runtime",
+	17: "meta",
+	18: "metaObservedAt",
+	19: "updatedAt",
 }
 
 // Decode decodes Sandbox from json.
@@ -28971,8 +29029,18 @@ func (s *Sandbox) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"poolId\"")
 			}
+		case "sourceGeneration":
+			if err := func() error {
+				s.SourceGeneration.Reset()
+				if err := s.SourceGeneration.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"sourceGeneration\"")
+			}
 		case "runtime":
-			requiredBitSet[1] |= 1 << 7
+			requiredBitSet[2] |= 1 << 0
 			if err := func() error {
 				if err := s.Runtime.Decode(d); err != nil {
 					return err
@@ -29002,7 +29070,7 @@ func (s *Sandbox) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"metaObservedAt\"")
 			}
 		case "updatedAt":
-			requiredBitSet[2] |= 1 << 2
+			requiredBitSet[2] |= 1 << 3
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.UpdatedAt = v
@@ -29024,8 +29092,8 @@ func (s *Sandbox) Decode(d *jx.Decoder) error {
 	var failures []validate.FieldError
 	for i, mask := range [3]uint8{
 		0b11001100,
-		0b10010001,
-		0b00000100,
+		0b00010001,
+		0b00001001,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.

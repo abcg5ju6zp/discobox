@@ -42,6 +42,17 @@ const (
 	// and the object each points at, and the pool creates those its cache
 	// already holds.
 	PinSuffix = "/pin"
+	// VerifySuffix follows "<slug>.git" on the origin routes for the
+	// read-only gate the control plane calls before it accepts a delivery
+	// completion: the pool answers only when the namespace's refs, snapshot
+	// parents and reachable objects all match the frozen generation (ADR
+	// 26-10-15-943).
+	VerifySuffix = "/verify"
+	// GenerationHeader carries the sandbox's frozen delivery generation on a
+	// pin, a delivery push, and a verify request. It is what fences one
+	// namespace to the one generation its first pin accepted; a later
+	// discobox push does not carry it and keeps the ordinary push rules.
+	GenerationHeader = "X-Discobox-Source-Generation"
 	// KeyHeader carries the cache's key.
 	KeyHeader = "X-Discobox-Git-Cache"
 	// CallerHeader carries the id of the sandbox making the request, when one
@@ -49,6 +60,12 @@ const (
 	// pool holds to what it sends and what its own sources hold (§7).
 	CallerHeader = "X-Discobox-Git-Cache-Caller"
 )
+
+// RunSnapshotRefPrefix is where a dirty working tree's hidden snapshot commit
+// is recorded in the client's repository and delivered into the source's
+// namespace (ADR 0001): refs/discobox/run/<snapshot id>. A frozen delivery
+// generation proves every such ref's parent is the pinned checkout.
+const RunSnapshotRefPrefix = "refs/discobox/run/"
 
 // PoolOriginsHost is the host a sandbox reaches its pool's origins at (ADR
 // 26-10-08-561). A remote there is a sandbox's plumbing — the route to its

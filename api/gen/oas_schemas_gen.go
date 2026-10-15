@@ -647,6 +647,13 @@ func (s *CompleteSandboxApplyBody) SetSlug(val string) {
 type CompleteSandboxSourcePushBody struct {
 	// A URL to the JSON Schema for this object.
 	Schema OptURI `json:"$schema"`
+	// The sandbox's frozen delivery generation (ADR 26-10-15-943), read from the sandbox record and
+	// echoed back here. A sandbox that has one rejects, with 409, a completion that omits it or names
+	// another: a late completion from an old client or a superseded attempt must not open a sandbox
+	// frozen to a different generation. Completion also requires the pool to verify the whole generation
+	// before sourceDeliveredAt is set. Absent for a sandbox created without a generation, which keeps
+	// the commit-comparison check.
+	Generation OptString `json:"generation"`
 	// Commit the client pushed for each push-delivered source, keyed by source slug. Every
 	// push-delivered source of the sandbox must appear, and each commit confirms that source's checkout
 	// commit, which was fixed at create; a missing source or a commit that does not match is rejected.
@@ -659,6 +666,11 @@ func (s *CompleteSandboxSourcePushBody) GetSchema() OptURI {
 	return s.Schema
 }
 
+// GetGeneration returns the value of Generation.
+func (s *CompleteSandboxSourcePushBody) GetGeneration() OptString {
+	return s.Generation
+}
+
 // GetSources returns the value of Sources.
 func (s *CompleteSandboxSourcePushBody) GetSources() CompleteSandboxSourcePushBodySources {
 	return s.Sources
@@ -667,6 +679,11 @@ func (s *CompleteSandboxSourcePushBody) GetSources() CompleteSandboxSourcePushBo
 // SetSchema sets the value of Schema.
 func (s *CompleteSandboxSourcePushBody) SetSchema(val OptURI) {
 	s.Schema = val
+}
+
+// SetGeneration sets the value of Generation.
+func (s *CompleteSandboxSourcePushBody) SetGeneration(val OptString) {
+	s.Generation = val
 }
 
 // SetSources sets the value of Sources.
@@ -1035,6 +1052,22 @@ type CreateSandboxBody struct {
 	// that creates it, so a create that cannot mint one creates nothing. Its agent takes each with
 	// discobox-access, one use at a time; nothing in the discobox can read the credential.
 	Grants []SandboxGrant `json:"grants"`
+	// Opaque, client-minted token that makes a create idempotent (ADR 26-10-15-943). A repeated create
+	// carrying the same token and an identical body, including sourceGeneration, returns the sandbox the
+	// first request created, with its current state and progress, instead of creating another one; the
+	// same token with a different body is rejected with 409. The discobox new path generates and
+	// persists it so a lost response or a restarted client reattaches to one sandbox; a request without
+	// it keeps the ordinary name-conflict behavior. Absent for an old client.
+	CreateToken OptString `json:"createToken"`
+	// Hex SHA-256 digest of the sandbox's frozen delivery generation (ADR 26-10-15-943): every source,
+	// ordered by slug, with its root or URL, checkout ref type/name/commit, workspace mode/base
+	// commit/snapshot ref, and destination and working directories. The server recomputes it from this
+	// request and rejects a mismatch; once accepted it is immutable, is injected into every pool pin,
+	// push and verification for the sandbox, and gates completion and the sandbox's release; the
+	// snapshot object itself is proved by the pool's connectivity verification rather than named in the
+	// digest. Omitted for a sandbox with no source, which takes no part in generation verification, and
+	// absent for an old client, whose create then takes the pre-generation path.
+	SourceGeneration OptString `json:"sourceGeneration"`
 }
 
 // GetSchema returns the value of Schema.
@@ -1067,6 +1100,16 @@ func (s *CreateSandboxBody) GetGrants() []SandboxGrant {
 	return s.Grants
 }
 
+// GetCreateToken returns the value of CreateToken.
+func (s *CreateSandboxBody) GetCreateToken() OptString {
+	return s.CreateToken
+}
+
+// GetSourceGeneration returns the value of SourceGeneration.
+func (s *CreateSandboxBody) GetSourceGeneration() OptString {
+	return s.SourceGeneration
+}
+
 // SetSchema sets the value of Schema.
 func (s *CreateSandboxBody) SetSchema(val OptURI) {
 	s.Schema = val
@@ -1095,6 +1138,16 @@ func (s *CreateSandboxBody) SetPoolId(val OptString) {
 // SetGrants sets the value of Grants.
 func (s *CreateSandboxBody) SetGrants(val []SandboxGrant) {
 	s.Grants = val
+}
+
+// SetCreateToken sets the value of CreateToken.
+func (s *CreateSandboxBody) SetCreateToken(val OptString) {
+	s.CreateToken = val
+}
+
+// SetSourceGeneration sets the value of SourceGeneration.
+func (s *CreateSandboxBody) SetSourceGeneration(val OptString) {
+	s.SourceGeneration = val
 }
 
 // An agent's ask, relayed by the pool agent on behalf of one of its sandboxes.
@@ -18377,6 +18430,11 @@ type Sandbox struct {
 	Pool OptPool `json:"pool"`
 	// Pool the sandbox is scheduled into. Resolved at create, immutable after.
 	PoolId OptString `json:"poolId"`
+	// The sandbox's frozen delivery generation (ADR 26-10-15-943), fixed at create from the exact
+	// sources accepted. Clients resuming or taking over a delivery read it here and confirm their local
+	// sources still match before delivering; pin, push and completion are fenced by it. Absent for a
+	// no-source sandbox and for one created by an old client.
+	SourceGeneration OptString `json:"sourceGeneration"`
 	// Observed sandbox runtime state.
 	Runtime SandboxRuntime `json:"runtime"`
 	// The sandbox's name, description and tags. The sandbox holds them, in
@@ -18466,6 +18524,11 @@ func (s *Sandbox) GetPool() OptPool {
 // GetPoolId returns the value of PoolId.
 func (s *Sandbox) GetPoolId() OptString {
 	return s.PoolId
+}
+
+// GetSourceGeneration returns the value of SourceGeneration.
+func (s *Sandbox) GetSourceGeneration() OptString {
+	return s.SourceGeneration
 }
 
 // GetRuntime returns the value of Runtime.
@@ -18561,6 +18624,11 @@ func (s *Sandbox) SetPool(val OptPool) {
 // SetPoolId sets the value of PoolId.
 func (s *Sandbox) SetPoolId(val OptString) {
 	s.PoolId = val
+}
+
+// SetSourceGeneration sets the value of SourceGeneration.
+func (s *Sandbox) SetSourceGeneration(val OptString) {
+	s.SourceGeneration = val
 }
 
 // SetRuntime sets the value of Runtime.

@@ -140,6 +140,25 @@ func (s *Service) CreateSandbox(ctx context.Context, projectID string, input ser
 	if err != nil {
 		return nil, apperrors.NotFound(err, "project not found")
 	}
+	// A repeated create with the same token and body is the first create:
+	// return that sandbox as it is now, before anything a new create needs
+	// (ADR 26-10-15-943 §2).
+	token := strings.TrimSpace(input.CreateToken.Or(""))
+	createTokenRecord := (*model.SandboxCreateToken)(nil)
+	if token != "" {
+		fingerprint, err := createBodyFingerprint(input)
+		if err != nil {
+			return nil, err
+		}
+		replayed, found, err := s.replayCreate(ctx, projectID, token, fingerprint)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			return replayed, nil
+		}
+		createTokenRecord = &model.SandboxCreateToken{ProjectID: projectID, Token: token, BodyFingerprint: fingerprint}
+	}
 	poolID := services.OptStringPtr(input.PoolId)
 	if poolID == nil && project.DefaultPoolID != "" {
 		id := project.DefaultPoolID
@@ -234,6 +253,13 @@ func (s *Service) CreateSandbox(ctx context.Context, projectID string, input ser
 	if err := resolveSourceDelivery(sandboxID, source, sourceCodeReferences, origin); err != nil {
 		return nil, err
 	}
+	// The frozen delivery generation is verified from the request as slugs
+	// were defaulted, and fixed on the sandbox before the row exists (ADR
+	// 26-10-15-943 §1).
+	sourceGeneration, err := resolveSourceGeneration(input, source, sourceCodeReferences)
+	if err != nil {
+		return nil, err
+	}
 	git := services.SandboxGitToModel(config.Git)
 	skills, err := services.SandboxSkillsToModel(config.Skills)
 	if err != nil {
@@ -315,9 +341,10 @@ func (s *Service) CreateSandbox(ctx context.Context, projectID string, input ser
 			GitUserEmail:         git.UserEmail,
 			Skills:               skills,
 		},
-		SourceRoot: sourceRoot,
-		Origin:     origin,
-		OriginKey:  originKey,
+		SourceRoot:       sourceRoot,
+		Origin:           origin,
+		OriginKey:        originKey,
+		SourceGeneration: sourceGeneration,
 	}
 	assignments, err := s.prepareSandboxSecrets(ctx, projectID, sandbox, config.Secrets)
 	if err != nil {
@@ -368,7 +395,10 @@ func (s *Service) CreateSandbox(ctx context.Context, projectID string, input ser
 			}
 		}
 	}
-	return s.createSandboxIntent(ctx, sandbox, append(assignments, grants.Bindings...), grants)
+	if createTokenRecord != nil {
+		createTokenRecord.SandboxID = sandboxID
+	}
+	return s.createSandboxIntent(ctx, sandbox, append(assignments, grants.Bindings...), grants, createTokenRecord)
 }
 
 // platformOnPool is the platform a sandbox on harness runs on when placed on
@@ -1139,6 +1169,23 @@ func (s *Service) CompleteSandboxSourcePush(ctx context.Context, projectID, sand
 	if err != nil {
 		return nil, apperrors.NotFound(err, "sandbox not found")
 	}
+	// The generation fences completion before any state is read: a sandbox
+	// frozen to one generation accepts only that generation's completion, and
+	// a same-generation completion of one already delivered is the idempotent
+	// replay a lost answer or a second client produces (ADR 26-10-15-943 §4).
+	generation := strings.TrimSpace(input.Generation.Or(""))
+	if existing.SourceGeneration != nil {
+		if generation != *existing.SourceGeneration {
+			return nil, apperrors.NewStatusError(http.StatusConflict,
+				"the completion does not name this sandbox's frozen delivery generation; a late or superseded completion is void")
+		}
+		if existing.SourceDeliveredAt != nil {
+			return existing, nil
+		}
+	} else if generation != "" {
+		return nil, apperrors.NewStatusError(http.StatusConflict,
+			"the sandbox was created without a delivery generation; complete its source push without one")
+	}
 	pending := clientDeliveredSources(existing)
 	if len(pending) == 0 {
 		return nil, apperrors.NewStatusError(http.StatusConflict,
@@ -1153,6 +1200,15 @@ func (s *Service) CompleteSandboxSourcePush(ctx context.Context, projectID, sand
 	}
 	if err := verifySourcePushCommits(pending, input.Sources); err != nil {
 		return nil, err
+	}
+	// Before the gate opens, prove every cache namespace is exactly the
+	// frozen generation: pinned refs, snapshot parentage, object
+	// connectivity. Anything missing leaves the sandbox awaiting its source
+	// and its client re-pins and re-pushes.
+	if generation != "" {
+		if err := s.verifySourceGeneration(ctx, existing, generation); err != nil {
+			return nil, err
+		}
 	}
 	now := time.Now().UTC()
 	sandbox, err := s.recordSandboxIntent(ctx, projectID, sandboxID, model.DesiredStatePresent, func(sb *model.Sandbox) {

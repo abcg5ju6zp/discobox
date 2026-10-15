@@ -783,3 +783,29 @@ client narration reads pool provisioning progress, falling back to "waiting
 for the pool agent to become ready". Fresh health resumes creation, even while
 the pool lifecycle verdict still reflects a previous server run. Concrete pool
 failures and a silent startup timeout propagate to the sandbox error.
+
+### Frozen delivery generation
+
+A create that names sources records, and independently verifies, a
+`sourceGeneration`: the SHA-256 of the canonical source records (slug, root,
+checkout, workspace, destination), in the same canonical form the CLI computes
+(ADR [26-10-15-943](../../../../docs/adr/26-10-15-943-a-created-sandboxs-source-is-one-frozen-delivery-generation.md)).
+A mismatch between request and recomputation is a 400. The generation is
+persisted on the sandbox row (`source_generation`) and returned on the sandbox
+so a takeover client reads the one it must match. The create also accepts a
+client-minted `createToken` with a deterministic body fingerprint: a repeated
+(token, body) replays to the existing sandbox with its current state, a
+different body with the same token is a 409, and the name-conflict check still
+runs for an unseen token. A no-source create names neither generation nor
+token.
+
+`CompleteSandboxSourcePush` is fenced by the generation before it sets
+`source_delivered_at`: a sandbox holding one refuses a completion naming none
+or another (409), and asks the hosting pool to verify every source's cache
+namespace before the timestamp is set — one read-only POST per source through
+the sandbox's leased pool HTTP client, carrying the cache key and generation.
+The pool answers 200 only when the namespace's refs, snapshot parent and
+reachable objects all match the generation; anything missing comes back 409
+with the named refs/objects, and the sandbox stays awaiting its source. A
+completed sandbox's same-generation completion is idempotent; a
+different-generation one is void.

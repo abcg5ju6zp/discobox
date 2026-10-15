@@ -816,12 +816,18 @@ type Sandbox struct {
 	// (ADR 26-10-09-395 §2). Outside the manifest, so no fingerprint moves.
 	SkillNames        []string `gorm:"column:skill_names;type:text;serializer:json" json:"skillNames,omitempty" doc:"Names of the skills the sandbox was created with"`
 	ResourceLifecycle `gorm:"embedded"`
-	SourceRoot        *string               `gorm:"column:source_root;type:text;index" json:"sourceRoot,omitempty" doc:"Normalized repository identity of the primary source: local repository root path, or remote URL. Derived from Source; used to list the sandboxes belonging to a repository."`
-	Origin            *Origin               `gorm:"column:origin;type:text;serializer:json" json:"origin,omitempty" doc:"Client host the sandbox was created from. Immutable after create."`
-	SourceDeliveredAt *time.Time            `gorm:"column:source_delivered_at" json:"sourceDeliveredAt,omitempty" doc:"When the client reported its push complete for a push-delivered source. Empty while the sandbox is still awaiting it. The commit to check out is the source's Checkout.Commit, fixed at create." format:"date-time"`
-	AppliedCommits    []AppliedSourceCommit `gorm:"column:applied_commits;type:text;serializer:json" json:"appliedCommits,omitempty" doc:"History of successful discobox apply runs that landed this sandbox's commits on a host. Client-reported; append-only."`
-	OriginKey         *string               `gorm:"column:origin_key;type:text;index" json:"-" doc:"Where the sandbox belongs on the client that created it: SandboxOriginKey of its origin and primary source. Indexed; what listings filter on."`
-	ProviderState     json.RawMessage       `gorm:"column:provider_state;type:text" json:"providerState,omitempty" doc:"Non-secret provider state"`
+	SourceRoot        *string    `gorm:"column:source_root;type:text;index" json:"sourceRoot,omitempty" doc:"Normalized repository identity of the primary source: local repository root path, or remote URL. Derived from Source; used to list the sandboxes belonging to a repository."`
+	Origin            *Origin    `gorm:"column:origin;type:text;serializer:json" json:"origin,omitempty" doc:"Client host the sandbox was created from. Immutable after create."`
+	SourceDeliveredAt *time.Time `gorm:"column:source_delivered_at" json:"sourceDeliveredAt,omitempty" doc:"When the client reported its push complete for a push-delivered source. Empty while the sandbox is still awaiting it. The commit to check out is the source's Checkout.Commit, fixed at create." format:"date-time"`
+	// SourceGeneration is the frozen delivery generation the create accepted
+	// (ADR 26-10-15-943): the SHA-256 of the canonical source records. It pins
+	// the pool cache, the delivery push, the completion call and the runtime
+	// landing gate, and is empty for a no-source sandbox and one an old client
+	// created, both of which keep the pre-generation path.
+	SourceGeneration *string               `gorm:"column:source_generation;type:text" json:"-" doc:"Hex SHA-256 of the sandbox's frozen source delivery generation, fixed at create. Empty for a no-source sandbox or an old client."`
+	AppliedCommits   []AppliedSourceCommit `gorm:"column:applied_commits;type:text;serializer:json" json:"appliedCommits,omitempty" doc:"History of successful discobox apply runs that landed this sandbox's commits on a host. Client-reported; append-only."`
+	OriginKey        *string               `gorm:"column:origin_key;type:text;index" json:"-" doc:"Where the sandbox belongs on the client that created it: SandboxOriginKey of its origin and primary source. Indexed; what listings filter on."`
+	ProviderState    json.RawMessage       `gorm:"column:provider_state;type:text" json:"providerState,omitempty" doc:"Non-secret provider state"`
 	// RepairGeneration marks one generation as a repair (ADR 0035): when it
 	// equals Generation, ensure tears the runtime down (provider Archive:
 	// container and disposable state dropped, durable tree kept) before the
@@ -908,6 +914,22 @@ type Sandbox struct {
 }
 
 func (Sandbox) TableName() string { return "sandboxes" }
+
+// SandboxCreateToken makes a create carrying one client-minted token
+// idempotent (ADR 26-10-15-943): the same token and body fingerprint replay to
+// the one sandbox the first request made, the same token with another body is
+// refused. The token is opaque and the client's to mint; the server records
+// only the body fingerprint, never the body. Rows expire and are reaped
+// opportunistically; a terminal replay removes the row.
+type SandboxCreateToken struct {
+	ProjectID       string    `gorm:"column:project_id;not null;type:text;uniqueIndex:idx_sandbox_create_token,priority:1" json:"-"`
+	Token           string    `gorm:"column:token;not null;type:text;uniqueIndex:idx_sandbox_create_token,priority:2" json:"-"`
+	BodyFingerprint string    `gorm:"column:body_fingerprint;not null;type:text" json:"-"`
+	SandboxID       string    `gorm:"column:sandbox_id;not null;type:text;index" json:"-"`
+	CreatedAt       time.Time `gorm:"autoCreateTime" json:"-"`
+}
+
+func (SandboxCreateToken) TableName() string { return "sandbox_create_tokens" }
 
 // AutomaticRepair records one automatic repair of a sandbox
 // (ADR 26-10-12-711 §4).
@@ -1851,6 +1873,7 @@ func AllModels() []any {
 		&HarnessConfig{},
 		&HarnessConfigSecretBinding{},
 		&Sandbox{},
+		&SandboxCreateToken{},
 		&SandboxProviderInstance{},
 		&Pool{},
 		&PoolBootstrapToken{},

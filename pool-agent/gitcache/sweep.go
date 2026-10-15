@@ -121,7 +121,9 @@ func (s *Store) sweepCache(ctx context.Context, path string, held map[string]str
 	}
 	for _, marker := range markers {
 		namespace := marker.Name()
-		if strings.HasSuffix(namespace, unheldSuffix) {
+		if strings.HasSuffix(namespace, unheldSuffix) || strings.HasSuffix(namespace, generationFileSuffix) {
+			// The unheld stamp and the frozen-generation record sit beside
+			// the ownership markers but name no namespace themselves.
 			continue
 		}
 		namespaces++
@@ -220,6 +222,7 @@ func removeNamespace(ctx context.Context, path, namespace string) error {
 	}
 	marker := filepath.Join(path, namespacesDir, namespace)
 	_ = os.Remove(marker + unheldSuffix)
+	_ = os.Remove(marker + generationFileSuffix)
 	if err := os.Remove(marker); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
